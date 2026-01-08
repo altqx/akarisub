@@ -1,11 +1,11 @@
 typeof HTMLVideoElement < "u" && !("requestVideoFrameCallback" in HTMLVideoElement.prototype) && "getVideoPlaybackQuality" in HTMLVideoElement.prototype && (HTMLVideoElement.prototype._rvfcpolyfillmap = {}, HTMLVideoElement.prototype.requestVideoFrameCallback = function(c) {
-  const e = performance.now(), t = this.getVideoPlaybackQuality(), s = this.mozPresentedFrames || this.mozPaintedFrames || t.totalVideoFrames - t.droppedVideoFrames, r = (n, a) => {
-    const i = this.getVideoPlaybackQuality(), h = this.mozPresentedFrames || this.mozPaintedFrames || i.totalVideoFrames - i.droppedVideoFrames;
+  const e = performance.now(), t = this.getVideoPlaybackQuality(), s = this.mozPresentedFrames || this.mozPaintedFrames || t.totalVideoFrames - t.droppedVideoFrames, i = (n, r) => {
+    const a = this.getVideoPlaybackQuality(), h = this.mozPresentedFrames || this.mozPaintedFrames || a.totalVideoFrames - a.droppedVideoFrames;
     if (h > s) {
-      const d = this.mozFrameDelay || i.totalFrameDelay - t.totalFrameDelay || 0, l = a - n;
-      c(a, {
-        presentationTime: a + d * 1e3,
-        expectedDisplayTime: a + l,
+      const d = this.mozFrameDelay || a.totalFrameDelay - t.totalFrameDelay || 0, l = r - n;
+      c(r, {
+        presentationTime: r + d * 1e3,
+        expectedDisplayTime: r + l,
         width: this.videoWidth,
         height: this.videoHeight,
         mediaTime: Math.max(0, this.currentTime || 0) + l / 1e3,
@@ -13,9 +13,9 @@ typeof HTMLVideoElement < "u" && !("requestVideoFrameCallback" in HTMLVideoEleme
         processingDuration: d
       }), delete this._rvfcpolyfillmap[e];
     } else
-      this._rvfcpolyfillmap[e] = requestAnimationFrame((d) => r(a, d));
+      this._rvfcpolyfillmap[e] = requestAnimationFrame((d) => i(r, d));
   };
-  return this._rvfcpolyfillmap[e] = requestAnimationFrame((n) => r(e, n)), e;
+  return this._rvfcpolyfillmap[e] = requestAnimationFrame((n) => i(e, n)), e;
 }, HTMLVideoElement.prototype.cancelVideoFrameCallback = function(c) {
   cancelAnimationFrame(this._rvfcpolyfillmap[c]), delete this._rvfcpolyfillmap[c];
 });
@@ -59,10 +59,12 @@ class o extends EventTarget {
    * @param {Number} [options.maxRenderHeight=0] The maximum rendering height in pixels of the subtitles canvas. Beyond this subtitles will be upscaled by the browser.
    * @param {Boolean} [options.dropAllAnimations=false] Attempt to discard all animated tags. Enabling this may severly mangle complex subtitles and should only be considered as an last ditch effort of uncertain success for hardware otherwise incapable of displaing anything. Will not reliably work with manually edited or allocated events.
    * @param {Boolean} [options.dropAllBlur=false] The holy grail of performance gains. If heavy TS lags a lot, disabling this will make it ~x10 faster. This drops blur from all added subtitle tracks making most text and backgrounds look sharper, this is way less intrusive than dropping all animations, while still offering major performance gains.
+   * @param {Boolean} [options.clampPos=false] Clamp \\pos tag values to be within the script resolution (PlayResX/PlayResY). This fixes subtitles with positions outside the video frame.
    * @param {String} [options.workerUrl='jassub-worker.js'] The URL of the worker.
    * @param {String} [options.wasmUrl='jassub-worker.wasm'] The URL of the worker WASM.
    * @param {String} [options.legacyWasmUrl='jassub-worker.wasm.js'] The URL of the worker WASM. Only loaded if the browser doesn't support WASM.
    * @param {String} options.modernWasmUrl The URL of the modern worker WASM. This includes faster ASM instructions, but is only supported by newer browsers, disabled if the URL isn't defined.
+   * @param {Boolean} [options.forceModernWasmUrl=false] Force using modernWasmUrl (skips SIMD detection). If unsupported by the browser, the worker will fall back to wasmUrl.
    * @param {String} [options.subUrl=options.subContent] The URL of the subtitle file to play.
    * @param {String} [options.subContent=options.subUrl] The content of the subtitle file to play.
    * @param {String[]|Uint8Array[]} [options.fonts] An array of links or Uint8Arrays to the fonts used in the subtitle. If Uint8Array is used the array is copied, not referenced. This forces all the fonts in this array to be loaded by the renderer, regardless of if they are used.
@@ -73,10 +75,8 @@ class o extends EventTarget {
    * @param {Number} [options.libassGlyphLimit] libass glyph cache memory limit in MiB (approximate).
    */
   constructor(e) {
-    if (super(), !globalThis.Worker)
-      throw this.destroy("Worker not supported");
-    if (!e)
-      throw this.destroy("No options provided");
+    if (super(), !globalThis.Worker) throw this.destroy("Worker not supported");
+    if (!e) throw this.destroy("No options provided");
     this._loaded = /** @type {Promise<void>} */
     new Promise((s) => {
       this._init = s;
@@ -86,12 +86,13 @@ class o extends EventTarget {
       this._canvasParent = document.createElement("div"), this._canvasParent.className = "JASSUB", this._canvasParent.style.position = "relative", this._canvas = this._createCanvas(), this._video.insertAdjacentElement("afterend", this._canvasParent);
     else if (!this._canvas)
       throw this.destroy("Don't know where to render: you should give video or canvas in options.");
-    if (this._bufferCanvas = document.createElement("canvas"), this._bufferCtx = this._bufferCanvas.getContext("2d"), !this._bufferCtx)
-      throw this.destroy("Canvas rendering not supported");
+    if (this._bufferCanvas = document.createElement("canvas"), this._bufferCtx = this._bufferCanvas.getContext("2d"), !this._bufferCtx) throw this.destroy("Canvas rendering not supported");
     this._canvasctrl = this._offscreenRender ? this._canvas.transferControlToOffscreen() : this._canvas, this._ctx = !this._offscreenRender && this._canvasctrl.getContext("2d"), this._lastRenderTime = 0, this.debug = !!e.debug, this.prescaleFactor = e.prescaleFactor || 1, this.prescaleHeightLimit = e.prescaleHeightLimit || 1080, this.maxRenderHeight = e.maxRenderHeight || 0, this._boundResize = this.resize.bind(this), this._boundTimeUpdate = this._timeupdate.bind(this), this._boundSetRate = this.setRate.bind(this), this._boundUpdateColorSpace = this._updateColorSpace.bind(this), this._video && this.setVideo(e.video), this._onDemandRender && (this.busy = !1, this._lastDemandTime = null), this._worker = new Worker(e.workerUrl || "jassub-worker.js"), this._worker.onmessage = (s) => this._onmessage(s), this._worker.onerror = (s) => this._error(s), t.then(() => {
+      const s = e.wasmUrl ?? "jassub-worker.wasm", i = e.forceModernWasmUrl && e.modernWasmUrl || o._supportsSIMD && e.modernWasmUrl ? e.modernWasmUrl : s;
       this._worker.postMessage({
         target: "init",
-        wasmUrl: o._supportsSIMD && e.modernWasmUrl ? e.modernWasmUrl : e.wasmUrl ?? "jassub-worker.wasm",
+        wasmUrl: i,
+        fallbackWasmUrl: s,
         legacyWasmUrl: e.legacyWasmUrl ?? "jassub-worker.wasm.js",
         asyncRender: typeof createImageBitmap < "u" && (e.asyncRender ?? !0),
         onDemandRender: this._onDemandRender,
@@ -101,14 +102,19 @@ class o extends EventTarget {
         subUrl: e.subUrl,
         subContent: e.subContent || null,
         fonts: e.fonts || [],
-        availableFonts: e.availableFonts || { "liberation sans": "./default.woff2" },
+        availableFonts: e.availableFonts || {
+          "liberation sans": "./default.woff2"
+        },
         fallbackFont: e.fallbackFont || "liberation sans",
         debug: this.debug,
         targetFps: e.targetFps || 24,
         dropAllAnimations: e.dropAllAnimations,
         dropAllBlur: e.dropAllBlur,
-        libassMemoryLimit: e.libassMemoryLimit || 0,
-        libassGlyphLimit: e.libassGlyphLimit || 0,
+        clampPos: e.clampPos,
+        // Sensible defaults for heavy loads (>10MB subtitle files)
+        // 128 MiB bitmap cache and 2048 glyph limit prevent runaway memory usage
+        libassMemoryLimit: e.libassMemoryLimit ?? 128,
+        libassGlyphLimit: e.libassGlyphLimit ?? 2048,
         // @ts-ignore
         useLocalFonts: typeof queryLocalFonts < "u" && (e.useLocalFonts ?? !0),
         hasBitmapBug: o._hasBitmapBug
@@ -125,20 +131,74 @@ class o extends EventTarget {
   static _hasAlphaBug = null;
   /** @type {boolean|null} */
   static _hasBitmapBug = null;
-  static _testSIMD() {
+  static async _testSIMD() {
     if (o._supportsSIMD === null)
       try {
-        o._supportsSIMD = WebAssembly.validate(Uint8Array.of(0, 97, 115, 109, 1, 0, 0, 0, 1, 5, 1, 96, 0, 1, 123, 3, 2, 1, 0, 10, 10, 1, 8, 0, 65, 0, 253, 15, 253, 98, 11));
+        if (typeof WebAssembly != "object" || typeof WebAssembly.validate != "function") {
+          o._supportsSIMD = !1;
+          return;
+        }
+        const e = Uint8Array.of(
+          0,
+          97,
+          115,
+          109,
+          1,
+          0,
+          0,
+          0,
+          1,
+          5,
+          1,
+          96,
+          0,
+          1,
+          123,
+          3,
+          2,
+          1,
+          0,
+          10,
+          22,
+          1,
+          20,
+          0,
+          253,
+          12,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          11
+        );
+        let t = WebAssembly.validate(e);
+        if (t)
+          try {
+            await WebAssembly.compile(e);
+          } catch {
+            t = !1;
+          }
+        o._supportsSIMD = t;
       } catch {
         o._supportsSIMD = !1;
       }
   }
   static async _testImageBugs() {
-    if (o._hasBitmapBug !== null)
-      return;
+    if (o._hasBitmapBug !== null) return;
     const e = document.createElement("canvas"), t = e.getContext("2d", { willReadFrequently: !0 });
-    if (!t)
-      throw new Error("Canvas rendering not supported");
+    if (!t) throw new Error("Canvas rendering not supported");
     if (typeof ImageData.prototype.constructor == "function")
       try {
         new ImageData(new Uint8ClampedArray([0, 0, 0, 0]), 1, 1);
@@ -148,20 +208,19 @@ class o extends EventTarget {
           return h && m.data.set(h), m;
         };
       }
-    const s = document.createElement("canvas"), r = s.getContext("2d", { willReadFrequently: !0 });
-    if (!r)
-      throw new Error("Canvas rendering not supported");
-    e.width = s.width = 1, e.height = s.height = 1, t.clearRect(0, 0, 1, 1), r.clearRect(0, 0, 1, 1);
-    const n = r.getImageData(0, 0, 1, 1).data;
-    t.putImageData(new ImageData(new Uint8ClampedArray([0, 255, 0, 0]), 1, 1), 0, 0), r.drawImage(e, 0, 0);
-    const a = r.getImageData(0, 0, 1, 1).data;
-    if (o._hasAlphaBug = n[1] !== a[1], o._hasAlphaBug && console.log("Detected a browser having issue with transparent pixels, applying workaround"), typeof createImageBitmap < "u") {
-      const i = new Uint8ClampedArray([255, 0, 255, 0, 255]).subarray(1, 5);
-      r.drawImage(await createImageBitmap(new ImageData(i, 1)), 0, 0);
-      const { data: h } = r.getImageData(0, 0, 1, 1);
+    const s = document.createElement("canvas"), i = s.getContext("2d", { willReadFrequently: !0 });
+    if (!i) throw new Error("Canvas rendering not supported");
+    e.width = s.width = 1, e.height = s.height = 1, t.clearRect(0, 0, 1, 1), i.clearRect(0, 0, 1, 1);
+    const n = i.getImageData(0, 0, 1, 1).data;
+    t.putImageData(new ImageData(new Uint8ClampedArray([0, 255, 0, 0]), 1, 1), 0, 0), i.drawImage(e, 0, 0);
+    const r = i.getImageData(0, 0, 1, 1).data;
+    if (o._hasAlphaBug = n[1] !== r[1], o._hasAlphaBug && console.log("Detected a browser having issue with transparent pixels, applying workaround"), typeof createImageBitmap < "u") {
+      const a = new Uint8ClampedArray([255, 0, 255, 0, 255]).subarray(1, 5);
+      i.drawImage(await createImageBitmap(new ImageData(a, 1)), 0, 0);
+      const { data: h } = i.getImageData(0, 0, 1, 1);
       o._hasBitmapBug = !1;
       for (const [d, l] of h.entries())
-        if (Math.abs(i[d] - l) > 15) {
+        if (Math.abs(a[d] - l) > 15) {
           o._hasBitmapBug = !0, console.log("Detected a browser having issue with partial bitmaps, applying workaround");
           break;
         }
@@ -170,7 +229,7 @@ class o extends EventTarget {
     e.remove(), s.remove();
   }
   static async _test() {
-    o._testSIMD(), await o._testImageBugs();
+    await o._testSIMD(), await o._testImageBugs();
   }
   /**
    * Resize the canvas to given parameters. Auto-generated if values are ommited.
@@ -180,33 +239,39 @@ class o extends EventTarget {
    * @param  {Number} [left=0]
    * @param  {Boolean} [force=false]
    */
-  resize(e = 0, t = 0, s = 0, r = 0, n = this._video?.paused) {
+  resize(e = 0, t = 0, s = 0, i = 0, n = this._video?.paused) {
     if ((!e || !t) && this._video) {
-      const a = this._getVideoPosition();
-      let i = null;
+      const r = this._getVideoPosition();
+      let a = null;
       if (this._videoWidth) {
         const h = this._video.videoWidth / this._videoWidth, d = this._video.videoHeight / this._videoHeight;
-        i = this._computeCanvasSize((a.width || 0) / h, (a.height || 0) / d);
+        a = this._computeCanvasSize((r.width || 0) / h, (r.height || 0) / d);
       } else
-        i = this._computeCanvasSize(a.width || 0, a.height || 0);
-      e = i.width, t = i.height, this._canvasParent && (s = a.y - (this._canvasParent.getBoundingClientRect().top - this._video.getBoundingClientRect().top), r = a.x), this._canvas.style.width = a.width + "px", this._canvas.style.height = a.height + "px";
+        a = this._computeCanvasSize(r.width || 0, r.height || 0);
+      e = a.width, t = a.height, this._canvasParent && (s = r.y - (this._canvasParent.getBoundingClientRect().top - this._video.getBoundingClientRect().top), i = r.x), this._canvas.style.width = r.width + "px", this._canvas.style.height = r.height + "px";
     }
-    this._canvas.style.top = s + "px", this._canvas.style.left = r + "px", n && this.busy === !1 ? this.busy = !0 : n = !1, this.sendMessage("canvas", { width: e, height: t, videoWidth: this._videoWidth || this._video.videoWidth, videoHeight: this._videoHeight || this._video.videoHeight, force: n });
+    this._canvas.style.top = s + "px", this._canvas.style.left = i + "px", n && this.busy === !1 ? this.busy = !0 : n = !1, this.sendMessage("canvas", {
+      width: e,
+      height: t,
+      videoWidth: this._videoWidth || this._video.videoWidth,
+      videoHeight: this._videoHeight || this._video.videoHeight,
+      force: n
+    });
   }
   _getVideoPosition(e = this._video.videoWidth, t = this._video.videoHeight) {
-    const s = e / t, { offsetWidth: r, offsetHeight: n } = this._video, a = r / n;
-    e = r, t = n, a > s ? e = Math.floor(n * s) : t = Math.floor(r / s);
-    const i = (r - e) / 2, h = (n - t) / 2;
-    return { width: e, height: t, x: i, y: h };
+    const s = e / t, { offsetWidth: i, offsetHeight: n } = this._video, r = i / n;
+    e = i, t = n, r > s ? e = Math.floor(n * s) : t = Math.floor(i / s);
+    const a = (i - e) / 2, h = (n - t) / 2;
+    return { width: e, height: t, x: a, y: h };
   }
   _computeCanvasSize(e = 0, t = 0) {
-    const s = this.prescaleFactor <= 0 ? 1 : this.prescaleFactor, r = self.devicePixelRatio || 1;
+    const s = this.prescaleFactor <= 0 ? 1 : this.prescaleFactor, i = self.devicePixelRatio || 1;
     if (t <= 0 || e <= 0)
       e = 0, t = 0;
     else {
       const n = s < 1 ? -1 : 1;
-      let a = t * r;
-      n * a * s <= n * this.prescaleHeightLimit ? a *= s : n * a < n * this.prescaleHeightLimit && (a = this.prescaleHeightLimit), this.maxRenderHeight > 0 && a > this.maxRenderHeight && (a = this.maxRenderHeight), e *= a / t, t = a;
+      let r = t * i;
+      n * r * s <= n * this.prescaleHeightLimit ? r *= s : n * r < n * this.prescaleHeightLimit && (r = this.prescaleHeightLimit), this.maxRenderHeight > 0 && r > this.maxRenderHeight && (r = this.maxRenderHeight), e *= r / t, t = r;
     }
     return { width: e, height: t };
   }
@@ -269,7 +334,12 @@ class o extends EventTarget {
    * @param  {Number} [rate] Playback rate.
    */
   setCurrentTime(e, t, s) {
-    this.sendMessage("video", { isPaused: e, currentTime: t, rate: s, colorSpace: this._videoColorSpace });
+    this.sendMessage("video", {
+      isPaused: e,
+      currentTime: t,
+      rate: s,
+      colorSpace: this._videoColorSpace
+    });
   }
   /**
    * @typedef {Object} ASS_Event
@@ -285,7 +355,7 @@ class o extends EventTarget {
    * @property {Number} ReadOrder Number in order of which to read this event.
    * @property {Number} Layer Z-index overlap in which to render this event.
    * @property {Number} _index (Internal) index of the event.
-  */
+   */
   /**
    * Create a new ASS event directly.
    * @param  {ASS_Event} event
@@ -313,11 +383,14 @@ class o extends EventTarget {
    * @param  {function(Error|null, ASS_Event): void} callback Function to callback when worker returns the events.
    */
   getEvents(e) {
-    this._fetchFromWorker({
-      target: "getEvents"
-    }, (t, { events: s }) => {
-      e(t, s);
-    });
+    this._fetchFromWorker(
+      {
+        target: "getEvents"
+      },
+      (t, { events: s }) => {
+        e(t, s);
+      }
+    );
   }
   /**
    * Set a style override.
@@ -360,7 +433,7 @@ class o extends EventTarget {
    * @property {Number} treat_fontname_as_pattern
    * @property {Number} Blur
    * @property {Number} Justify
-  */
+   */
   /**
    * Create a new ASS style directly.
    * @param  {ASS_Style} style
@@ -388,11 +461,14 @@ class o extends EventTarget {
    * @param  {function(Error|null, ASS_Style): void} callback Function to callback when worker returns the styles.
    */
   getStyles(e) {
-    this._fetchFromWorker({
-      target: "getStyles"
-    }, (t, { styles: s }) => {
-      e(t, s);
-    });
+    this._fetchFromWorker(
+      {
+        target: "getStyles"
+      },
+      (t, { styles: s }) => {
+        e(t, s);
+      }
+    );
   }
   /**
    * Adds a font to the renderer.
@@ -408,12 +484,53 @@ class o extends EventTarget {
   setDefaultFont(e) {
     this.sendMessage("defaultFont", { font: e });
   }
+  /**
+   * @typedef {Object} PerformanceStats
+   * @property {Number} framesRendered Total frames rendered since reset.
+   * @property {Number} framesDropped Number of frames dropped.
+   * @property {Number} avgRenderTime Average render time in milliseconds.
+   * @property {Number} maxRenderTime Maximum render time in milliseconds.
+   * @property {Number} minRenderTime Minimum render time in milliseconds.
+   * @property {Number} lastRenderTime Last render time in milliseconds.
+   * @property {Number} renderFps Estimated render FPS based on timing.
+   * @property {Boolean} usingWorker Whether using Web Worker.
+   * @property {Number} pendingRenders Number of pending render operations.
+   * @property {Number} totalEvents Total subtitle events in current track.
+   * @property {Number} cacheHits Number of cache hits (unchanged frames).
+   * @property {Number} cacheMisses Number of cache misses (rendered frames).
+   */
+  /**
+   * Get real-time performance statistics.
+   * @param  {function(Error|null, PerformanceStats): void} callback Function to callback with stats.
+   */
+  getStats(e) {
+    this._fetchFromWorker({ target: "getStats" }, (t, { stats: s }) => {
+      if (t) return e(t, null);
+      const i = {
+        ...s,
+        renderFps: s.avgRenderTime > 0 ? Math.round(1e3 / s.avgRenderTime) : 0,
+        usingWorker: !0,
+        offscreenRender: this._offscreenRender,
+        onDemandRender: this._onDemandRender
+      };
+      e(null, i);
+    });
+  }
+  /**
+   * Reset performance statistics counters.
+   * @param  {function(Error|null): void} [callback] Optional callback when reset completes.
+   */
+  resetStats(e) {
+    this._fetchFromWorker({ target: "resetStats" }, (t) => {
+      e && e(t);
+    });
+  }
   _sendLocalFont(e) {
     try {
       queryLocalFonts().then((t) => {
-        const s = t?.find((r) => r.fullName.toLowerCase() === e);
-        s && s.blob().then((r) => {
-          r.arrayBuffer().then((n) => {
+        const s = t?.find((i) => i.fullName.toLowerCase() === e);
+        s && s.blob().then((i) => {
+          i.arrayBuffer().then((n) => {
             this.addFont(new Uint8Array(n));
           });
         });
@@ -434,24 +551,21 @@ class o extends EventTarget {
   _unbusy() {
     this._lastDemandTime ? this._demandRender(this._lastDemandTime) : this.busy = !1;
   }
-  _handleRVFC(e, { mediaTime: t, width: s, height: r }) {
-    if (this._destroyed)
-      return null;
-    this.busy ? this._lastDemandTime = { mediaTime: t, width: s, height: r } : (this.busy = !0, this._demandRender({ mediaTime: t, width: s, height: r })), this._video.requestVideoFrameCallback(this._handleRVFC.bind(this));
+  _handleRVFC(e, { mediaTime: t, width: s, height: i }) {
+    if (this._destroyed) return null;
+    this.busy ? this._lastDemandTime = { mediaTime: t, width: s, height: i } : (this.busy = !0, this._demandRender({ mediaTime: t, width: s, height: i })), this._video.requestVideoFrameCallback(this._handleRVFC.bind(this));
   }
   _demandRender({ mediaTime: e, width: t, height: s }) {
     this._lastDemandTime = null, (t !== this._videoWidth || s !== this._videoHeight) && (this._videoWidth = t, this._videoHeight = s, this.resize()), this.sendMessage("demand", { time: e + this.timeOffset });
   }
   // if we're using offscreen render, we can't use ctx filters, so we can't use a transfered canvas
   _detachOffscreen() {
-    if (!this._offscreenRender || this._ctx)
-      return null;
+    if (!this._offscreenRender || this._ctx) return null;
     this._canvas.remove(), this._createCanvas(), this._canvasctrl = this._canvas, this._ctx = this._canvasctrl.getContext("2d"), this.sendMessage("detachOffscreen"), this.busy = !1, this.resize(0, 0, 0, 0, !0);
   }
   // if the video or track changed, we need to re-attach the offscreen canvas
   _reAttachOffscreen() {
-    if (!this._offscreenRender || !this._ctx)
-      return null;
+    if (!this._offscreenRender || !this._ctx) return null;
     this._canvas.remove(), this._createCanvas(), this._canvasctrl = this._canvas.transferControlToOffscreen(), this._ctx = !1, this.sendMessage("offscreenCanvas", null, [this._canvasctrl]), this.resize(0, 0, 0, 0, !0);
   }
   _updateColorSpace() {
@@ -473,18 +587,21 @@ class o extends EventTarget {
   _verifyColorSpace({ subtitleColorSpace: e, videoColorSpace: t = this._videoColorSpace }) {
     !e || !t || e !== t && (this._detachOffscreen(), this._ctx.filter = `url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg'><filter id='f'><feColorMatrix type='matrix' values='${f[e][t]} 0 0 0 0 0 1 0'/></filter></svg>#f")`);
   }
-  _render({ images: e, asyncRender: t, times: s, width: r, height: n, colorSpace: a }) {
-    this._unbusy(), this.debug && (s.IPCTime = Date.now() - s.JSRenderTime), (this._canvasctrl.width !== r || this._canvasctrl.height !== n) && (this._canvasctrl.width = r, this._canvasctrl.height = n, this._verifyColorSpace({ subtitleColorSpace: a })), this._ctx.clearRect(0, 0, this._canvasctrl.width, this._canvasctrl.height);
-    for (const i of e)
-      i.image && (t ? (this._ctx.drawImage(i.image, i.x, i.y), i.image.close()) : (this._bufferCanvas.width = i.w, this._bufferCanvas.height = i.h, this._bufferCtx.putImageData(new ImageData(this._fixAlpha(new Uint8ClampedArray(i.image)), i.w, i.h), 0, 0), this._ctx.drawImage(this._bufferCanvas, i.x, i.y)));
+  _render({ images: e, asyncRender: t, times: s, width: i, height: n, colorSpace: r }) {
+    this._unbusy(), this.debug && (s.IPCTime = Date.now() - s.JSRenderTime), (this._canvasctrl.width !== i || this._canvasctrl.height !== n) && (this._canvasctrl.width = i, this._canvasctrl.height = n, this._verifyColorSpace({ subtitleColorSpace: r })), this._ctx.clearRect(0, 0, this._canvasctrl.width, this._canvasctrl.height);
+    for (const a of e)
+      a.image && (t ? (this._ctx.drawImage(a.image, a.x, a.y), a.image.close()) : (this._bufferCanvas.width = a.w, this._bufferCanvas.height = a.h, this._bufferCtx.putImageData(
+        new ImageData(this._fixAlpha(new Uint8ClampedArray(a.image)), a.w, a.h),
+        0,
+        0
+      ), this._ctx.drawImage(this._bufferCanvas, a.x, a.y)));
     if (this.debug) {
       s.JSRenderTime = Date.now() - s.JSRenderTime - s.IPCTime;
-      let i = 0;
+      let a = 0;
       const h = s.bitmaps || e.length;
       delete s.bitmaps;
-      for (const d in s)
-        i += s[d];
-      console.log("Bitmaps: " + h + " Total: " + (i | 0) + "ms", s);
+      for (const d in s) a += s[d];
+      console.log("Bitmaps: " + h + " Total: " + (a | 0) + "ms", s);
     }
   }
   _fixAlpha(e) {
@@ -503,25 +620,28 @@ class o extends EventTarget {
    * @param  {Transferable[]} [transferable] Array of transferables.
    */
   async sendMessage(e, t = {}, s) {
-    await this._loaded, s ? this._worker.postMessage({
-      target: e,
-      transferable: s,
-      ...t
-    }, [...s]) : this._worker.postMessage({
+    await this._loaded, s ? this._worker.postMessage(
+      {
+        target: e,
+        transferable: s,
+        ...t
+      },
+      [...s]
+    ) : this._worker.postMessage({
       target: e,
       ...t
     });
   }
   _fetchFromWorker(e, t) {
     try {
-      const s = e.target, r = setTimeout(() => {
-        a(new Error("Error: Timeout while try to fetch " + s));
-      }, 5e3), n = ({ data: i }) => {
-        i.target === s && (t(null, i), this._worker.removeEventListener("message", n), this._worker.removeEventListener("error", a), clearTimeout(r));
-      }, a = (i) => {
-        t(i), this._worker.removeEventListener("message", n), this._worker.removeEventListener("error", a), clearTimeout(r);
+      const s = e.target, i = setTimeout(() => {
+        r(new Error("Error: Timeout while try to fetch " + s));
+      }, 5e3), n = ({ data: a }) => {
+        a.target === s && (t(null, a), this._worker.removeEventListener("message", n), this._worker.removeEventListener("error", r), clearTimeout(i));
+      }, r = (a) => {
+        t(a), this._worker.removeEventListener("message", n), this._worker.removeEventListener("error", r), clearTimeout(i);
       };
-      this._worker.addEventListener("message", n), this._worker.addEventListener("error", a), this._worker.postMessage(e);
+      this._worker.addEventListener("message", n), this._worker.addEventListener("error", r), this._worker.postMessage(e);
     } catch (s) {
       this._error(s);
     }

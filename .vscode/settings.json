@@ -3,5 +3,7 @@
     "array": "cpp",
     "string": "cpp",
     "string_view": "cpp"
-  }
+  },
+  "cmake.ignoreCMakeListsMissing": true,
+  "C_Cpp.intelliSenseEngine" : "Tag Parser"
 }

@@ -49,7 +49,8 @@ await build({
     lib: {
       fileName: () => 'jassub-worker.js',
       entry: 'src/worker.js',
-      formats: ['cjs']
+      formats: ['iife'],
+      name: 'JASSUBWorker'
     },
     emptyOutDir: false
   }

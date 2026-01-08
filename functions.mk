@@ -9,25 +9,23 @@
 
 # @arg1: name of submodule
 define PREPARE_SRC_PATCHED
-	rm -rf $(BUILD_LIB_DIR)/$(1)
-	mkdir -p $(BUILD_LIB_DIR)
-	cp -r lib/$(1) $(BUILD_LIB_DIR)/$(1)
-	find $(BUILD_LIB_DIR)/$(1) -type f \( -name 'RELEASEVERSION' -o -name '*.sh' -o -name 'configure' -o -name '*.am' -o -name '*.m4' -o -name '*.ac' -o -name '*.in' -o -name '*.mk' -o -name '*.txt' -o -name '*.raw' \) -exec dos2unix -q {} +
-	find $(BUILD_LIB_DIR)/$(1) -type f \( -name '*.sh' -o -name 'configure' \) -exec chmod +x {} +
+	rm -rf build/lib/$(1)
+	mkdir -p build/lib
+	cp -r lib/$(1) build/lib/$(1)
 	$(foreach file, $(wildcard $(BASE_DIR)build/patches/$(1)/*.patch), \
-		patch -d "$(BUILD_LIB_DIR)/$(1)" -Np1 -i $(file) && \
+		patch -d "$(BASE_DIR)build/lib/$(1)" -Np1 -i $(file) && \
 	) :
 endef
 
 # @arg1: name of submdolue
 define PREPARE_SRC_VPATH
-	rm -rf $(BUILD_LIB_DIR)/$(1)
-	mkdir -p $(BUILD_LIB_DIR)/$(1)
-	touch $(BUILD_LIB_DIR)/$(1)/configured
+	rm -rf build/lib/$(1)
+	mkdir -p build/lib/$(1)
+	touch build/lib/$(1)/configured
 endef
 
 # All projects we build have autogen.sh, otherwise we could also fallback to `autoreconf -ivf .`
-RECONF_AUTO := NOCONFIGURE=1 sh ./autogen.sh
+RECONF_AUTO := NOCONFIGURE=1 ./autogen.sh
 
 CONF_ARGS = --enable-optimize
 

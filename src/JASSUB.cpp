@@ -6,6 +6,7 @@
 #include <string.h>
 #include <string>
 
+#include <emscripten.h>
 #include <emscripten/bind.h>
 
 int log_level = 3;
@@ -96,20 +97,29 @@ struct RenderBlendStorage {
 class BoundingBox {
 public:
   int min_x, max_x, min_y, max_y;
+  bool initialized;
 
-  BoundingBox() : min_x(-1), max_x(-1), min_y(-1), max_y(-1) {
+  BoundingBox() : min_x(0), max_x(0), min_y(0), max_y(0), initialized(false) {
   }
 
   bool empty() const {
-    return min_x == -1;
+    return !initialized;
   }
 
   void add(int x1, int y1, int w, int h) {
     int x2 = x1 + w - 1, y2 = y1 + h - 1;
-    min_x = (min_x < 0) ? x1 : MIN(min_x, x1);
-    min_y = (min_y < 0) ? y1 : MIN(min_y, y1);
-    max_x = (max_x < 0) ? x2 : MAX(max_x, x2);
-    max_y = (max_y < 0) ? y2 : MAX(max_y, y2);
+    if (!initialized) {
+      min_x = x1;
+      min_y = y1;
+      max_x = x2;
+      max_y = y2;
+      initialized = true;
+    } else {
+      min_x = MIN(min_x, x1);
+      min_y = MIN(min_y, y1);
+      max_x = MAX(max_x, x2);
+      max_y = MAX(max_y, y2);
+    }
   }
 
   bool intersets(const BoundingBox &other) const {
@@ -128,7 +138,7 @@ public:
   }
 
   void clear() {
-    min_x = max_x = min_y = max_y = -1;
+    initialized = false;
   }
 };
 
@@ -233,6 +243,7 @@ static bool _is_event_animated(ASS_Event *event, bool drop_animations) {
 
   // Search for override blocks
   // Only closed {...}-blocks are parsed by VSFilters and libass
+  if (!event->Text) return false;
   char *block_start = NULL; // points to opening {
   for (char *p = event->Text; *p != '\0'; p++) {
     switch (*p) {
@@ -261,6 +272,36 @@ static char *copyString(const std::string &str) {
   return result;
 }
 
+struct EventTimeEntry {
+  int event_index;
+  long long start_ms;
+  long long end_ms;
+};
+
+struct FrameCache {
+  long long time_ms;
+  int canvas_w;
+  int canvas_h;
+  bool valid;
+  
+  FrameCache() : time_ms(-1), canvas_w(0), canvas_h(0), valid(false) {}
+  
+  bool matches(long long tm, int w, int h) const {
+    return valid && time_ms == tm && canvas_w == w && canvas_h == h;
+  }
+  
+  void update(long long tm, int w, int h) {
+    time_ms = tm;
+    canvas_w = w;
+    canvas_h = h;
+    valid = true;
+  }
+  
+  void invalidate() {
+    valid = false;
+  }
+};
+
 class JASSUB {
 private:
   ReusableBuffer m_buffer;
@@ -278,12 +319,18 @@ private:
 
   const char *defaultFont;
 
+  EventTimeEntry *event_index;
+  int event_index_size;
+  bool event_index_valid;
+  FrameCache frame_cache;
+
 public:
   ASS_Track *track;
 
   int trackColorSpace;
   int changed = 0;
   int count = 0;
+  int time = 0;
   JASSUB(int canvas_w, int canvas_h, const std::string &df, bool debug) {
     status = 0;
     ass_library = NULL;
@@ -294,6 +341,11 @@ public:
     drop_animations = false;
     scanned_events = 0;
     this->debug = debug;
+    
+    // Initialize event index
+    event_index = NULL;
+    event_index_size = 0;
+    event_index_valid = false;
 
     defaultFont = copyString(df);
     ass_library = ass_library_init();
@@ -339,16 +391,96 @@ public:
     }
     scanned_events = i;
   }
+  
+  void buildEventIndex() {
+    freeEventIndex();
+    
+    if (!track || track->n_events == 0) return;
+    
+    event_index_size = track->n_events;
+    event_index = new EventTimeEntry[event_index_size];
+    
+    for (int i = 0; i < event_index_size; i++) {
+      ASS_Event *ev = &track->events[i];
+      event_index[i].event_index = i;
+      event_index[i].start_ms = ev->Start;
+      event_index[i].end_ms = ev->Start + ev->Duration;
+    }
+    
+    for (int i = 1; i < event_index_size; i++) {
+      EventTimeEntry key = event_index[i];
+      int j = i - 1;
+      while (j >= 0 && event_index[j].start_ms > key.start_ms) {
+        event_index[j + 1] = event_index[j];
+        j--;
+      }
+      event_index[j + 1] = key;
+    }
+    
+    event_index_valid = true;
+    if (debug) {
+      printf("JASSUB: Built event index with %d entries\n", event_index_size);
+    }
+  }
+  
+  void freeEventIndex() {
+    if (event_index) {
+      delete[] event_index;
+      event_index = NULL;
+    }
+    event_index_size = 0;
+    event_index_valid = false;
+  }
+  
+  /*
+   * \brief Find first event index that may be active at given time
+   * Returns -1 if no events could be active.
+   */
+  int findFirstActiveEvent(long long time_ms) const {
+    if (!event_index_valid || event_index_size == 0) return 0;
+    
+    // Binary search for first event that ends after time_ms
+    int left = 0, right = event_index_size - 1;
+    int result = -1;
+    
+    while (left <= right) {
+      int mid = (left + right) / 2;
+      if (event_index[mid].end_ms > time_ms) {
+        result = mid;
+        right = mid - 1;
+      } else {
+        left = mid + 1;
+      }
+    }
+    
+    if (result > 0) {
+      while (result > 0 && event_index[result - 1].end_ms > time_ms) {
+        result--;
+      }
+    }
+    
+    return result >= 0 ? result : 0;
+  }
 
   /* TRACK */
   void createTrackMem(std::string buf) {
     removeTrack();
-    track = ass_read_memory(ass_library, buf.data(), buf.size(), NULL);
+    char *data = buf.empty() ? nullptr : &buf[0];
+    track = ass_read_memory(ass_library, data, buf.size(), NULL);
     if (!track) {
       fprintf(stderr, "JASSUB: Failed to start a track\n");
       exit(4);
     }
-    scanAnimations(0);
+
+    if (drop_animations) {
+      scanAnimations(0);
+    } else {
+      scanned_events = 0;
+    }
+    
+    buildEventIndex();
+    
+    frame_cache.invalidate();
 
     trackColorSpace = track->YCbCrMatrix;
   }
@@ -358,6 +490,8 @@ public:
       ass_free_track(track);
       track = NULL;
     }
+    freeEventIndex();
+    frame_cache.invalidate();
   }
   /* TRACK */
 
@@ -367,6 +501,7 @@ public:
     ass_set_frame_size(ass_renderer, canvas_w, canvas_h);
     this->canvas_h = canvas_h;
     this->canvas_w = canvas_w;
+    frame_cache.invalidate();
   }
   int getBufferSize(ASS_Image *img) {
     int size = 0;
@@ -430,10 +565,13 @@ public:
   }
 
   RenderResult *renderImage(double tm, int force) {
+    time = 0;
     count = 0;
 
     ASS_Image *imgs = ass_render_frame(ass_renderer, track, (int)(tm * 1000), &changed);
     if (imgs == NULL || (changed == 0 && !force)) return NULL;
+
+    if (debug) time = emscripten_get_now();
 
     return processImages(imgs);
   }
@@ -468,10 +606,14 @@ public:
   }
 
   int allocEvent() {
+    event_index_valid = false;
+    frame_cache.invalidate();
     return ass_alloc_event(track);
   }
 
   void removeEvent(int eid) {
+    event_index_valid = false;
+    frame_cache.invalidate();
     ass_free_event(track, eid);
   }
 
@@ -484,10 +626,12 @@ public:
   }
 
   void removeStyle(int sid) {
-    ass_free_event(track, sid);
+    ass_free_style(track, sid);
   }
 
   void removeAllEvents() {
+    freeEventIndex();
+    frame_cache.invalidate();
     ass_flush_events(track);
   }
 
@@ -497,6 +641,7 @@ public:
   }
 
   RenderResult *renderBlend(double tm, int force) {
+    time = 0;
     count = 0;
 
     ASS_Image *img = ass_render_frame(ass_renderer, track, (int)(tm * 1000), &changed);
@@ -504,6 +649,7 @@ public:
       return NULL;
     }
 
+    if (debug) time = emscripten_get_now();
     for (int i = 0; i < MAX_BLEND_STORAGES; i++) {
       m_blendParts[i].taken = false;
     }
@@ -524,7 +670,7 @@ public:
       }
       if (middle_x > split_x_high) {
         index += 2;
-      } else if (middle_y > split_x_low) {
+      } else if (middle_x > split_x_low) {
         index += 1;
       }
       boxes[index].add(cur->dst_x, cur->dst_y, cur->w, cur->h);
@@ -729,6 +875,7 @@ static std::string getEventName(const ASS_Event &evt) {
 }
 
 static void setEventName(ASS_Event &evt, const std::string &str) {
+  free(evt.Name);
   evt.Name = copyString(str);
 }
 
@@ -737,6 +884,7 @@ static std::string getText(const ASS_Event &evt) {
 }
 
 static void setText(ASS_Event &evt, const std::string &str) {
+  free(evt.Text);
   evt.Text = copyString(str);
 }
 
@@ -745,6 +893,7 @@ static std::string getEffect(const ASS_Event &evt) {
 }
 
 static void setEffect(ASS_Event &evt, const std::string &str) {
+  free(evt.Effect);
   evt.Effect = copyString(str);
 }
 
@@ -753,6 +902,7 @@ static std::string getStyleName(const ASS_Style &style) {
 }
 
 static void setStyleName(ASS_Style &style, const std::string &str) {
+  free(style.Name);
   style.Name = copyString(str);
 }
 
@@ -761,10 +911,15 @@ static std::string getFontName(const ASS_Style &style) {
 }
 
 static void setFontName(ASS_Style &style, const std::string &str) {
+  free(style.FontName);
   style.FontName = copyString(str);
 }
 
 static RenderResult getNext(const RenderResult &res) {
+  if (res.next == NULL) {
+    RenderResult empty = {0, 0, 0, 0, 0, NULL};
+    return empty;
+  }
   return *res.next;
 }
 
@@ -846,5 +1001,6 @@ EMSCRIPTEN_BINDINGS(JASSUB) {
     .function("setDefaultFont", &JASSUB::setDefaultFont)
     .property("trackColorSpace", &JASSUB::trackColorSpace)
     .property("changed", &JASSUB::changed)
-    .property("count", &JASSUB::count);
+    .property("count", &JASSUB::count)
+    .property("time", &JASSUB::time);
 }

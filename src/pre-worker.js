@@ -1,13 +1,34 @@
 /* eslint-disable no-global-assign, no-unused-vars, prefer-const, no-extend-native */
-/* global out, err, updateMemoryViews, wasmMemory */
+/* global out, err, wasmMemory */
+
+function assert(c, m) {
+  if (!c) throw m
+}
 
 let asm = null
-var _scriptName
+
+out = (text) => {
+  if (text === 'JASSUB: No usable fontconfig configuration file found, using fallback.') {
+    console.debug(text)
+  } else {
+    console.log(text)
+  }
+}
+
+err = (text) => {
+  if (text === 'Fontconfig error: Cannot load default config file: No such file: (null)') {
+    console.debug(text)
+  } else {
+    console.error(text)
+  }
+}
+
+var updateMemoryViews = typeof updateMemoryViews === 'function' ? updateMemoryViews : function () {}
 
 // patch EMS function to include Uint8Clamped, but call old function too
-updateMemoryViews = (_super => {
+updateMemoryViews = ((_super) => {
   return () => {
-    _super()
+    if (typeof _super === 'function') _super()
     self.wasmMemory = wasmMemory
     self.HEAPU8C = new Uint8ClampedArray(wasmMemory.buffer)
     self.HEAPU8 = new Uint8Array(wasmMemory.buffer)
