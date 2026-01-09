@@ -89,13 +89,14 @@ fn fragmentMain(input: FragmentInput) -> @location(0) vec4f {
   let data = imageData[input.instanceIndex];
   let texIndex = u32(data.texInfo.z);
   
-  // Calculate integer texel coordinates
-  let texCoord = vec2i(input.fragCoord.xy) - vec2i(input.destXY);
+  // Calculate texel coordinates
+  let texCoordF = floor(input.fragCoord.xy - input.destXY);
+  let texCoord = vec2i(texCoordF);
   
   // Bounds check
   let texSizeI = vec2i(input.texSize);
   if (texCoord.x < 0 || texCoord.y < 0 || texCoord.x >= texSizeI.x || texCoord.y >= texSizeI.y) {
-    return vec4f(0.0);
+    discard;
   }
   
   // Load from texture array
@@ -274,6 +275,28 @@ export class WebGPURenderer {
     this.textureArrayHeight = h
     this.textureArraySize = l
     this.bindGroupDirty = true
+
+    // Clear all texture layers to transparent to prevent garbage border artifacts
+    const commandEncoder = this.device!.createCommandEncoder()
+    for (let layer = 0; layer < l; layer++) {
+      const layerView = this.textureArray.createView({
+        dimension: '2d',
+        baseArrayLayer: layer,
+        arrayLayerCount: 1
+      })
+      const renderPass = commandEncoder.beginRenderPass({
+        colorAttachments: [
+          {
+            view: layerView,
+            clearValue: { r: 0, g: 0, b: 0, a: 0 },
+            loadOp: 'clear',
+            storeOp: 'store'
+          }
+        ]
+      })
+      renderPass.end()
+    }
+    this.device!.queue.submit([commandEncoder.finish()])
   }
 
   private ensureTextureArray(maxWidth: number, maxHeight: number, count: number): boolean {

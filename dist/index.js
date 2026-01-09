@@ -49,8 +49,8 @@ function k(c, e = c.videoWidth, t = c.videoHeight) {
   const s = e / t, { offsetWidth: i, offsetHeight: r } = c, o = i / r;
   let n = i, a = r;
   o > s ? n = Math.floor(r * s) : a = Math.floor(i / s);
-  const l = (i - n) / 2, v = (r - a) / 2;
-  return { width: n, height: a, x: l, y: v };
+  const h = (i - n) / 2, v = (r - a) / 2;
+  return { width: n, height: a, x: h, y: v };
 }
 function z(c, e) {
   if (!e) return c;
@@ -68,8 +68,8 @@ function J(c, e = !1) {
   for (let n = 0; n < i; n++) {
     const a = s[n];
     if (!a || /^\s*$/.test(a)) continue;
-    const l = a[0];
-    if (l === "[") {
+    const h = a[0];
+    if (h === "[") {
       const v = a.match(/^\[(.*)\]$/);
       if (v) {
         if (e && v[1].toLowerCase() === "events")
@@ -79,7 +79,7 @@ function J(c, e = !1) {
       }
     }
     if (o)
-      if (l === ";")
+      if (h === ";")
         o.body.push({
           type: "comment",
           value: a.substring(1)
@@ -95,11 +95,11 @@ function J(c, e = !1) {
             const R = u.slice(r.length - 1).join(",");
             u = u.slice(0, r.length - 1), u.push(R);
           }
-          const g = u.length;
-          for (let R = 0; R < g; R++)
+          const m = u.length;
+          for (let R = 0; R < m; R++)
             u[R] = u[R].trim();
           if (r) {
-            const R = {}, A = Math.min(r.length, g);
+            const R = {}, A = Math.min(r.length, m);
             for (let _ = 0; _ < A; _++)
               R[r[_]] = u[_];
             x = R;
@@ -139,63 +139,63 @@ function b(c, e) {
 }
 function Z(c) {
   const e = c.match(/PlayResX:\s*(\d+)/i), t = c.match(/PlayResY:\s*(\d+)/i), s = e ? parseInt(e[1], 10) : 1920, i = t ? parseInt(t[1], 10) : 1080, r = /\\pos\s*\(\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*\)/g, o = /\\move\s*\(\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)/g, n = /\\org\s*\(\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*\)/g, a = /\\i?clip\s*\(\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*\)/g;
-  let l = 0, v = 0;
-  const w = (m, h, f) => {
+  let h = 0, v = 0;
+  const w = (g, l, f) => {
     let y;
-    const T = new RegExp(m.source, "g");
+    const T = new RegExp(g.source, "g");
     for (; (y = T.exec(c)) !== null; ) {
-      for (const B of h)
-        if (y[B]) {
-          const D = Math.abs(parseFloat(y[B]));
-          D > l && (l = D);
+      for (const E of l)
+        if (y[E]) {
+          const D = Math.abs(parseFloat(y[E]));
+          D > h && (h = D);
         }
-      for (const B of f)
-        if (y[B]) {
-          const D = Math.abs(parseFloat(y[B]));
+      for (const E of f)
+        if (y[E]) {
+          const D = Math.abs(parseFloat(y[E]));
           D > v && (v = D);
         }
     }
   };
-  if (w(r, [1], [2]), w(o, [1, 3], [2, 4]), w(n, [1], [2]), w(a, [1, 3], [2, 4]), l <= s && v <= i) return c;
-  const x = V(l, v), u = s / x.w, g = i / x.h, R = Math.min(u, g), A = Math.max(u, g), _ = 1;
+  if (w(r, [1], [2]), w(o, [1, 3], [2, 4]), w(n, [1], [2]), w(a, [1, 3], [2, 4]), h <= s && v <= i) return c;
+  const x = V(h, v), u = s / x.w, m = i / x.h, R = Math.min(u, m), A = Math.max(u, m), _ = 1;
   let P = c;
   const p = P.match(/(\[Events\][\s\S]*)/i);
   if (!p) return P;
   let d = p[1];
   return d = d.replace(
     r,
-    (m, h, f) => `\\pos(${b(parseFloat(h) * u, h)},${b(parseFloat(f) * g, f)})`
+    (g, l, f) => `\\pos(${b(parseFloat(l) * u, l)},${b(parseFloat(f) * m, f)})`
   ), d = d.replace(
     /\\move\s*\(\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)(?:\s*,\s*(-?[\d.]+)\s*,\s*(-?[\d.]+))?\s*\)/g,
-    (m, h, f, y, T, B, D) => {
-      const I = `\\move(${b(parseFloat(h) * u, h)},${b(parseFloat(f) * g, f)},${b(parseFloat(y) * u, y)},${b(parseFloat(T) * g, T)}`;
-      return B ? `${I},${B},${D})` : `${I})`;
+    (g, l, f, y, T, E, D) => {
+      const I = `\\move(${b(parseFloat(l) * u, l)},${b(parseFloat(f) * m, f)},${b(parseFloat(y) * u, y)},${b(parseFloat(T) * m, T)}`;
+      return E ? `${I},${E},${D})` : `${I})`;
     }
   ), d = d.replace(
     n,
-    (m, h, f) => `\\org(${b(parseFloat(h) * u, h)},${b(parseFloat(f) * g, f)})`
+    (g, l, f) => `\\org(${b(parseFloat(l) * u, l)},${b(parseFloat(f) * m, f)})`
   ), d = d.replace(
     /\\(i?clip)\s*\(\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*\)/g,
-    (m, h, f, y, T, B) => `\\${h}(${b(parseFloat(f) * u, f)},${b(parseFloat(y) * g, y)},${b(parseFloat(T) * u, T)},${b(parseFloat(B) * g, B)})`
-  ), d = d.replace(/\\fs([\d.]+)/g, (m, h) => `\\fs${b(parseFloat(h) * A, h)}`), d = d.replace(
+    (g, l, f, y, T, E) => `\\${l}(${b(parseFloat(f) * u, f)},${b(parseFloat(y) * m, y)},${b(parseFloat(T) * u, T)},${b(parseFloat(E) * m, E)})`
+  ), d = d.replace(/\\fs([\d.]+)/g, (g, l) => `\\fs${b(parseFloat(l) * A, l)}`), d = d.replace(
     /\\fscx([\d.]+)/g,
-    (m, h) => `\\fscx${b(parseFloat(h) * _, h)}`
+    (g, l) => `\\fscx${b(parseFloat(l) * _, l)}`
   ), d = d.replace(
     /\\xbord([\d.]+)/g,
-    (m, h) => `\\xbord${b(parseFloat(h) * u, h)}`
+    (g, l) => `\\xbord${b(parseFloat(l) * u, l)}`
   ), d = d.replace(
     /\\ybord([\d.]+)/g,
-    (m, h) => `\\ybord${b(parseFloat(h) * g, h)}`
+    (g, l) => `\\ybord${b(parseFloat(l) * m, l)}`
   ), d = d.replace(
     /\\xshad(-?[\d.]+)/g,
-    (m, h) => `\\xshad${b(parseFloat(h) * u, h)}`
+    (g, l) => `\\xshad${b(parseFloat(l) * u, l)}`
   ), d = d.replace(
     /\\yshad(-?[\d.]+)/g,
-    (m, h) => `\\yshad${b(parseFloat(h) * g, h)}`
-  ), ["fsp", "bord", "shad", "be", "blur"].forEach((m) => {
-    const h = new RegExp(`\\\\${m}(-?[\\d.]+)`, "g");
-    d = d.replace(h, (f, y) => `\\${m}${b(parseFloat(y) * R, y)}`);
-  }), d = d.replace(/(\\i?clip\s*\([^,)]+m[^)]+\)|\\p[1-9][^}]*?)(?=[\\}]|$)/g, (m) => m.replace(/(-?[\d.]+)\s+(-?[\d.]+)/g, (h, f, y) => `${b(parseFloat(f) * u, f)} ${b(parseFloat(y) * g, y)}`)), P.substring(0, p.index) + d;
+    (g, l) => `\\yshad${b(parseFloat(l) * m, l)}`
+  ), ["fsp", "bord", "shad", "be", "blur"].forEach((g) => {
+    const l = new RegExp(`\\\\${g}(-?[\\d.]+)`, "g");
+    d = d.replace(l, (f, y) => `\\${g}${b(parseFloat(y) * R, y)}`);
+  }), d = d.replace(/(\\i?clip\s*\([^,)]+m[^)]+\)|\\p[1-9][^}]*?)(?=[\\}]|$)/g, (g) => g.replace(/(-?[\d.]+)\s+(-?[\d.]+)/g, (l, f, y) => `${b(parseFloat(f) * u, f)} ${b(parseFloat(y) * m, y)}`)), P.substring(0, p.index) + d;
 }
 let U = null, F = null;
 async function $() {
@@ -320,13 +320,14 @@ fn fragmentMain(input: FragmentInput) -> @location(0) vec4f {
   let data = imageData[input.instanceIndex];
   let texIndex = u32(data.texInfo.z);
   
-  // Calculate integer texel coordinates
-  let texCoord = vec2i(input.fragCoord.xy) - vec2i(input.destXY);
+  // Calculate texel coordinates
+  let texCoordF = floor(input.fragCoord.xy - input.destXY);
+  let texCoord = vec2i(texCoordF);
   
   // Bounds check
   let texSizeI = vec2i(input.texSize);
   if (texCoord.x < 0 || texCoord.y < 0 || texCoord.x >= texSizeI.x || texCoord.y >= texSizeI.y) {
-    return vec4f(0.0);
+    discard;
   }
   
   // Load from texture array
@@ -441,6 +442,25 @@ class X {
       format: this.format,
       usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT
     }), this.textureArrayView = this.textureArray.createView({ dimension: "2d-array" }), this.textureArrayWidth = i, this.textureArrayHeight = r, this.textureArraySize = o, this.bindGroupDirty = !0;
+    const n = this.device.createCommandEncoder();
+    for (let a = 0; a < o; a++) {
+      const h = this.textureArray.createView({
+        dimension: "2d",
+        baseArrayLayer: a,
+        arrayLayerCount: 1
+      });
+      n.beginRenderPass({
+        colorAttachments: [
+          {
+            view: h,
+            clearValue: { r: 0, g: 0, b: 0, a: 0 },
+            loadOp: "clear",
+            storeOp: "store"
+          }
+        ]
+      }).end();
+    }
+    this.device.queue.submit([n.finish()]);
   }
   ensureTextureArray(e, t, s) {
     const i = Math.min(s, M);
@@ -504,29 +524,29 @@ class X {
       this.clear();
       return;
     }
-    const l = Math.min(a, M);
-    this.ensureTextureArray(o, n, l), this.updateBindGroup();
-    const v = this.device, w = v.queue, x = this.textureArray, u = this.imageDataArray, g = r.createView();
+    const h = Math.min(a, M);
+    this.ensureTextureArray(o, n, h), this.updateBindGroup();
+    const v = this.device, w = v.queue, x = this.textureArray, u = this.imageDataArray, m = r.createView();
     let R = 0, A = !0;
     for (; R < i; ) {
       let _ = 0;
       for (; R < i && _ < M; ) {
-        const d = e[R++], C = d.image, m = C.width, h = C.height;
-        if (m <= 0 || h <= 0) continue;
+        const d = e[R++], C = d.image, g = C.width, l = C.height;
+        if (g <= 0 || l <= 0) continue;
         w.copyExternalImageToTexture(
           { source: C, flipY: !1 },
           { texture: x, origin: [0, 0, _], premultipliedAlpha: !0 },
-          { width: m, height: h }
+          { width: g, height: l }
         );
         const f = _ << 3;
-        u[f] = d.x, u[f + 1] = d.y, u[f + 2] = m, u[f + 3] = h, u[f + 4] = m, u[f + 5] = h, u[f + 6] = _, _++;
+        u[f] = d.x, u[f + 1] = d.y, u[f + 2] = g, u[f + 3] = l, u[f + 4] = g, u[f + 5] = l, u[f + 6] = _, _++;
       }
       if (_ === 0) continue;
       w.writeBuffer(this.imageDataBuffer, 0, u.buffer, 0, _ << 5);
       const P = v.createCommandEncoder(), p = P.beginRenderPass({
         colorAttachments: [
           {
-            view: g,
+            view: m,
             clearValue: { r: 0, g: 0, b: 0, a: 0 },
             loadOp: A ? "clear" : "load",
             storeOp: "store"
@@ -550,35 +570,35 @@ class X {
     }
     const o = this.context.getCurrentTexture();
     if (o.width === 0 || o.height === 0) return;
-    let n = 0, a = 0, l = 0;
+    let n = 0, a = 0, h = 0;
     for (let p = 0; p < r; p++) {
       const { w: d, h: C } = e[p];
-      d > 0 && C > 0 && (d > n && (n = d), C > a && (a = C), l++);
+      d > 0 && C > 0 && (d > n && (n = d), C > a && (a = C), h++);
     }
-    if (l === 0) {
+    if (h === 0) {
       this.clear();
       return;
     }
-    const v = Math.min(l, M);
+    const v = Math.min(h, M);
     this.ensureTextureArray(n, a, v), this.updateBindGroup();
-    const w = this.device, x = w.queue, u = this.textureArray, g = this.imageDataArray, R = this.format === "bgra8unorm", A = o.createView();
+    const w = this.device, x = w.queue, u = this.textureArray, m = this.imageDataArray, R = this.format === "bgra8unorm", A = o.createView();
     let _ = 0, P = !0;
     for (; _ < r; ) {
       let p = 0;
       for (; _ < r && p < M; ) {
-        const m = e[_++], h = m.w, f = m.h;
-        if (h <= 0 || f <= 0) continue;
-        const y = m.image;
+        const g = e[_++], l = g.w, f = g.h;
+        if (l <= 0 || f <= 0) continue;
+        const y = g.image;
         y instanceof ImageBitmap ? x.copyExternalImageToTexture(
           { source: y, flipY: !1 },
           { texture: u, origin: [0, 0, p], premultipliedAlpha: !0 },
-          { width: h, height: f }
-        ) : y instanceof ArrayBuffer && this.uploadTextureData(p, y, h, f, R);
+          { width: l, height: f }
+        ) : y instanceof ArrayBuffer && this.uploadTextureData(p, y, l, f, R);
         const T = p << 3;
-        g[T] = m.x, g[T + 1] = m.y, g[T + 2] = h, g[T + 3] = f, g[T + 4] = h, g[T + 5] = f, g[T + 6] = p, p++;
+        m[T] = g.x, m[T + 1] = g.y, m[T + 2] = l, m[T + 3] = f, m[T + 4] = l, m[T + 5] = f, m[T + 6] = p, p++;
       }
       if (p === 0) continue;
-      x.writeBuffer(this.imageDataBuffer, 0, g.buffer, 0, p << 5);
+      x.writeBuffer(this.imageDataBuffer, 0, m.buffer, 0, p << 5);
       const d = w.createCommandEncoder(), C = d.beginRenderPass({
         colorAttachments: [
           {
@@ -597,8 +617,8 @@ class X {
     const o = s * i * 4;
     if (r) {
       const n = this.ensureConversionBuffer(o), a = new Uint8Array(t);
-      for (let l = 0; l < o; l += 4)
-        n[l] = a[l + 2], n[l + 1] = a[l + 1], n[l + 2] = a[l], n[l + 3] = a[l + 3];
+      for (let h = 0; h < o; h += 4)
+        n[h] = a[h + 2], n[h + 1] = a[h + 1], n[h + 2] = a[h], n[h + 3] = a[h + 3];
       this.device.queue.writeTexture(
         { texture: this.textureArray, origin: [0, 0, e] },
         n.buffer,
@@ -647,7 +667,7 @@ class X {
     this.cleanupPendingTextures(), this.textureArray?.destroy(), this.textureArray = null, this.textureArrayView = null, this.uniformBuffer?.destroy(), this.imageDataBuffer?.destroy(), this.bindGroup = null, this.conversionBuffer = null, this.conversionBufferSize = 0, this.device?.destroy(), this.device = null, this.context = null, this._canvas = null, this._initialized = !1, this._initPromise = null;
   }
 }
-class E extends EventTarget {
+class B extends EventTarget {
   // Feature detection cache (static)
   static _hasAlphaBug = null;
   static _hasBitmapBug = null;
@@ -700,7 +720,7 @@ class E extends EventTarget {
     this._loaded = new Promise((r) => {
       this._init = r;
     });
-    const t = E._test();
+    const t = B._test();
     this._onDemandRender = "requestVideoFrameCallback" in HTMLVideoElement.prototype && (e.onDemandRender ?? !0), this._preferWebGPU = e.preferWebGPU !== !1, this._onWebGPUFallback = e.onWebGPUFallback;
     const s = this._preferWebGPU && !e.canvas && Y();
     if (this._offscreenRender = "transferControlToOffscreen" in HTMLCanvasElement.prototype && !e.canvas && !s && (e.offscreenRender ?? !0), this.timeOffset = e.timeOffset || 0, this._video = e.video, this._canvas = e.canvas, this._video && !this._canvas)
@@ -732,7 +752,7 @@ class E extends EventTarget {
         libassMemoryLimit: e.libassMemoryLimit ?? 128,
         libassGlyphLimit: e.libassGlyphLimit ?? 2048,
         useLocalFonts: typeof globalThis.queryLocalFonts < "u" && (e.useLocalFonts ?? !0),
-        hasBitmapBug: E._hasBitmapBug
+        hasBitmapBug: B._hasBitmapBug
       }), this._offscreenRender && this.sendMessage("offscreenCanvas", {}, [this._canvasctrl]);
     });
   }
@@ -740,7 +760,7 @@ class E extends EventTarget {
   // Static Methods
   // ==========================================================================
   static async _testImageBugs() {
-    if (E._hasBitmapBug !== null) return;
+    if (B._hasBitmapBug !== null) return;
     const e = document.createElement("canvas"), t = e.getContext("2d", { willReadFrequently: !0 });
     if (!t) throw new Error("Canvas rendering not supported");
     if (typeof ImageData.prototype.constructor == "function")
@@ -755,22 +775,22 @@ class E extends EventTarget {
     const r = i.getImageData(0, 0, 1, 1).data;
     t.putImageData(new ImageData(new Uint8ClampedArray([0, 255, 0, 0]), 1, 1), 0, 0), i.drawImage(e, 0, 0);
     const o = i.getImageData(0, 0, 1, 1).data;
-    if (E._hasAlphaBug = r[1] !== o[1], E._hasAlphaBug && console.log("Detected a browser having issue with transparent pixels, applying workaround"), typeof createImageBitmap < "u") {
+    if (B._hasAlphaBug = r[1] !== o[1], B._hasAlphaBug && console.log("Detected a browser having issue with transparent pixels, applying workaround"), typeof createImageBitmap < "u") {
       const n = new Uint8ClampedArray([255, 0, 255, 0, 255]).subarray(1, 5);
       i.drawImage(await createImageBitmap(new ImageData(n, 1)), 0, 0);
       const { data: a } = i.getImageData(0, 0, 1, 1);
-      E._hasBitmapBug = !1;
-      for (let l = 0; l < a.length; l++)
-        if (Math.abs(n[l] - a[l]) > 15) {
-          E._hasBitmapBug = !0, console.log("Detected a browser having issue with partial bitmaps, applying workaround");
+      B._hasBitmapBug = !1;
+      for (let h = 0; h < a.length; h++)
+        if (Math.abs(n[h] - a[h]) > 15) {
+          B._hasBitmapBug = !0, console.log("Detected a browser having issue with partial bitmaps, applying workaround");
           break;
         }
     } else
-      E._hasBitmapBug = !1;
+      B._hasBitmapBug = !1;
     e.remove(), s.remove();
   }
   static async _test() {
-    await E._testImageBugs();
+    await B._testImageBugs();
   }
   // ==========================================================================
   // WebGPU Management
@@ -803,10 +823,10 @@ class E extends EventTarget {
       const o = k(this._video);
       let n;
       if (this._videoWidth) {
-        const a = this._video.videoWidth / this._videoWidth, l = this._video.videoHeight / this._videoHeight;
+        const a = this._video.videoWidth / this._videoWidth, h = this._video.videoHeight / this._videoHeight;
         n = S(
           (o.width || 0) / a,
-          (o.height || 0) / l,
+          (o.height || 0) / h,
           this.prescaleFactor,
           this.prescaleHeightLimit,
           this.maxRenderHeight
@@ -1089,29 +1109,29 @@ class E extends EventTarget {
     const r = this._ctx, o = e.images, n = o.length;
     if (r.clearRect(0, 0, t, s), e.asyncRender)
       for (let a = 0; a < n; a++) {
-        const l = o[a];
-        l.image && (r.drawImage(l.image, l.x, l.y), l.image.close());
+        const h = o[a];
+        h.image && (r.drawImage(h.image, h.x, h.y), h.image.close());
       }
     else {
-      const a = this._bufferCanvas, l = this._bufferCtx, v = E._hasAlphaBug ?? !1;
+      const a = this._bufferCanvas, h = this._bufferCtx, v = B._hasAlphaBug ?? !1;
       for (let w = 0; w < n; w++) {
         const x = o[w];
         if (x.image) {
-          const u = x.w, g = x.h;
-          (a.width !== u || a.height !== g) && (a.width = u, a.height = g);
+          const u = x.w, m = x.h;
+          (a.width !== u || a.height !== m) && (a.width = u, a.height = m);
           const R = new Uint8ClampedArray(x.image), A = z(R, v);
-          l.putImageData(new ImageData(A, u, g), 0, 0), r.drawImage(a, x.x, x.y);
+          h.putImageData(new ImageData(A, u, m), 0, 0), r.drawImage(a, x.x, x.y);
         }
       }
     }
     if (this.debug) {
       e.times.JSRenderTime = Date.now() - (e.times.JSRenderTime || 0) - (e.times.IPCTime || 0);
       let a = 0;
-      const l = e.times.bitmaps || n;
+      const h = e.times.bitmaps || n;
       delete e.times.bitmaps;
       for (const v in e.times)
         a += e.times[v] || 0;
-      console.log("Bitmaps: " + l + " Total: " + (a | 0) + "ms", e.times);
+      console.log("Bitmaps: " + h + " Total: " + (a | 0) + "ms", e.times);
     }
   }
   _renderWebGPU(e) {
@@ -1188,11 +1208,11 @@ class E extends EventTarget {
   }
 }
 export {
-  E as JASSUB,
+  B as JASSUB,
   X as WebGPURenderer,
   W as colorMatrixConversionMap,
   S as computeCanvasSize,
-  E as default,
+  B as default,
   K as dropBlur,
   z as fixAlpha,
   Z as fixPlayRes,
