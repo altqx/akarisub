@@ -321,7 +321,7 @@ fn fragmentMain(input: FragmentInput) -> @location(0) vec4f {
   let texIndex = u32(data.texInfo.z);
   
   // Calculate integer texel coordinates
-  let texCoord = vec2i(floor(input.fragCoord.xy - input.destXY));
+  let texCoord = vec2i(input.fragCoord.xy) - vec2i(input.destXY);
   
   // Bounds check
   let texSizeI = vec2i(input.texSize);

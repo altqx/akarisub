@@ -750,8 +750,40 @@ public:
   }
 
   RenderResult *renderBlendPart(const BoundingBox &rect, ASS_Image *img) {
-    int width = rect.max_x - rect.min_x + 1,
-        height = rect.max_y - rect.min_y + 1;
+    // First pass: calculate actual bounding box including all images that
+    // belong to this region
+    int actual_min_x = rect.min_x, actual_min_y = rect.min_y;
+    int actual_max_x = rect.max_x, actual_max_y = rect.max_y;
+
+    for (ASS_Image *cur = img; cur != NULL; cur = cur->next) {
+      int curw = cur->w, curh = cur->h;
+      if (curw == 0 || curh == 0)
+        continue;
+
+      int center_x = cur->dst_x + (curw >> 1);
+      int center_y = cur->dst_y + (curh >> 1);
+      if (center_x < rect.min_x || center_x > rect.max_x ||
+          center_y < rect.min_y || center_y > rect.max_y)
+        continue;
+
+      // This image belongs to our region - expand bounds to include full image
+      actual_min_x = MIN(actual_min_x, cur->dst_x);
+      actual_min_y = MIN(actual_min_y, cur->dst_y);
+      actual_max_x = MAX(actual_max_x, cur->dst_x + curw - 1);
+      actual_max_y = MAX(actual_max_y, cur->dst_y + curh - 1);
+    }
+
+    // Clamp to canvas bounds
+    actual_min_x = MAX(actual_min_x, 0);
+    actual_min_y = MAX(actual_min_y, 0);
+    actual_max_x = MIN(actual_max_x, canvas_w - 1);
+    actual_max_y = MIN(actual_max_y, canvas_h - 1);
+
+    int width = actual_max_x - actual_min_x + 1;
+    int height = actual_max_y - actual_min_y + 1;
+
+    if (width <= 0 || height <= 0)
+      return NULL;
 
     // make float buffer for blending
     const size_t buffer_size = width * height * 4 * sizeof(float);
@@ -784,20 +816,19 @@ public:
 
       int curs = (cur->stride >= curw) ? cur->stride : curw;
 
-      // Render full image, but clip to region bounds for buffer safety
-      // The image may extend beyond our region bounds
+      // Render full image, clipped only to canvas/actual bounds
       int img_right = curx_abs + curw - 1;
       int img_bottom = cury_abs + curh - 1;
 
-      int render_left = MAX(curx_abs, rect.min_x);
-      int render_top = MAX(cury_abs, rect.min_y);
-      int render_right = MIN(img_right, rect.max_x);
-      int render_bottom = MIN(img_bottom, rect.max_y);
+      int render_left = MAX(curx_abs, actual_min_x);
+      int render_top = MAX(cury_abs, actual_min_y);
+      int render_right = MIN(img_right, actual_max_x);
+      int render_bottom = MIN(img_bottom, actual_max_y);
 
       int src_x_off = render_left - curx_abs;
       int src_y_off = render_top - cury_abs;
-      int dst_x = render_left - rect.min_x;
-      int dst_y = render_top - rect.min_y;
+      int dst_x = render_left - actual_min_x;
+      int dst_y = render_top - actual_min_y;
       int render_w = render_right - render_left + 1;
       int render_h = render_bottom - render_top + 1;
 
@@ -898,8 +929,8 @@ public:
     }
 
     // return the thing
-    storage->next.x = rect.min_x;
-    storage->next.y = rect.min_y;
+    storage->next.x = actual_min_x;
+    storage->next.y = actual_min_y;
     storage->next.w = width;
     storage->next.h = height;
     storage->next.image = (size_t)result;
