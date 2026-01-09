@@ -1,10 +1,10 @@
-const $ = {
+const k = {
   bt709: "BT709",
   bt470bg: "BT601",
   // BT.601 PAL
   smpte170m: "BT601"
   // BT.601 NTSC
-}, D = {
+}, I = {
   BT601: {
     BT709: "1.0863 -0.0723 -0.014 0 0 0.0965 0.8451 0.0584 0 0 -0.0141 -0.0277 1.0418"
   },
@@ -19,7 +19,7 @@ const $ = {
     BT709: "0.9993 0.0006 0.0001 0 0 -0.0004 0.9812 0.0192 0 0 -0.0034 -0.0114 1.0148",
     BT601: "0.913 0.0774 0.0096 0 0 -0.1051 1.1508 -0.0456 0 0 0.0063 0.0207 0.973"
   }
-}, V = [
+}, j = [
   null,
   "BT601",
   null,
@@ -32,80 +32,80 @@ const $ = {
   "FCC",
   "FCC"
 ];
-function q(i, e) {
-  if (!i || !e || i === e) return null;
-  const t = D[i]?.[e];
+function Y(n, e) {
+  if (!n || !e || n === e) return null;
+  const t = I[n]?.[e];
   return t ? `url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg'><filter id='f'><feColorMatrix type='matrix' values='${t} 0 0 0 0 0 1 0'/></filter></svg>#f")` : null;
 }
-function k(i, e, t, s, a) {
+function G(n, e, t, s, i) {
   const r = t <= 0 ? 1 : t, h = globalThis.devicePixelRatio || 1;
-  if (e <= 0 || i <= 0)
+  if (e <= 0 || n <= 0)
     return { width: 0, height: 0 };
-  const o = r < 1 ? -1 : 1;
-  let l = e * h;
-  return o * l * r <= o * s ? l *= r : o * l < o * s && (l = s), a > 0 && l > a && (l = a), i *= l / e, e = l, { width: i, height: e };
+  const a = r < 1 ? -1 : 1;
+  let o = e * h;
+  return a * o * r <= a * s ? o *= r : a * o < a * s && (o = s), i > 0 && o > i && (o = i), n *= o / e, e = o, { width: n, height: e };
 }
-function P(i, e = i.videoWidth, t = i.videoHeight) {
-  const s = e / t, { offsetWidth: a, offsetHeight: r } = i, h = a / r;
-  let o = a, l = r;
-  h > s ? o = Math.floor(r * s) : l = Math.floor(a / s);
-  const m = (a - o) / 2, v = (r - l) / 2;
-  return { width: o, height: l, x: m, y: v };
+function L(n, e = n.videoWidth, t = n.videoHeight) {
+  const s = e / t, { offsetWidth: i, offsetHeight: r } = n, h = i / r;
+  let a = i, o = r;
+  h > s ? a = Math.floor(r * s) : o = Math.floor(i / s);
+  const u = (i - a) / 2, g = (r - o) / 2;
+  return { width: a, height: o, x: u, y: g };
 }
-function U(i, e) {
+function W(n, e) {
   if (e)
-    for (let t = 3; t < i.length; t += 4)
-      i[t] = i[t] > 1 ? i[t] : 1;
-  return i;
+    for (let t = 3; t < n.length; t += 4)
+      n[t] = n[t] > 1 ? n[t] : 1;
+  return n;
 }
-function j(i, e = !1) {
-  const t = [], s = i.split(/[\r\n]+/g);
-  let a = null;
+function X(n, e = !1) {
+  const t = [], s = n.split(/[\r\n]+/g);
+  let i = null;
   for (let r = 0; r < s.length; r++) {
     const h = s[r].match(/^\[(.*)\]$/);
     if (h) {
       if (e && h[1].toLowerCase() === "events")
         break;
-      a = null, t.push({
+      i = null, t.push({
         name: h[1],
         body: []
       });
     } else {
       if (/^\s*$/.test(s[r]) || t.length === 0) continue;
-      const o = t[t.length - 1].body;
+      const a = t[t.length - 1].body;
       if (s[r][0] === ";")
-        o.push({
+        a.push({
           type: "comment",
           value: s[r].substring(1)
         });
       else {
-        const l = s[r].split(":"), m = l[0];
-        let v = l.slice(1).join(":").trim();
-        if (a || m === "Format") {
-          let p = v.split(",");
-          if (a && p.length > a.length) {
-            const R = p.slice(a.length - 1).join(",");
-            p = p.slice(0, a.length - 1), p.push(R);
+        const o = s[r].split(":"), u = o[0];
+        let g = o.slice(1).join(":").trim();
+        if (i || u === "Format") {
+          let d = g.split(",");
+          if (i && d.length > i.length) {
+            const v = d.slice(i.length - 1).join(",");
+            d = d.slice(0, i.length - 1), d.push(v);
           }
-          if (p = p.map((R) => R.trim()), a) {
-            const R = {};
-            for (let g = 0; g < p.length; g++)
-              R[a[g]] = p[g];
-            v = R;
+          if (d = d.map((v) => v.trim()), i) {
+            const v = {};
+            for (let f = 0; f < d.length; f++)
+              v[i[f]] = d[f];
+            g = v;
           } else
-            v = p;
+            g = d;
         }
-        m === "Format" && (a = v), o.push({ key: m, value: v });
+        u === "Format" && (i = g), a.push({ key: u, value: g });
       }
     }
   }
   return t;
 }
 const A = /\\blur(?:[0-9]+\.)?[0-9]+/gm;
-function N(i) {
-  return i.replace(A, "");
+function Q(n) {
+  return n.replace(A, "");
 }
-const H = [
+const O = [
   { w: 7680, h: 4320 },
   // 8K
   { w: 3840, h: 2160 },
@@ -117,90 +117,90 @@ const H = [
   { w: 1280, h: 720 }
   // 720p
 ];
-function W(i, e) {
-  const t = [...H].sort((s, a) => s.w - a.w);
+function q(n, e) {
+  const t = [...O].sort((s, i) => s.w - i.w);
   for (const s of t)
-    if (i <= s.w && e <= s.h)
+    if (n <= s.w && e <= s.h)
       return s;
-  return { w: Math.ceil(i / 100) * 100, h: Math.ceil(e / 100) * 100 };
+  return { w: Math.ceil(n / 100) * 100, h: Math.ceil(e / 100) * 100 };
 }
-function c(i, e) {
-  return e && e.includes(".") ? i.toFixed(2).replace(/\.?0+$/, "") : Math.round(i);
+function p(n, e) {
+  return e && e.includes(".") ? n.toFixed(2).replace(/\.?0+$/, "") : Math.round(n);
 }
-function Y(i) {
-  const e = i.match(/PlayResX:\s*(\d+)/i), t = i.match(/PlayResY:\s*(\d+)/i), s = e ? parseInt(e[1], 10) : 1920, a = t ? parseInt(t[1], 10) : 1080, r = /\\pos\s*\(\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*\)/g, h = /\\move\s*\(\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)/g, o = /\\org\s*\(\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*\)/g, l = /\\i?clip\s*\(\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*\)/g;
-  let m = 0, v = 0;
-  const p = (_, n, f) => {
-    let u;
-    const T = new RegExp(_.source, "g");
-    for (; (u = T.exec(i)) !== null; ) {
-      for (const y of n)
-        if (u[y]) {
-          const C = Math.abs(parseFloat(u[y]));
-          C > m && (m = C);
+function J(n) {
+  const e = n.match(/PlayResX:\s*(\d+)/i), t = n.match(/PlayResY:\s*(\d+)/i), s = e ? parseInt(e[1], 10) : 1920, i = t ? parseInt(t[1], 10) : 1080, r = /\\pos\s*\(\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*\)/g, h = /\\move\s*\(\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)/g, a = /\\org\s*\(\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*\)/g, o = /\\i?clip\s*\(\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*\)/g;
+  let u = 0, g = 0;
+  const d = (y, c, b) => {
+    let w;
+    const P = new RegExp(y.source, "g");
+    for (; (w = P.exec(n)) !== null; ) {
+      for (const R of c)
+        if (w[R]) {
+          const E = Math.abs(parseFloat(w[R]));
+          E > u && (u = E);
         }
-      for (const y of f)
-        if (u[y]) {
-          const C = Math.abs(parseFloat(u[y]));
-          C > v && (v = C);
+      for (const R of b)
+        if (w[R]) {
+          const E = Math.abs(parseFloat(w[R]));
+          E > g && (g = E);
         }
     }
   };
-  if (p(r, [1], [2]), p(h, [1, 3], [2, 4]), p(o, [1], [2]), p(l, [1, 3], [2, 4]), m <= s && v <= a) return i;
-  const R = W(m, v), g = s / R.w, w = a / R.h, L = Math.min(g, w), I = Math.max(g, w), S = 1;
-  let F = i;
-  const M = F.match(/(\[Events\][\s\S]*)/i);
-  if (!M) return F;
-  let d = M[1];
-  return d = d.replace(
+  if (d(r, [1], [2]), d(h, [1, 3], [2, 4]), d(a, [1], [2]), d(o, [1, 3], [2, 4]), u <= s && g <= i) return n;
+  const v = q(u, g), f = s / v.w, m = i / v.h, _ = Math.min(f, m), C = Math.max(f, m), M = 1;
+  let F = n;
+  const U = F.match(/(\[Events\][\s\S]*)/i);
+  if (!U) return F;
+  let l = U[1];
+  return l = l.replace(
     r,
-    (_, n, f) => `\\pos(${c(parseFloat(n) * g, n)},${c(parseFloat(f) * w, f)})`
-  ), d = d.replace(
+    (y, c, b) => `\\pos(${p(parseFloat(c) * f, c)},${p(parseFloat(b) * m, b)})`
+  ), l = l.replace(
     /\\move\s*\(\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)(?:\s*,\s*(-?[\d.]+)\s*,\s*(-?[\d.]+))?\s*\)/g,
-    (_, n, f, u, T, y, C) => {
-      const B = `\\move(${c(parseFloat(n) * g, n)},${c(parseFloat(f) * w, f)},${c(parseFloat(u) * g, u)},${c(parseFloat(T) * w, T)}`;
-      return y ? `${B},${y},${C})` : `${B})`;
+    (y, c, b, w, P, R, E) => {
+      const S = `\\move(${p(parseFloat(c) * f, c)},${p(parseFloat(b) * m, b)},${p(parseFloat(w) * f, w)},${p(parseFloat(P) * m, P)}`;
+      return R ? `${S},${R},${E})` : `${S})`;
     }
-  ), d = d.replace(
-    o,
-    (_, n, f) => `\\org(${c(parseFloat(n) * g, n)},${c(parseFloat(f) * w, f)})`
-  ), d = d.replace(
+  ), l = l.replace(
+    a,
+    (y, c, b) => `\\org(${p(parseFloat(c) * f, c)},${p(parseFloat(b) * m, b)})`
+  ), l = l.replace(
     /\\(i?clip)\s*\(\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*\)/g,
-    (_, n, f, u, T, y) => `\\${n}(${c(parseFloat(f) * g, f)},${c(parseFloat(u) * w, u)},${c(parseFloat(T) * g, T)},${c(parseFloat(y) * w, y)})`
-  ), d = d.replace(
+    (y, c, b, w, P, R) => `\\${c}(${p(parseFloat(b) * f, b)},${p(parseFloat(w) * m, w)},${p(parseFloat(P) * f, P)},${p(parseFloat(R) * m, R)})`
+  ), l = l.replace(
     /\\fs([\d.]+)/g,
-    (_, n) => `\\fs${c(parseFloat(n) * I, n)}`
-  ), d = d.replace(
+    (y, c) => `\\fs${p(parseFloat(c) * C, c)}`
+  ), l = l.replace(
     /\\fscx([\d.]+)/g,
-    (_, n) => `\\fscx${c(parseFloat(n) * S, n)}`
-  ), d = d.replace(
+    (y, c) => `\\fscx${p(parseFloat(c) * M, c)}`
+  ), l = l.replace(
     /\\xbord([\d.]+)/g,
-    (_, n) => `\\xbord${c(parseFloat(n) * g, n)}`
-  ), d = d.replace(
+    (y, c) => `\\xbord${p(parseFloat(c) * f, c)}`
+  ), l = l.replace(
     /\\ybord([\d.]+)/g,
-    (_, n) => `\\ybord${c(parseFloat(n) * w, n)}`
-  ), d = d.replace(
+    (y, c) => `\\ybord${p(parseFloat(c) * m, c)}`
+  ), l = l.replace(
     /\\xshad(-?[\d.]+)/g,
-    (_, n) => `\\xshad${c(parseFloat(n) * g, n)}`
-  ), d = d.replace(
+    (y, c) => `\\xshad${p(parseFloat(c) * f, c)}`
+  ), l = l.replace(
     /\\yshad(-?[\d.]+)/g,
-    (_, n) => `\\yshad${c(parseFloat(n) * w, n)}`
-  ), ["fsp", "bord", "shad", "be", "blur"].forEach((_) => {
-    const n = new RegExp(`\\\\${_}(-?[\\d.]+)`, "g");
-    d = d.replace(
-      n,
-      (f, u) => `\\${_}${c(parseFloat(u) * L, u)}`
+    (y, c) => `\\yshad${p(parseFloat(c) * m, c)}`
+  ), ["fsp", "bord", "shad", "be", "blur"].forEach((y) => {
+    const c = new RegExp(`\\\\${y}(-?[\\d.]+)`, "g");
+    l = l.replace(
+      c,
+      (b, w) => `\\${y}${p(parseFloat(w) * _, w)}`
     );
-  }), d = d.replace(
+  }), l = l.replace(
     /(\\i?clip\s*\([^,)]+m[^)]+\)|\\p[1-9][^}]*?)(?=[\\}]|$)/g,
-    (_) => _.replace(/(-?[\d.]+)\s+(-?[\d.]+)/g, (n, f, u) => `${c(parseFloat(f) * g, f)} ${c(parseFloat(u) * w, u)}`)
-  ), F.substring(0, M.index) + d;
+    (y) => y.replace(/(-?[\d.]+)\s+(-?[\d.]+)/g, (c, b, w) => `${p(parseFloat(b) * f, b)} ${p(parseFloat(w) * m, w)}`)
+  ), F.substring(0, U.index) + l;
 }
-let E = null, x = null;
+let D = null, B = null;
 async function z() {
-  if (E !== null && x !== null)
-    return { hasAlphaBug: E, hasBitmapBug: x };
-  const i = document.createElement("canvas"), e = i.getContext("2d", { willReadFrequently: !0 });
+  if (D !== null && B !== null)
+    return { hasAlphaBug: D, hasBitmapBug: B };
+  const n = document.createElement("canvas"), e = n.getContext("2d", { willReadFrequently: !0 });
   if (!e) throw new Error("Canvas rendering not supported");
   if (typeof ImageData.prototype.constructor == "function")
     try {
@@ -210,34 +210,438 @@ async function z() {
     }
   const t = document.createElement("canvas"), s = t.getContext("2d", { willReadFrequently: !0 });
   if (!s) throw new Error("Canvas rendering not supported");
-  i.width = t.width = 1, i.height = t.height = 1, e.clearRect(0, 0, 1, 1), s.clearRect(0, 0, 1, 1);
-  const a = s.getImageData(0, 0, 1, 1).data;
-  e.putImageData(new ImageData(new Uint8ClampedArray([0, 255, 0, 0]), 1, 1), 0, 0), s.drawImage(i, 0, 0);
+  n.width = t.width = 1, n.height = t.height = 1, e.clearRect(0, 0, 1, 1), s.clearRect(0, 0, 1, 1);
+  const i = s.getImageData(0, 0, 1, 1).data;
+  e.putImageData(new ImageData(new Uint8ClampedArray([0, 255, 0, 0]), 1, 1), 0, 0), s.drawImage(n, 0, 0);
   const r = s.getImageData(0, 0, 1, 1).data;
-  if (E = a[1] !== r[1], E && console.log("Detected a browser having issue with transparent pixels, applying workaround"), typeof createImageBitmap < "u") {
+  if (D = i[1] !== r[1], D && console.log("Detected a browser having issue with transparent pixels, applying workaround"), typeof createImageBitmap < "u") {
     const h = new Uint8ClampedArray([255, 0, 255, 0, 255]).subarray(1, 5);
     s.drawImage(await createImageBitmap(new ImageData(h, 1)), 0, 0);
-    const { data: o } = s.getImageData(0, 0, 1, 1);
-    x = !1;
-    for (let l = 0; l < o.length; l++)
-      if (Math.abs(h[l] - o[l]) > 15) {
-        x = !0, console.log("Detected a browser having issue with partial bitmaps, applying workaround");
+    const { data: a } = s.getImageData(0, 0, 1, 1);
+    B = !1;
+    for (let o = 0; o < a.length; o++)
+      if (Math.abs(h[o] - a[o]) > 15) {
+        B = !0, console.log("Detected a browser having issue with partial bitmaps, applying workaround");
         break;
       }
   } else
-    x = !1;
-  return i.remove(), t.remove(), { hasAlphaBug: E, hasBitmapBug: x };
+    B = !1;
+  return n.remove(), t.remove(), { hasAlphaBug: D, hasBitmapBug: B };
 }
-async function X() {
+async function K() {
   return z();
 }
-function G() {
-  return E;
+function Z() {
+  return D;
 }
-function K() {
-  return x;
+function ee() {
+  return B;
 }
-class b extends EventTarget {
+const $ = (
+  /* wgsl */
+  `
+struct VertexOutput {
+  @builtin(position) position: vec4f,
+  @location(0) texCoord: vec2f,
+}
+
+struct Uniforms {
+  resolution: vec2f,
+}
+
+struct QuadData {
+  destRect: vec4f,   // x, y, w, h in pixels
+  texSize: vec4f,    // texW, texH, 0, 0
+}
+
+@group(0) @binding(0) var<uniform> uniforms: Uniforms;
+@group(0) @binding(1) var<storage, read> quadData: QuadData;
+
+// Quad vertices (two triangles)
+const QUAD_POSITIONS = array<vec2f, 6>(
+  vec2f(0.0, 0.0),
+  vec2f(1.0, 0.0),
+  vec2f(0.0, 1.0),
+  vec2f(1.0, 0.0),
+  vec2f(1.0, 1.0),
+  vec2f(0.0, 1.0)
+);
+
+@vertex
+fn vertexMain(@builtin(vertex_index) vertexIndex: u32) -> VertexOutput {
+  var output: VertexOutput;
+
+  let quadPos = QUAD_POSITIONS[vertexIndex];
+  let wh = quadData.destRect.zw;
+
+  // Calculate pixel position
+  let pixelPos = quadData.destRect.xy + quadPos * wh;
+
+  // Convert to clip space (-1 to 1)
+  var clipPos = (pixelPos / uniforms.resolution) * 2.0 - 1.0;
+  clipPos.y = -clipPos.y;  // Flip Y for canvas coordinates
+
+  output.position = vec4f(clipPos, 0.0, 1.0);
+  output.texCoord = quadPos;
+
+  return output;
+}
+`
+), V = (
+  /* wgsl */
+  `
+@group(0) @binding(2) var texSampler: sampler;
+@group(0) @binding(3) var tex: texture_2d<f32>;
+
+struct FragmentInput {
+  @location(0) texCoord: vec2f,
+}
+
+@fragment
+fn fragmentMain(input: FragmentInput) -> @location(0) vec4f {
+  // Sample RGBA texture
+  let color = textureSample(tex, texSampler, input.texCoord);
+  
+  // Output with premultiplied alpha
+  return vec4f(color.rgb * color.a, color.a);
+}
+`
+);
+function H() {
+  return typeof navigator < "u" && "gpu" in navigator;
+}
+class N {
+  device = null;
+  context = null;
+  pipeline = null;
+  sampler = null;
+  bindGroupLayout = null;
+  // Uniform buffer for resolution
+  uniformBuffer = null;
+  // Quad data buffers (one per image)
+  quadDataBuffers = [];
+  // Textures for images
+  textures = [];
+  pendingDestroyTextures = [];
+  format = "bgra8unorm";
+  _canvas = null;
+  _initPromise = null;
+  _initialized = !1;
+  /**
+   * Initialize the WebGPU renderer.
+   * Returns a promise that resolves when initialization is complete.
+   */
+  async init() {
+    return this._initPromise ? this._initPromise : (this._initPromise = this._initDevice(), this._initPromise);
+  }
+  async _initDevice() {
+    if (!navigator.gpu)
+      throw new Error("WebGPU not supported");
+    const e = await navigator.gpu.requestAdapter({
+      powerPreference: "high-performance"
+    });
+    if (!e)
+      throw new Error("No WebGPU adapter found");
+    this.device = await e.requestDevice(), this.format = navigator.gpu.getPreferredCanvasFormat();
+    const t = this.device.createShaderModule({
+      code: $
+    }), s = this.device.createShaderModule({
+      code: V
+    });
+    this.sampler = this.device.createSampler({
+      magFilter: "linear",
+      minFilter: "linear",
+      addressModeU: "clamp-to-edge",
+      addressModeV: "clamp-to-edge"
+    }), this.uniformBuffer = this.device.createBuffer({
+      size: 16,
+      // vec2f resolution + padding
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
+    }), this.bindGroupLayout = this.device.createBindGroupLayout({
+      entries: [
+        {
+          binding: 0,
+          visibility: GPUShaderStage.VERTEX,
+          buffer: { type: "uniform" }
+        },
+        {
+          binding: 1,
+          visibility: GPUShaderStage.VERTEX,
+          buffer: { type: "read-only-storage" }
+        },
+        {
+          binding: 2,
+          visibility: GPUShaderStage.FRAGMENT,
+          sampler: { type: "filtering" }
+        },
+        {
+          binding: 3,
+          visibility: GPUShaderStage.FRAGMENT,
+          texture: { sampleType: "float" }
+        }
+      ]
+    });
+    const i = this.device.createPipelineLayout({
+      bindGroupLayouts: [this.bindGroupLayout]
+    });
+    this.pipeline = this.device.createRenderPipeline({
+      layout: i,
+      vertex: {
+        module: t,
+        entryPoint: "vertexMain"
+      },
+      fragment: {
+        module: s,
+        entryPoint: "fragmentMain",
+        targets: [
+          {
+            format: this.format,
+            blend: {
+              color: {
+                srcFactor: "one",
+                dstFactor: "one-minus-src-alpha",
+                operation: "add"
+              },
+              alpha: {
+                srcFactor: "one",
+                dstFactor: "one-minus-src-alpha",
+                operation: "add"
+              }
+            }
+          }
+        ]
+      },
+      primitive: {
+        topology: "triangle-list"
+      }
+    }), this._initialized = !0;
+  }
+  /**
+   * Configure the canvas for WebGPU rendering.
+   */
+  async setCanvas(e, t, s) {
+    if (await this.init(), !this.device)
+      throw new Error("WebGPU device not initialized");
+    if (this._canvas = e, !this.context) {
+      if (this.context = e.getContext("webgpu"), !this.context)
+        throw new Error("Could not get WebGPU context");
+      this.context.configure({
+        device: this.device,
+        format: this.format,
+        alphaMode: "premultiplied"
+      });
+    }
+    e.width = t, e.height = s, this.device.queue.writeBuffer(this.uniformBuffer, 0, new Float32Array([t, s]));
+  }
+  /**
+   * Update canvas dimensions.
+   */
+  updateSize(e, t) {
+    !this.device || !this._canvas || (this._canvas.width = e, this._canvas.height = t, this.device.queue.writeBuffer(this.uniformBuffer, 0, new Float32Array([e, t])));
+  }
+  createTextureInfo(e, t) {
+    const s = this.device.createTexture({
+      size: [e, t],
+      format: this.format,
+      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT
+    });
+    return {
+      texture: s,
+      view: s.createView(),
+      width: e,
+      height: t
+    };
+  }
+  /**
+   * Render subtitle images to the canvas.
+   * @param images - Array of render images from JASSUB worker
+   * @param canvasWidth - Canvas width in pixels
+   * @param canvasHeight - Canvas height in pixels
+   * @param getImageData - Function to get raw RGBA data for an image (for non-async render)
+   */
+  render(e, t, s, i) {
+    if (!this.device || !this.context || !this.pipeline) return;
+    if (e.length === 0) {
+      this.clear();
+      return;
+    }
+    const r = this.device.createCommandEncoder(), h = this.context.getCurrentTexture().createView(), a = r.beginRenderPass({
+      colorAttachments: [
+        {
+          view: h,
+          clearValue: { r: 0, g: 0, b: 0, a: 0 },
+          loadOp: "clear",
+          storeOp: "store"
+        }
+      ]
+    });
+    for (a.setPipeline(this.pipeline); this.textures.length < e.length; )
+      this.textures.push(this.createTextureInfo(64, 64));
+    for (; this.quadDataBuffers.length < e.length; )
+      this.quadDataBuffers.push(
+        this.device.createBuffer({
+          size: 32,
+          // 2 x vec4f
+          usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
+        })
+      );
+    for (let o = 0; o < e.length; o++) {
+      const u = e[o], { w: g, h: d, x: v, y: f } = u;
+      if (g <= 0 || d <= 0) continue;
+      let m = this.textures[o];
+      (m.width !== g || m.height !== d) && (this.pendingDestroyTextures.push(m.texture), m = this.createTextureInfo(g, d), this.textures[o] = m);
+      let _ = null;
+      if (u.image instanceof ImageBitmap) {
+        const x = new OffscreenCanvas(g, d).getContext("2d");
+        x && (x.drawImage(u.image, 0, 0), _ = x.getImageData(0, 0, g, d).data);
+      } else u.image instanceof ArrayBuffer ? _ = new Uint8ClampedArray(u.image) : typeof u.image == "number" && i && (_ = i(u));
+      if (!_) continue;
+      let C;
+      if (this.format === "bgra8unorm") {
+        const l = new Uint8Array(_.length);
+        for (let x = 0; x < _.length; x += 4)
+          l[x] = _[x + 2], l[x + 1] = _[x + 1], l[x + 2] = _[x], l[x + 3] = _[x + 3];
+        C = l;
+      } else
+        C = new Uint8Array(_.buffer, _.byteOffset, _.byteLength);
+      this.device.queue.writeTexture(
+        { texture: m.texture },
+        C.buffer,
+        { bytesPerRow: g * 4 },
+        { width: g, height: d }
+      );
+      const M = new Float32Array([
+        // destRect
+        v,
+        f,
+        g,
+        d,
+        // texSize
+        g,
+        d,
+        0,
+        0
+      ]), F = this.quadDataBuffers[o];
+      this.device.queue.writeBuffer(F, 0, M);
+      const U = this.device.createBindGroup({
+        layout: this.bindGroupLayout,
+        entries: [
+          { binding: 0, resource: { buffer: this.uniformBuffer } },
+          { binding: 1, resource: { buffer: F } },
+          { binding: 2, resource: this.sampler },
+          { binding: 3, resource: m.view }
+        ]
+      });
+      a.setBindGroup(0, U), a.draw(6);
+    }
+    a.end(), this.device.queue.submit([r.finish()]);
+    for (const o of this.pendingDestroyTextures)
+      o.destroy();
+    this.pendingDestroyTextures = [];
+  }
+  /**
+   * Render using ImageBitmaps (async render mode).
+   */
+  renderBitmaps(e, t, s) {
+    if (!this.device || !this.context || !this.pipeline) return;
+    if (e.length === 0) {
+      this.clear();
+      return;
+    }
+    const i = this.device.createCommandEncoder(), r = this.context.getCurrentTexture().createView(), h = i.beginRenderPass({
+      colorAttachments: [
+        {
+          view: r,
+          clearValue: { r: 0, g: 0, b: 0, a: 0 },
+          loadOp: "clear",
+          storeOp: "store"
+        }
+      ]
+    });
+    for (h.setPipeline(this.pipeline); this.textures.length < e.length; )
+      this.textures.push(this.createTextureInfo(64, 64));
+    for (; this.quadDataBuffers.length < e.length; )
+      this.quadDataBuffers.push(
+        this.device.createBuffer({
+          size: 32,
+          usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
+        })
+      );
+    for (let a = 0; a < e.length; a++) {
+      const { image: o, x: u, y: g } = e[a], d = o.width, v = o.height;
+      if (d <= 0 || v <= 0) continue;
+      let f = this.textures[a];
+      (f.width !== d || f.height !== v) && (this.pendingDestroyTextures.push(f.texture), f = this.createTextureInfo(d, v), this.textures[a] = f), this.device.queue.copyExternalImageToTexture(
+        { source: o, flipY: !1 },
+        { texture: f.texture, premultipliedAlpha: !0 },
+        { width: d, height: v }
+      );
+      const m = new Float32Array([
+        u,
+        g,
+        d,
+        v,
+        d,
+        v,
+        0,
+        0
+      ]), _ = this.quadDataBuffers[a];
+      this.device.queue.writeBuffer(_, 0, m);
+      const C = this.device.createBindGroup({
+        layout: this.bindGroupLayout,
+        entries: [
+          { binding: 0, resource: { buffer: this.uniformBuffer } },
+          { binding: 1, resource: { buffer: _ } },
+          { binding: 2, resource: this.sampler },
+          { binding: 3, resource: f.view }
+        ]
+      });
+      h.setBindGroup(0, C), h.draw(6);
+    }
+    h.end(), this.device.queue.submit([i.finish()]);
+    for (const a of this.pendingDestroyTextures)
+      a.destroy();
+    this.pendingDestroyTextures = [];
+  }
+  /**
+   * Clear the canvas.
+   */
+  clear() {
+    if (!this.device || !this.context) return;
+    const e = this.device.createCommandEncoder(), t = this.context.getCurrentTexture().createView();
+    e.beginRenderPass({
+      colorAttachments: [
+        {
+          view: t,
+          clearValue: { r: 0, g: 0, b: 0, a: 0 },
+          loadOp: "clear",
+          storeOp: "store"
+        }
+      ]
+    }).end(), this.device.queue.submit([e.finish()]);
+  }
+  /**
+   * Check if renderer is initialized.
+   */
+  get initialized() {
+    return this._initialized;
+  }
+  /**
+   * Destroy all resources.
+   */
+  destroy() {
+    for (const e of this.textures)
+      e.texture.destroy();
+    this.textures = [];
+    for (const e of this.pendingDestroyTextures)
+      e.destroy();
+    this.pendingDestroyTextures = [], this.uniformBuffer?.destroy();
+    for (const e of this.quadDataBuffers)
+      e.destroy();
+    this.quadDataBuffers = [], this.device?.destroy(), this.device = null, this.context = null, this._canvas = null, this._initialized = !1, this._initPromise = null;
+  }
+}
+class T extends EventTarget {
   // Feature detection cache (static)
   static _hasAlphaBug = null;
   static _hasBitmapBug = null;
@@ -267,6 +671,11 @@ class b extends EventTarget {
   _boundTimeUpdate;
   _boundSetRate;
   _boundUpdateColorSpace;
+  // WebGPU renderer
+  _webgpuRenderer = null;
+  _useWebGPU = !1;
+  _preferWebGPU = !0;
+  _onWebGPUFallback;
   // Public properties
   timeOffset;
   debug;
@@ -279,18 +688,20 @@ class b extends EventTarget {
       throw this.destroy(new Error("Worker not supported"));
     if (!e)
       throw this.destroy(new Error("No options provided"));
-    this._loaded = new Promise((a) => {
-      this._init = a;
+    this._loaded = new Promise((r) => {
+      this._init = r;
     });
-    const t = b._test();
-    if (this._onDemandRender = "requestVideoFrameCallback" in HTMLVideoElement.prototype && (e.onDemandRender ?? !0), this._offscreenRender = "transferControlToOffscreen" in HTMLCanvasElement.prototype && !e.canvas && (e.offscreenRender ?? !0), this.timeOffset = e.timeOffset || 0, this._video = e.video, this._canvas = e.canvas, this._video && !this._canvas)
+    const t = T._test();
+    this._onDemandRender = "requestVideoFrameCallback" in HTMLVideoElement.prototype && (e.onDemandRender ?? !0), this._preferWebGPU = e.preferWebGPU !== !1, this._onWebGPUFallback = e.onWebGPUFallback;
+    const s = this._preferWebGPU && !e.canvas && H();
+    if (this._offscreenRender = "transferControlToOffscreen" in HTMLCanvasElement.prototype && !e.canvas && !s && (e.offscreenRender ?? !0), this.timeOffset = e.timeOffset || 0, this._video = e.video, this._canvas = e.canvas, this._video && !this._canvas)
       this._canvasParent = document.createElement("div"), this._canvasParent.className = "JASSUB", this._canvasParent.style.position = "relative", this._canvas = this._createCanvas(), this._video.insertAdjacentElement("afterend", this._canvasParent);
     else if (!this._canvas)
       throw this.destroy(new Error("Don't know where to render: you should give video or canvas in options."));
     this._bufferCanvas = document.createElement("canvas");
-    const s = this._bufferCanvas.getContext("2d");
-    if (!s) throw this.destroy(new Error("Canvas rendering not supported"));
-    this._bufferCtx = s, this._canvasctrl = this._offscreenRender ? this._canvas.transferControlToOffscreen() : this._canvas, this._ctx = this._offscreenRender ? null : this._canvasctrl.getContext("2d"), this._lastRenderTime = 0, this.debug = !!e.debug, this.prescaleFactor = e.prescaleFactor || 1, this.prescaleHeightLimit = e.prescaleHeightLimit || 1080, this.maxRenderHeight = e.maxRenderHeight || 0, this._boundResize = this.resize.bind(this), this._boundTimeUpdate = this._timeupdate.bind(this), this._boundSetRate = () => this.setRate(this._video.playbackRate), this._boundUpdateColorSpace = this._updateColorSpace.bind(this), this._video && this.setVideo(this._video), this._onDemandRender && (this.busy = !1, this._lastDemandTime = null), this._worker = new Worker(e.workerUrl || "jassub-worker.js"), this._worker.onmessage = (a) => this._onmessage(a), this._worker.onerror = (a) => this._error(a), t.then(() => {
+    const i = this._bufferCanvas.getContext("2d");
+    if (!i) throw this.destroy(new Error("Canvas rendering not supported"));
+    this._bufferCtx = i, s && this._initWebGPU(), this._canvasctrl = this._offscreenRender ? this._canvas.transferControlToOffscreen() : this._canvas, this._ctx = !this._offscreenRender && !this._useWebGPU ? this._canvasctrl.getContext("2d") : null, this._lastRenderTime = 0, this.debug = !!e.debug, this.prescaleFactor = e.prescaleFactor || 1, this.prescaleHeightLimit = e.prescaleHeightLimit || 1080, this.maxRenderHeight = e.maxRenderHeight || 0, this._boundResize = this.resize.bind(this), this._boundTimeUpdate = this._timeupdate.bind(this), this._boundSetRate = () => this.setRate(this._video.playbackRate), this._boundUpdateColorSpace = this._updateColorSpace.bind(this), this._video && this.setVideo(this._video), this._onDemandRender && (this.busy = !1, this._lastDemandTime = null), this._worker = new Worker(e.workerUrl || "jassub-worker.js"), this._worker.onmessage = (r) => this._onmessage(r), this._worker.onerror = (r) => this._error(r), t.then(() => {
       this._worker.postMessage({
         target: "init",
         wasmUrl: e.wasmUrl ?? "jassub-worker.wasm",
@@ -312,7 +723,7 @@ class b extends EventTarget {
         libassMemoryLimit: e.libassMemoryLimit ?? 128,
         libassGlyphLimit: e.libassGlyphLimit ?? 2048,
         useLocalFonts: typeof globalThis.queryLocalFonts < "u" && (e.useLocalFonts ?? !0),
-        hasBitmapBug: b._hasBitmapBug
+        hasBitmapBug: T._hasBitmapBug
       }), this._offscreenRender && this.sendMessage("offscreenCanvas", {}, [this._canvasctrl]);
     });
   }
@@ -320,7 +731,7 @@ class b extends EventTarget {
   // Static Methods
   // ==========================================================================
   static async _testImageBugs() {
-    if (b._hasBitmapBug !== null) return;
+    if (T._hasBitmapBug !== null) return;
     const e = document.createElement("canvas"), t = e.getContext("2d", { willReadFrequently: !0 });
     if (!t) throw new Error("Canvas rendering not supported");
     if (typeof ImageData.prototype.constructor == "function")
@@ -329,28 +740,45 @@ class b extends EventTarget {
       } catch {
         console.log("Detected that ImageData is not constructable despite browser saying so");
       }
-    const s = document.createElement("canvas"), a = s.getContext("2d", { willReadFrequently: !0 });
-    if (!a) throw new Error("Canvas rendering not supported");
-    e.width = s.width = 1, e.height = s.height = 1, t.clearRect(0, 0, 1, 1), a.clearRect(0, 0, 1, 1);
-    const r = a.getImageData(0, 0, 1, 1).data;
-    t.putImageData(new ImageData(new Uint8ClampedArray([0, 255, 0, 0]), 1, 1), 0, 0), a.drawImage(e, 0, 0);
-    const h = a.getImageData(0, 0, 1, 1).data;
-    if (b._hasAlphaBug = r[1] !== h[1], b._hasAlphaBug && console.log("Detected a browser having issue with transparent pixels, applying workaround"), typeof createImageBitmap < "u") {
-      const o = new Uint8ClampedArray([255, 0, 255, 0, 255]).subarray(1, 5);
-      a.drawImage(await createImageBitmap(new ImageData(o, 1)), 0, 0);
-      const { data: l } = a.getImageData(0, 0, 1, 1);
-      b._hasBitmapBug = !1;
-      for (let m = 0; m < l.length; m++)
-        if (Math.abs(o[m] - l[m]) > 15) {
-          b._hasBitmapBug = !0, console.log("Detected a browser having issue with partial bitmaps, applying workaround");
+    const s = document.createElement("canvas"), i = s.getContext("2d", { willReadFrequently: !0 });
+    if (!i) throw new Error("Canvas rendering not supported");
+    e.width = s.width = 1, e.height = s.height = 1, t.clearRect(0, 0, 1, 1), i.clearRect(0, 0, 1, 1);
+    const r = i.getImageData(0, 0, 1, 1).data;
+    t.putImageData(new ImageData(new Uint8ClampedArray([0, 255, 0, 0]), 1, 1), 0, 0), i.drawImage(e, 0, 0);
+    const h = i.getImageData(0, 0, 1, 1).data;
+    if (T._hasAlphaBug = r[1] !== h[1], T._hasAlphaBug && console.log("Detected a browser having issue with transparent pixels, applying workaround"), typeof createImageBitmap < "u") {
+      const a = new Uint8ClampedArray([255, 0, 255, 0, 255]).subarray(1, 5);
+      i.drawImage(await createImageBitmap(new ImageData(a, 1)), 0, 0);
+      const { data: o } = i.getImageData(0, 0, 1, 1);
+      T._hasBitmapBug = !1;
+      for (let u = 0; u < o.length; u++)
+        if (Math.abs(a[u] - o[u]) > 15) {
+          T._hasBitmapBug = !0, console.log("Detected a browser having issue with partial bitmaps, applying workaround");
           break;
         }
     } else
-      b._hasBitmapBug = !1;
+      T._hasBitmapBug = !1;
     e.remove(), s.remove();
   }
   static async _test() {
-    await b._testImageBugs();
+    await T._testImageBugs();
+  }
+  // ==========================================================================
+  // WebGPU Management
+  // ==========================================================================
+  /** Initialize WebGPU renderer. */
+  async _initWebGPU() {
+    try {
+      this._webgpuRenderer = new N(), await this._webgpuRenderer.init();
+      const e = Math.max(1, this._canvas.width || 1), t = Math.max(1, this._canvas.height || 1);
+      await this._webgpuRenderer.setCanvas(this._canvas, e, t), this._useWebGPU = !0, console.log("[JASSUB] Using WebGPU renderer");
+    } catch (e) {
+      console.warn("[JASSUB] WebGPU init failed, falling back to Canvas2D:", e), this._webgpuRenderer?.destroy(), this._webgpuRenderer = null, this._useWebGPU = !1, this._onWebGPUFallback?.();
+    }
+  }
+  /** Check if WebGPU is being used */
+  get isUsingWebGPU() {
+    return this._useWebGPU;
   }
   // ==========================================================================
   // Canvas Management
@@ -361,30 +789,30 @@ class b extends EventTarget {
   /**
    * Resize the canvas to given parameters. Auto-generated if values are omitted.
    */
-  resize(e = 0, t = 0, s = 0, a = 0, r = this._video?.paused ?? !1) {
+  resize(e = 0, t = 0, s = 0, i = 0, r = this._video?.paused ?? !1) {
     if ((!e || !t) && this._video) {
-      const h = P(this._video);
-      let o;
+      const h = L(this._video);
+      let a;
       if (this._videoWidth) {
-        const l = this._video.videoWidth / this._videoWidth, m = this._video.videoHeight / this._videoHeight;
-        o = k(
-          (h.width || 0) / l,
-          (h.height || 0) / m,
+        const o = this._video.videoWidth / this._videoWidth, u = this._video.videoHeight / this._videoHeight;
+        a = G(
+          (h.width || 0) / o,
+          (h.height || 0) / u,
           this.prescaleFactor,
           this.prescaleHeightLimit,
           this.maxRenderHeight
         );
       } else
-        o = k(
+        a = G(
           h.width || 0,
           h.height || 0,
           this.prescaleFactor,
           this.prescaleHeightLimit,
           this.maxRenderHeight
         );
-      e = o.width, t = o.height, this._canvasParent && (s = h.y - (this._canvasParent.getBoundingClientRect().top - this._video.getBoundingClientRect().top), a = h.x), this._canvas.style.width = h.width + "px", this._canvas.style.height = h.height + "px";
+      e = a.width, t = a.height, this._canvasParent && (s = h.y - (this._canvasParent.getBoundingClientRect().top - this._video.getBoundingClientRect().top), i = h.x), this._canvas.style.width = h.width + "px", this._canvas.style.height = h.height + "px";
     }
-    this._canvas.style.top = s + "px", this._canvas.style.left = a + "px", r && this.busy === !1 ? this.busy = !0 : r = !1, this.sendMessage("canvas", {
+    this._canvas.style.top = s + "px", this._canvas.style.left = i + "px", this._useWebGPU && this._webgpuRenderer && e > 0 && t > 0 && this._webgpuRenderer.updateSize(e, t), r && this.busy === !1 ? this.busy = !0 : r = !1, this.sendMessage("canvas", {
       width: e,
       height: t,
       videoWidth: this._videoWidth || this._video?.videoWidth || 0,
@@ -556,18 +984,18 @@ class b extends EventTarget {
   getStats(e) {
     this._fetchFromWorker({ target: "getStats" }, (t, s) => {
       if (t) return e(t, null);
-      const a = s?.stats, r = {
-        framesRendered: a.framesRendered ?? 0,
-        framesDropped: a.framesDropped ?? 0,
-        avgRenderTime: a.avgRenderTime ?? 0,
-        maxRenderTime: a.maxRenderTime ?? 0,
-        minRenderTime: a.minRenderTime ?? 0,
-        lastRenderTime: a.lastRenderTime ?? 0,
-        pendingRenders: a.pendingRenders ?? 0,
-        totalEvents: a.totalEvents ?? 0,
-        cacheHits: a.cacheHits ?? 0,
-        cacheMisses: a.cacheMisses ?? 0,
-        renderFps: a.avgRenderTime && a.avgRenderTime > 0 ? Math.round(1e3 / a.avgRenderTime) : 0,
+      const i = s?.stats, r = {
+        framesRendered: i.framesRendered ?? 0,
+        framesDropped: i.framesDropped ?? 0,
+        avgRenderTime: i.avgRenderTime ?? 0,
+        maxRenderTime: i.maxRenderTime ?? 0,
+        minRenderTime: i.minRenderTime ?? 0,
+        lastRenderTime: i.lastRenderTime ?? 0,
+        pendingRenders: i.pendingRenders ?? 0,
+        totalEvents: i.totalEvents ?? 0,
+        cacheHits: i.cacheHits ?? 0,
+        cacheMisses: i.cacheMisses ?? 0,
+        renderFps: i.avgRenderTime && i.avgRenderTime > 0 ? Math.round(1e3 / i.avgRenderTime) : 0,
         usingWorker: !0,
         offscreenRender: this._offscreenRender,
         onDemandRender: this._onDemandRender
@@ -589,9 +1017,9 @@ class b extends EventTarget {
   _sendLocalFont(e) {
     try {
       globalThis.queryLocalFonts().then((t) => {
-        const s = t?.find((a) => a.fullName.toLowerCase() === e);
-        s && s.blob().then((a) => {
-          a.arrayBuffer().then((r) => {
+        const s = t?.find((i) => i.fullName.toLowerCase() === e);
+        s && s.blob().then((i) => {
+          i.arrayBuffer().then((r) => {
             this.addFont(new Uint8Array(r));
           });
         });
@@ -628,7 +1056,7 @@ class b extends EventTarget {
     this._video.requestVideoFrameCallback(() => {
       try {
         const e = new globalThis.VideoFrame(this._video);
-        this._videoColorSpace = $[e.colorSpace.matrix] ?? null, e.close(), this.sendMessage("getColorSpace");
+        this._videoColorSpace = k[e.colorSpace.matrix] ?? null, e.close(), this.sendMessage("getColorSpace");
       } catch (e) {
         console.warn(e);
       }
@@ -638,11 +1066,15 @@ class b extends EventTarget {
     const { subtitleColorSpace: t, videoColorSpace: s = this._videoColorSpace } = e;
     if (!t || !s || t === s) return;
     this._detachOffscreen();
-    const a = D[t]?.[s];
-    a && this._ctx && (this._ctx.filter = `url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg'><filter id='f'><feColorMatrix type='matrix' values='${a} 0 0 0 0 0 1 0'/></filter></svg>#f")`);
+    const i = I[t]?.[s];
+    i && this._ctx && (this._ctx.filter = `url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg'><filter id='f'><feColorMatrix type='matrix' values='${i} 0 0 0 0 0 1 0'/></filter></svg>#f")`);
   }
   _render(e) {
-    if (this._unbusy(), this.debug && (e.times.IPCTime = Date.now() - (e.times.JSRenderTime || 0)), (this._canvasctrl.width !== e.width || this._canvasctrl.height !== e.height) && (this._canvasctrl.width = e.width, this._canvasctrl.height = e.height, this._verifyColorSpace({ subtitleColorSpace: e.colorSpace })), !!this._ctx) {
+    if (this._unbusy(), this.debug && (e.times.IPCTime = Date.now() - (e.times.JSRenderTime || 0)), (this._canvasctrl.width !== e.width || this._canvasctrl.height !== e.height) && (this._canvasctrl.width = e.width, this._canvasctrl.height = e.height, this._useWebGPU && this._webgpuRenderer && this._webgpuRenderer.updateSize(e.width, e.height), this._verifyColorSpace({ subtitleColorSpace: e.colorSpace })), this._useWebGPU && this._webgpuRenderer) {
+      this._renderWebGPU(e);
+      return;
+    }
+    if (this._ctx) {
       this._ctx.clearRect(0, 0, this._canvasctrl.width, this._canvasctrl.height);
       for (const t of e.images)
         if (t.image)
@@ -650,9 +1082,9 @@ class b extends EventTarget {
             this._ctx.drawImage(t.image, t.x, t.y), t.image.close();
           else {
             this._bufferCanvas.width = t.w, this._bufferCanvas.height = t.h;
-            const s = new Uint8ClampedArray(t.image), a = U(s, b._hasAlphaBug ?? !1);
+            const s = new Uint8ClampedArray(t.image), i = W(s, T._hasAlphaBug ?? !1);
             this._bufferCtx.putImageData(
-              new ImageData(a, t.w, t.h),
+              new ImageData(i, t.w, t.h),
               0,
               0
             ), this._ctx.drawImage(this._bufferCanvas, t.x, t.y);
@@ -662,9 +1094,45 @@ class b extends EventTarget {
         let t = 0;
         const s = e.times.bitmaps || e.images.length;
         delete e.times.bitmaps;
-        for (const a in e.times)
-          t += e.times[a] || 0;
+        for (const i in e.times)
+          t += e.times[i] || 0;
         console.log("Bitmaps: " + s + " Total: " + (t | 0) + "ms", e.times);
+      }
+    }
+  }
+  _renderWebGPU(e) {
+    if (this._webgpuRenderer) {
+      if (e.images.length === 0) {
+        this._webgpuRenderer.clear();
+        return;
+      }
+      if (e.asyncRender) {
+        const t = e.images.filter((s) => s.image instanceof ImageBitmap).map((s) => ({
+          image: s.image,
+          x: s.x,
+          y: s.y
+        }));
+        this._webgpuRenderer.renderBitmaps(
+          t,
+          this._canvasctrl.width,
+          this._canvasctrl.height
+        );
+        for (const s of e.images)
+          s.image instanceof ImageBitmap && s.image.close();
+      } else
+        this._webgpuRenderer.render(
+          e.images,
+          this._canvasctrl.width,
+          this._canvasctrl.height
+        );
+      if (this.debug) {
+        e.times.JSRenderTime = Date.now() - (e.times.JSRenderTime || 0) - (e.times.IPCTime || 0);
+        let t = 0;
+        const s = e.times.bitmaps || e.images.length;
+        delete e.times.bitmaps;
+        for (const i in e.times)
+          t += e.times[i] || 0;
+        console.log("[WebGPU] Bitmaps: " + s + " Total: " + (t | 0) + "ms", e.times);
       }
     }
   }
@@ -679,12 +1147,12 @@ class b extends EventTarget {
   }
   _fetchFromWorker(e, t) {
     try {
-      const s = e.target, a = setTimeout(() => {
+      const s = e.target, i = setTimeout(() => {
         h(new Error("Error: Timeout while trying to fetch " + s));
-      }, 5e3), r = (o) => {
-        o.data.target === s && (t(null, o.data), this._worker.removeEventListener("message", r), this._worker.removeEventListener("error", h), clearTimeout(a));
-      }, h = (o) => {
-        t(o instanceof Error ? o : o.error || new Error("Worker error")), this._worker.removeEventListener("message", r), this._worker.removeEventListener("error", h), clearTimeout(a);
+      }, 5e3), r = (a) => {
+        a.data.target === s && (t(null, a.data), this._worker.removeEventListener("message", r), this._worker.removeEventListener("error", h), clearTimeout(i));
+      }, h = (a) => {
+        t(a instanceof Error ? a : a.error || new Error("Worker error")), this._worker.removeEventListener("message", r), this._worker.removeEventListener("error", h), clearTimeout(i);
       };
       this._worker.addEventListener("message", r), this._worker.addEventListener("error", h), this._worker.postMessage(e);
     } catch (s) {
@@ -710,24 +1178,26 @@ class b extends EventTarget {
    */
   destroy(e) {
     const t = e ? this._error(e) : void 0;
-    return this._video && this._canvasParent && this._video.parentNode?.removeChild(this._canvasParent), this._destroyed = !0, this._removeListeners(), this.sendMessage("destroy"), this._worker?.terminate(), t;
+    return this._video && this._canvasParent && this._video.parentNode?.removeChild(this._canvasParent), this._webgpuRenderer && (this._webgpuRenderer.destroy(), this._webgpuRenderer = null, this._useWebGPU = !1), this._destroyed = !0, this._removeListeners(), this.sendMessage("destroy"), this._worker?.terminate(), t;
   }
 }
 export {
-  b as JASSUB,
-  D as colorMatrixConversionMap,
-  k as computeCanvasSize,
-  b as default,
-  N as dropBlur,
-  U as fixAlpha,
-  Y as fixPlayRes,
-  G as getAlphaBug,
-  K as getBitmapBug,
-  q as getColorSpaceFilterUrl,
-  P as getVideoPosition,
-  V as libassYCbCrMap,
-  j as parseAss,
-  X as runFeatureTests,
+  T as JASSUB,
+  N as WebGPURenderer,
+  I as colorMatrixConversionMap,
+  G as computeCanvasSize,
+  T as default,
+  Q as dropBlur,
+  W as fixAlpha,
+  J as fixPlayRes,
+  Z as getAlphaBug,
+  ee as getBitmapBug,
+  Y as getColorSpaceFilterUrl,
+  L as getVideoPosition,
+  H as isWebGPUSupported,
+  j as libassYCbCrMap,
+  X as parseAss,
+  K as runFeatureTests,
   z as testImageBugs,
-  $ as webYCbCrMap
+  k as webYCbCrMap
 };
