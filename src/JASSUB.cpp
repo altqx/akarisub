@@ -709,7 +709,7 @@ public:
 
     // First pass: determine which region each image belongs to based on center
     // Store the region assignment to use for bounding box expansion
-    int region_assignments[1024]; // reasonable max for subtitle images
+    int region_assignments[1024];
     int image_count = 0;
     BoundingBox boxes[MAX_BLEND_STORAGES];
 
@@ -752,8 +752,7 @@ public:
     }
 
     // now merge regions as long as there are intersecting regions
-    // Use margin to account for blur that extends beyond image bounds
-    const int BLUR_MERGE_MARGIN = 100; // pixels - generous margin for blur
+    const int BLUR_MERGE_MARGIN = 100;
     for (;;) {
       bool merged = false;
       for (int box1 = 0; box1 < MAX_BLEND_STORAGES - 1; box1++) {
@@ -948,27 +947,22 @@ public:
 
     // now build the result
     int total_pixels = width * height;
-    // Minimum alpha threshold: below this, output transparent (prevents white
-    // edge)
-    const float MIN_ALPHA_THRESHOLD = 1.0f / 255.0f;
+    const float MIN_ALPHA_THRESHOLD = 4.0f / 255.0f;
 
     for (int i = 0; i < total_pixels; i++) {
       int buf_coord = i << 2;
       float alpha = buf[buf_coord + 3];
 
       // Only output if alpha is above minimum threshold
-      // This prevents white artifacts at blur edges where alpha is very small
       if (alpha >= MIN_ALPHA_THRESHOLD) {
         // un-multiply the result
         float inv_alpha = 1.0f / alpha;
 
-        // Calculate RGB values, clamping to avoid explosion from low alpha
         float r_f = buf[buf_coord] * inv_alpha;
         float g_f = buf[buf_coord + 1] * inv_alpha;
         float b_f = buf[buf_coord + 2] * inv_alpha;
 
-        // Clamp to 0-1 range BEFORE converting to int
-        // This prevents white artifacts from very low alpha division
+        // Clamp to 0-1 range
         r_f = r_f > 1.0f ? 1.0f : (r_f < 0.0f ? 0.0f : r_f);
         g_f = g_f > 1.0f ? 1.0f : (g_f < 0.0f ? 0.0f : g_f);
         b_f = b_f > 1.0f ? 1.0f : (b_f < 0.0f ? 0.0f : b_f);
@@ -977,12 +971,6 @@ public:
         int g = (int)(g_f * 255.0f + 0.5f);
         int b_val = (int)(b_f * 255.0f + 0.5f);
         int a = (int)(alpha * 255.0f + 0.5f);
-
-        // Final safety clamp
-        r = r > 255 ? 255 : r;
-        g = g > 255 ? 255 : g;
-        b_val = b_val > 255 ? 255 : b_val;
-        a = a < 1 ? 1 : (a > 255 ? 255 : a);
 
         result[i] = (a << 24) | (b_val << 16) | (g << 8) | r;
       } else {
