@@ -761,6 +761,8 @@ public:
       return NULL;
     }
 
+    memset(buf, 0, buffer_size);
+
     // blend things in
     for (ASS_Image *cur = img; cur != NULL; cur = cur->next) {
       int curx_abs = cur->dst_x, cury_abs = cur->dst_y;
@@ -889,7 +891,7 @@ public:
         b_val = b_val < 0 ? 0 : (b_val > 255 ? 255 : b_val);
         a = a < 0 ? 0 : (a > 255 ? 255 : a);
 
-        result[i] = r | (g << 8) | (b_val << 16) | (a << 24);
+        result[i] = (a << 24) | (b_val << 16) | (g << 8) | r;
       } else {
         result[i] = 0;
       }
