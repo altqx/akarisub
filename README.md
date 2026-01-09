@@ -106,7 +106,7 @@ The default options are best, and automatically fallback to the next fastest opt
 - `{Object} options` Settings object.
 - `{HTMLVideoElement} options.video` Video to use as target for rendering and event listeners. Optional if canvas is specified instead.
 - `{HTMLCanvasElement} options.canvas` { Optional } Canvas to use for manual handling. Not required if video is specified.
-- `{'js'|'wasm'} options.blendMode` { Optional = 'js' } Which image blending mode to use. WASM will perform better on lower end devices, JS will perform better if the device and browser supports hardware acceleration.
+- `{'js'|'wasm'} options.blendMode` { Optional = 'wasm' } Which image blending mode to use. WASM will perform better on lower end devices, JS will perform better if the device and browser supports hardware acceleration.
 - `{Boolean} options.asyncRender` { Optional = true } Whether or not to use async rendering, which offloads the CPU by creating image bitmaps on the GPU.
 - `{Boolean} options.offscreenRender` { Optional = true } Whether or not to render things fully on the worker, greatly reduces CPU usage.
 - `{Boolean} options.onDemandRender` { Optional = true } Whether or not to render subtitles as the video player renders frames, rather than predicting which frame the player is on using events.

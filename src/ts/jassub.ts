@@ -196,7 +196,7 @@ export default class JASSUB extends EventTarget {
         onDemandRender: this._onDemandRender,
         width: this._canvasctrl.width || 0,
         height: this._canvasctrl.height || 0,
-        blendMode: options.blendMode || 'js',
+        blendMode: options.blendMode ?? 'wasm',
         subUrl: options.subUrl,
         subContent: options.subContent || null,
         fonts: options.fonts || [],
