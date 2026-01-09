@@ -3,7 +3,10 @@
 import type { RenderImage } from './types'
 
 // Maximum images per batch
-const MAX_IMAGES_PER_BATCH = 512
+const MAX_IMAGES_PER_BATCH = 256
+
+// WebGPU max texture array layers
+const MAX_TEXTURE_ARRAY_LAYERS = 256
 
 // WGSL Vertex Shader
 const VERTEX_SHADER = /* wgsl */ `
@@ -258,7 +261,8 @@ export class WebGPURenderer {
     // Use power-of-2 dimensions for better GPU performance
     const w = this.nextPowerOf2(Math.max(width, 64))
     const h = this.nextPowerOf2(Math.max(height, 64))
-    const l = this.nextPowerOf2(Math.max(layers, 16))
+    // Clamp layers to WebGPU max (256)
+    const l = Math.min(this.nextPowerOf2(Math.max(layers, 16)), MAX_TEXTURE_ARRAY_LAYERS)
 
     this.textureArray = this.device!.createTexture({
       size: [w, h, l],
@@ -273,14 +277,24 @@ export class WebGPURenderer {
   }
 
   private ensureTextureArray(maxWidth: number, maxHeight: number, count: number): boolean {
-    if (maxWidth <= this.textureArrayWidth && maxHeight <= this.textureArrayHeight && count <= this.textureArraySize) {
+    // Clamp count to max layers
+    const clampedCount = Math.min(count, MAX_TEXTURE_ARRAY_LAYERS)
+
+    if (
+      maxWidth <= this.textureArrayWidth &&
+      maxHeight <= this.textureArrayHeight &&
+      clampedCount <= this.textureArraySize
+    ) {
       return false
     }
 
-    // Grow with some headroom to avoid frequent resizes
+    // Grow with some headroom to avoid frequent resizes, but cap at max layers
     const newWidth = this.nextPowerOf2(Math.max(this.textureArrayWidth, maxWidth))
     const newHeight = this.nextPowerOf2(Math.max(this.textureArrayHeight, maxHeight))
-    const newLayers = this.nextPowerOf2(Math.max(this.textureArraySize, count, count + 16))
+    const newLayers = Math.min(
+      this.nextPowerOf2(Math.max(this.textureArraySize, clampedCount, clampedCount + 16)),
+      MAX_TEXTURE_ARRAY_LAYERS
+    )
 
     this.createTextureArray(newWidth, newHeight, newLayers)
     return true
@@ -354,6 +368,7 @@ export class WebGPURenderer {
 
   /**
    * Render ImageBitmaps (async render mode)
+   * Handles batching when image count exceeds MAX_TEXTURE_ARRAY_LAYERS
    */
   renderBitmaps(
     images: { image: ImageBitmap; x: number; y: number }[],
@@ -391,71 +406,84 @@ export class WebGPURenderer {
       return
     }
 
-    // Ensure texture array is large enough
-    this.ensureTextureArray(maxW, maxH, validCount)
+    // Ensure texture array is large enough (capped at MAX_TEXTURE_ARRAY_LAYERS)
+    const batchSize = Math.min(validCount, MAX_TEXTURE_ARRAY_LAYERS)
+    this.ensureTextureArray(maxW, maxH, batchSize)
     this.updateBindGroup()
 
     const device = this.device
     const queue = device.queue
     const textureArray = this.textureArray!
     const imageDataArray = this.imageDataArray
+    const textureView = currentTexture.createView()
 
-    // Upload all textures and fill image data in single loop
-    let texIndex = 0
-    for (let i = 0; i < len; i++) {
-      const img = images[i]
-      const bitmap = img.image
-      const w = bitmap.width,
-        h = bitmap.height
-      if (w <= 0 || h <= 0) continue
+    // Process images in batches if needed
+    let imageIndex = 0
+    let isFirstBatch = true
 
-      // Copy to texture array layer
-      queue.copyExternalImageToTexture(
-        { source: bitmap, flipY: false },
-        { texture: textureArray, origin: [0, 0, texIndex], premultipliedAlpha: true },
-        { width: w, height: h }
-      )
+    while (imageIndex < len) {
+      let texIndex = 0
 
-      // Fill pre-allocated array directly (no allocation!)
-      const offset = texIndex << 3 // * 8
-      imageDataArray[offset] = img.x
-      imageDataArray[offset + 1] = img.y
-      imageDataArray[offset + 2] = w
-      imageDataArray[offset + 3] = h
-      imageDataArray[offset + 4] = w
-      imageDataArray[offset + 5] = h
-      imageDataArray[offset + 6] = texIndex
-      // imageDataArray[offset + 7] = 0 // Already 0 from init
+      // Upload batch of textures
+      while (imageIndex < len && texIndex < MAX_TEXTURE_ARRAY_LAYERS) {
+        const img = images[imageIndex++]
+        const bitmap = img.image
+        const w = bitmap.width,
+          h = bitmap.height
+        if (w <= 0 || h <= 0) continue
 
-      texIndex++
+        // Copy to texture array layer
+        queue.copyExternalImageToTexture(
+          { source: bitmap, flipY: false },
+          { texture: textureArray, origin: [0, 0, texIndex], premultipliedAlpha: true },
+          { width: w, height: h }
+        )
+
+        // Fill pre-allocated array
+        const offset = texIndex << 3
+        imageDataArray[offset] = img.x
+        imageDataArray[offset + 1] = img.y
+        imageDataArray[offset + 2] = w
+        imageDataArray[offset + 3] = h
+        imageDataArray[offset + 4] = w
+        imageDataArray[offset + 5] = h
+        imageDataArray[offset + 6] = texIndex
+
+        texIndex++
+      }
+
+      if (texIndex === 0) continue
+
+      // Upload buffer and draw batch
+      queue.writeBuffer(this.imageDataBuffer!, 0, imageDataArray.buffer, 0, texIndex << 5)
+
+      const commandEncoder = device.createCommandEncoder()
+      const renderPass = commandEncoder.beginRenderPass({
+        colorAttachments: [
+          {
+            view: textureView,
+            clearValue: { r: 0, g: 0, b: 0, a: 0 },
+            loadOp: isFirstBatch ? 'clear' : 'load',
+            storeOp: 'store'
+          }
+        ]
+      })
+
+      renderPass.setPipeline(this.pipeline)
+      renderPass.setBindGroup(0, this.bindGroup!)
+      renderPass.draw(6, texIndex)
+      renderPass.end()
+
+      queue.submit([commandEncoder.finish()])
+      isFirstBatch = false
     }
 
-    // Single buffer upload for all image data
-    queue.writeBuffer(this.imageDataBuffer!, 0, imageDataArray.buffer, 0, texIndex << 5) // * 32
-
-    const commandEncoder = device.createCommandEncoder()
-    const renderPass = commandEncoder.beginRenderPass({
-      colorAttachments: [
-        {
-          view: currentTexture.createView(),
-          clearValue: { r: 0, g: 0, b: 0, a: 0 },
-          loadOp: 'clear',
-          storeOp: 'store'
-        }
-      ]
-    })
-
-    renderPass.setPipeline(this.pipeline)
-    renderPass.setBindGroup(0, this.bindGroup!)
-    renderPass.draw(6, texIndex) // Single instanced draw!
-    renderPass.end()
-
-    queue.submit([commandEncoder.finish()])
     this.cleanupPendingTextures()
   }
 
   /**
    * Render from raw ArrayBuffer data (non-async render mode)
+   * Handles batching when image count exceeds MAX_TEXTURE_ARRAY_LAYERS
    */
   render(
     images: RenderImage[],
@@ -492,7 +520,9 @@ export class WebGPURenderer {
       return
     }
 
-    this.ensureTextureArray(maxW, maxH, validCount)
+    // Ensure texture array is large enough (capped at MAX_TEXTURE_ARRAY_LAYERS)
+    const batchSize = Math.min(validCount, MAX_TEXTURE_ARRAY_LAYERS)
+    this.ensureTextureArray(maxW, maxH, batchSize)
     this.updateBindGroup()
 
     const device = this.device
@@ -500,59 +530,73 @@ export class WebGPURenderer {
     const textureArray = this.textureArray!
     const imageDataArray = this.imageDataArray
     const isBGRA = this.format === 'bgra8unorm'
+    const textureView = currentTexture.createView()
 
-    let texIndex = 0
-    for (let i = 0; i < len; i++) {
-      const img = images[i]
-      const w = img.w,
-        h = img.h
-      if (w <= 0 || h <= 0) continue
+    // Process images in batches if needed
+    let imageIndex = 0
+    let isFirstBatch = true
 
-      // Upload texture data
-      const imgData = img.image
-      if (imgData instanceof ImageBitmap) {
-        queue.copyExternalImageToTexture(
-          { source: imgData, flipY: false },
-          { texture: textureArray, origin: [0, 0, texIndex], premultipliedAlpha: true },
-          { width: w, height: h }
-        )
-      } else if (imgData instanceof ArrayBuffer) {
-        this.uploadTextureData(texIndex, imgData, w, h, isBGRA)
+    while (imageIndex < len) {
+      let texIndex = 0
+
+      // Upload batch of textures
+      while (imageIndex < len && texIndex < MAX_TEXTURE_ARRAY_LAYERS) {
+        const img = images[imageIndex++]
+        const w = img.w,
+          h = img.h
+        if (w <= 0 || h <= 0) continue
+
+        // Upload texture data
+        const imgData = img.image
+        if (imgData instanceof ImageBitmap) {
+          queue.copyExternalImageToTexture(
+            { source: imgData, flipY: false },
+            { texture: textureArray, origin: [0, 0, texIndex], premultipliedAlpha: true },
+            { width: w, height: h }
+          )
+        } else if (imgData instanceof ArrayBuffer) {
+          this.uploadTextureData(texIndex, imgData, w, h, isBGRA)
+        }
+
+        // Fill pre-allocated array
+        const offset = texIndex << 3
+        imageDataArray[offset] = img.x
+        imageDataArray[offset + 1] = img.y
+        imageDataArray[offset + 2] = w
+        imageDataArray[offset + 3] = h
+        imageDataArray[offset + 4] = w
+        imageDataArray[offset + 5] = h
+        imageDataArray[offset + 6] = texIndex
+
+        texIndex++
       }
 
-      // Fill pre-allocated array
-      const offset = texIndex << 3
-      imageDataArray[offset] = img.x
-      imageDataArray[offset + 1] = img.y
-      imageDataArray[offset + 2] = w
-      imageDataArray[offset + 3] = h
-      imageDataArray[offset + 4] = w
-      imageDataArray[offset + 5] = h
-      imageDataArray[offset + 6] = texIndex
+      if (texIndex === 0) continue
 
-      texIndex++
+      // Upload buffer and draw batch
+      queue.writeBuffer(this.imageDataBuffer!, 0, imageDataArray.buffer, 0, texIndex << 5)
+
+      const commandEncoder = device.createCommandEncoder()
+      const renderPass = commandEncoder.beginRenderPass({
+        colorAttachments: [
+          {
+            view: textureView,
+            clearValue: { r: 0, g: 0, b: 0, a: 0 },
+            loadOp: isFirstBatch ? 'clear' : 'load',
+            storeOp: 'store'
+          }
+        ]
+      })
+
+      renderPass.setPipeline(this.pipeline)
+      renderPass.setBindGroup(0, this.bindGroup!)
+      renderPass.draw(6, texIndex)
+      renderPass.end()
+
+      queue.submit([commandEncoder.finish()])
+      isFirstBatch = false
     }
 
-    queue.writeBuffer(this.imageDataBuffer!, 0, imageDataArray.buffer, 0, texIndex << 5)
-
-    const commandEncoder = device.createCommandEncoder()
-    const renderPass = commandEncoder.beginRenderPass({
-      colorAttachments: [
-        {
-          view: currentTexture.createView(),
-          clearValue: { r: 0, g: 0, b: 0, a: 0 },
-          loadOp: 'clear',
-          storeOp: 'store'
-        }
-      ]
-    })
-
-    renderPass.setPipeline(this.pipeline)
-    renderPass.setBindGroup(0, this.bindGroup!)
-    renderPass.draw(6, texIndex)
-    renderPass.end()
-
-    queue.submit([commandEncoder.finish()])
     this.cleanupPendingTextures()
   }
 
