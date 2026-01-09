@@ -1,11 +1,12 @@
 #include "../lib/libass/libass/ass.h"
+#include <algorithm>
 #include <cstdint>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <string>
-#include <algorithm>
+
 
 #include <emscripten.h>
 #include <emscripten/bind.h>
@@ -19,12 +20,9 @@ private:
 
 public:
   size_t size;
-  ReusableBuffer() : buffer(NULL), size(0), lessen_counter(0) {
-  }
+  ReusableBuffer() : buffer(NULL), size(0), lessen_counter(0) {}
 
-  ~ReusableBuffer() {
-    free(buffer);
-  }
+  ~ReusableBuffer() { free(buffer); }
 
   void clear() {
     free(buffer);
@@ -77,7 +75,10 @@ const float MAX_UINT8_CAST = 255.9 / 255;
 const float INV_255 = 1.0f / 255.0f;
 const float INV_255_SQ = 1.0f / (255.0f * 255.0f);
 
-#define CLAMP_UINT8(value) ((value > MIN_UINT8_CAST) ? ((value < MAX_UINT8_CAST) ? (int)(value * 255) : 255) : 0)
+#define CLAMP_UINT8(value)                                                     \
+  ((value > MIN_UINT8_CAST)                                                    \
+       ? ((value < MAX_UINT8_CAST) ? (int)(value * 255) : 255)                 \
+       : 0)
 
 typedef struct RenderResult {
 public:
@@ -102,12 +103,9 @@ public:
   int min_x, max_x, min_y, max_y;
   bool initialized;
 
-  BoundingBox() : min_x(0), max_x(0), min_y(0), max_y(0), initialized(false) {
-  }
+  BoundingBox() : min_x(0), max_x(0), min_y(0), max_y(0), initialized(false) {}
 
-  bool empty() const {
-    return !initialized;
-  }
+  bool empty() const { return !initialized; }
 
   void add(int x1, int y1, int w, int h) {
     int x2 = x1 + w - 1, y2 = y1 + h - 1;
@@ -126,7 +124,8 @@ public:
   }
 
   bool intersets(const BoundingBox &other) const {
-    return !(other.min_x > max_x || other.max_x < min_x || other.min_y > max_y || other.max_y < min_y);
+    return !(other.min_x > max_x || other.max_x < min_x ||
+             other.min_y > max_y || other.max_y < min_y);
   }
 
   bool tryMerge(BoundingBox &other) {
@@ -140,9 +139,7 @@ public:
     return true;
   }
 
-  void clear() {
-    initialized = false;
-  }
+  void clear() { initialized = false; }
 };
 
 /**
@@ -167,8 +164,12 @@ static bool _is_animated_tag(char *begin, char *end) {
 
   size_t length = end - begin + 1;
 
-#define check_simple_tag(tag) (sizeof(tag) - 1 < length && !strncmp(begin, tag, sizeof(tag) - 1))
-#define check_complex_tag(tag) (check_simple_tag(tag) && (begin[sizeof(tag) - 1] == '(' || begin[sizeof(tag) - 1] == ' ' || begin[sizeof(tag) - 1] == '\t'))
+#define check_simple_tag(tag)                                                  \
+  (sizeof(tag) - 1 < length && !strncmp(begin, tag, sizeof(tag) - 1))
+#define check_complex_tag(tag)                                                 \
+  (check_simple_tag(tag) &&                                                    \
+   (begin[sizeof(tag) - 1] == '(' || begin[sizeof(tag) - 1] == ' ' ||          \
+    begin[sizeof(tag) - 1] == '\t'))
   switch (begin[0]) {
   case 'k': //-fallthrough
   case 'K':
@@ -177,11 +178,12 @@ static bool _is_animated_tag(char *begin, char *end) {
   case 't':
     // Animated transform: no other valid tag begins with t
     // non-nested t-tags have to be complex tags even in single argument
-    // form, but nested t-tags (which act like independent t-tags) are allowed to be
-    // simple-tags without parentheses due to VSF-parsing quirk.
-    // Since all valid simple t-tags require the existence of a complex t-tag, we only check for complex tags
-    // to avoid false positives from invalid simple t-tags. This makes animation-dropping somewhat incorrect
-    // but as animation detection remains accurate, we consider this to be "good enough"
+    // form, but nested t-tags (which act like independent t-tags) are allowed
+    // to be simple-tags without parentheses due to VSF-parsing quirk. Since all
+    // valid simple t-tags require the existence of a complex t-tag, we only
+    // check for complex tags to avoid false positives from invalid simple
+    // t-tags. This makes animation-dropping somewhat incorrect but as animation
+    // detection remains accurate, we consider this to be "good enough"
     return check_complex_tag("t");
   case 'm':
     // Movement: complex tag; again no other valid tag begins with m
@@ -246,7 +248,8 @@ static bool _is_event_animated(ASS_Event *event, bool drop_animations) {
 
   // Search for override blocks
   // Only closed {...}-blocks are parsed by VSFilters and libass
-  if (!event->Text) return false;
+  if (!event->Text)
+    return false;
   char *block_start = NULL; // points to opening {
   for (char *p = event->Text; *p != '\0'; p++) {
     switch (*p) {
@@ -257,7 +260,8 @@ static bool _is_event_animated(ASS_Event *event, bool drop_animations) {
         block_start = p;
       break;
     case '}':
-      if (block_start && p - block_start > 2 && _is_block_animated(block_start + 1, p - 1, drop_animations))
+      if (block_start && p - block_start > 2 &&
+          _is_block_animated(block_start + 1, p - 1, drop_animations))
         return true;
       block_start = NULL;
       break;
@@ -286,23 +290,21 @@ struct FrameCache {
   int canvas_w;
   int canvas_h;
   bool valid;
-  
+
   FrameCache() : time_ms(-1), canvas_w(0), canvas_h(0), valid(false) {}
-  
+
   bool matches(long long tm, int w, int h) const {
     return valid && time_ms == tm && canvas_w == w && canvas_h == h;
   }
-  
+
   void update(long long tm, int w, int h) {
     time_ms = tm;
     canvas_w = w;
     canvas_h = h;
     valid = true;
   }
-  
-  void invalidate() {
-    valid = false;
-  }
+
+  void invalidate() { valid = false; }
 };
 
 class JASSUB {
@@ -344,7 +346,7 @@ public:
     drop_animations = false;
     scanned_events = 0;
     this->debug = debug;
-    
+
     // Initialize event index
     event_index = NULL;
     event_index_size = 0;
@@ -372,9 +374,7 @@ public:
     m_buffer.clear();
   }
 
-  void setLogLevel(int level) {
-    log_level = level;
-  }
+  void setLogLevel(int level) { log_level = level; }
 
   void setDropAnimations(int value) {
     drop_animations = !!value;
@@ -394,33 +394,34 @@ public:
     }
     scanned_events = i;
   }
-  
+
   void buildEventIndex() {
     freeEventIndex();
-    
-    if (!track || track->n_events == 0) return;
-    
+
+    if (!track || track->n_events == 0)
+      return;
+
     event_index_size = track->n_events;
     event_index = new EventTimeEntry[event_index_size];
-    
+
     for (int i = 0; i < event_index_size; i++) {
       ASS_Event *ev = &track->events[i];
       event_index[i].event_index = i;
       event_index[i].start_ms = ev->Start;
       event_index[i].end_ms = ev->Start + ev->Duration;
     }
-    
-    std::sort(event_index, event_index + event_index_size, 
-      [](const EventTimeEntry &a, const EventTimeEntry &b) {
-        return a.start_ms < b.start_ms;
-      });
-    
+
+    std::sort(event_index, event_index + event_index_size,
+              [](const EventTimeEntry &a, const EventTimeEntry &b) {
+                return a.start_ms < b.start_ms;
+              });
+
     event_index_valid = true;
     if (debug) {
       printf("JASSUB: Built event index with %d entries\n", event_index_size);
     }
   }
-  
+
   void freeEventIndex() {
     if (event_index) {
       delete[] event_index;
@@ -429,18 +430,19 @@ public:
     event_index_size = 0;
     event_index_valid = false;
   }
-  
+
   /*
    * \brief Find first event index that may be active at given time
    * Returns -1 if no events could be active.
    */
   int findFirstActiveEvent(long long time_ms) const {
-    if (!event_index_valid || event_index_size == 0) return 0;
-    
+    if (!event_index_valid || event_index_size == 0)
+      return 0;
+
     // Binary search for first event that ends after time_ms
     int left = 0, right = event_index_size - 1;
     int result = -1;
-    
+
     while (left <= right) {
       int mid = (left + right) / 2;
       if (event_index[mid].end_ms > time_ms) {
@@ -450,13 +452,13 @@ public:
         left = mid + 1;
       }
     }
-    
+
     if (result > 0) {
       while (result > 0 && event_index[result - 1].end_ms > time_ms) {
         result--;
       }
     }
-    
+
     return result >= 0 ? result : 0;
   }
 
@@ -475,9 +477,9 @@ public:
     } else {
       scanned_events = 0;
     }
-    
+
     buildEventIndex();
-    
+
     frame_cache.invalidate();
 
     trackColorSpace = track->YCbCrMatrix;
@@ -520,10 +522,12 @@ public:
     }
     for (RenderResult *tmp = renderResult; img; img = img->next) {
       int w = img->w, h = img->h;
-      if (w == 0 || h == 0) continue;
+      if (w == 0 || h == 0)
+        continue;
 
       double alpha = (255 - (img->color & 255)) / 255.0;
-      if (alpha == 0.0) continue;
+      if (alpha == 0.0)
+        continue;
 
       unsigned int datasize = sizeof(uint32_t) * w * h;
       uint32_t *data = (uint32_t *)rawbuffer;
@@ -550,20 +554,21 @@ public:
   }
 
   void decodeBitmap(double alpha, uint32_t *out, ASS_Image *img, int w, int h) {
-    uint32_t color = ((img->color << 8) & 0xff0000) | ((img->color >> 8) & 0xff00) | ((img->color >> 24) & 0xff);
+    uint32_t color = ((img->color << 8) & 0xff0000) |
+                     ((img->color >> 8) & 0xff00) | ((img->color >> 24) & 0xff);
     uint8_t *bitmap = img->bitmap;
     int stride = img->stride;
-    
+
     // Pre-compute alpha factor (avoid per-pixel double->float conversion)
     float alpha_f = (float)alpha;
-    
+
     // Process 4 pixels at a time when possible
-    int w4 = w & ~3;  // Round down to multiple of 4
-    
+    int w4 = w & ~3; // Round down to multiple of 4
+
     for (int y = 0; y < h; ++y) {
       uint8_t *row = bitmap + y * stride;
       int row_offset = y * w;
-      
+
       // Unrolled loop for 4 pixels at a time
       int x = 0;
       for (; x < w4; x += 4) {
@@ -571,17 +576,22 @@ public:
         uint8_t m1 = row[x + 1];
         uint8_t m2 = row[x + 2];
         uint8_t m3 = row[x + 3];
-        
-        out[row_offset + x]     = m0 ? (((uint32_t)(alpha_f * m0)) << 24) | color : 0;
-        out[row_offset + x + 1] = m1 ? (((uint32_t)(alpha_f * m1)) << 24) | color : 0;
-        out[row_offset + x + 2] = m2 ? (((uint32_t)(alpha_f * m2)) << 24) | color : 0;
-        out[row_offset + x + 3] = m3 ? (((uint32_t)(alpha_f * m3)) << 24) | color : 0;
+
+        out[row_offset + x] =
+            m0 ? (((uint32_t)(alpha_f * m0)) << 24) | color : 0;
+        out[row_offset + x + 1] =
+            m1 ? (((uint32_t)(alpha_f * m1)) << 24) | color : 0;
+        out[row_offset + x + 2] =
+            m2 ? (((uint32_t)(alpha_f * m2)) << 24) | color : 0;
+        out[row_offset + x + 3] =
+            m3 ? (((uint32_t)(alpha_f * m3)) << 24) | color : 0;
       }
-      
+
       // Handle remaining pixels
       for (; x < w; ++x) {
         uint8_t mask = row[x];
-        out[row_offset + x] = mask ? (((uint32_t)(alpha_f * mask)) << 24) | color : 0;
+        out[row_offset + x] =
+            mask ? (((uint32_t)(alpha_f * mask)) << 24) | color : 0;
       }
     }
   }
@@ -590,10 +600,13 @@ public:
     time = 0;
     count = 0;
 
-    ASS_Image *imgs = ass_render_frame(ass_renderer, track, (int)(tm * 1000), &changed);
-    if (imgs == NULL || (changed == 0 && !force)) return NULL;
+    ASS_Image *imgs =
+        ass_render_frame(ass_renderer, track, (int)(tm * 1000), &changed);
+    if (imgs == NULL || (changed == 0 && !force))
+      return NULL;
 
-    if (debug) time = emscripten_get_now();
+    if (debug)
+      time = emscripten_get_now();
 
     return processImages(imgs);
   }
@@ -611,7 +624,8 @@ public:
   }
 
   void reloadFonts() {
-    ass_set_fonts(ass_renderer, NULL, defaultFont, ASS_FONTPROVIDER_NONE, NULL, 1);
+    ass_set_fonts(ass_renderer, NULL, defaultFont, ASS_FONTPROVIDER_NONE, NULL,
+                  1);
   }
 
   void addFont(const std::string &name, int data, unsigned long data_size) {
@@ -623,9 +637,7 @@ public:
     ass_set_margins(ass_renderer, top, bottom, left, right);
   }
 
-  int getEventCount() const {
-    return track->n_events;
-  }
+  int getEventCount() const { return track->n_events; }
 
   int allocEvent() {
     event_index_valid = false;
@@ -639,17 +651,11 @@ public:
     ass_free_event(track, eid);
   }
 
-  int getStyleCount() const {
-    return track->n_styles;
-  }
+  int getStyleCount() const { return track->n_styles; }
 
-  int allocStyle() {
-    return ass_alloc_style(track);
-  }
+  int allocStyle() { return ass_alloc_style(track); }
 
-  void removeStyle(int sid) {
-    ass_free_style(track, sid);
-  }
+  void removeStyle(int sid) { ass_free_style(track, sid); }
 
   void removeAllEvents() {
     freeEventIndex();
@@ -658,7 +664,9 @@ public:
   }
 
   void setMemoryLimits(int glyph_limit, int bitmap_cache_limit) {
-    printf("JASSUB: setting total libass memory limits to: glyph=%d MiB, bitmap cache=%d MiB\n", glyph_limit, bitmap_cache_limit);
+    printf("JASSUB: setting total libass memory limits to: glyph=%d MiB, "
+           "bitmap cache=%d MiB\n",
+           glyph_limit, bitmap_cache_limit);
     ass_set_cache_limits(ass_renderer, glyph_limit, bitmap_cache_limit);
   }
 
@@ -666,12 +674,14 @@ public:
     time = 0;
     count = 0;
 
-    ASS_Image *img = ass_render_frame(ass_renderer, track, (int)(tm * 1000), &changed);
+    ASS_Image *img =
+        ass_render_frame(ass_renderer, track, (int)(tm * 1000), &changed);
     if (img == NULL || (changed == 0 && !force)) {
       return NULL;
     }
 
-    if (debug) time = emscripten_get_now();
+    if (debug)
+      time = emscripten_get_now();
     for (int i = 0; i < MAX_BLEND_STORAGES; i++) {
       m_blendParts[i].taken = false;
     }
@@ -684,7 +694,8 @@ public:
       if (cur->w == 0 || cur->h == 0)
         continue; // skip empty images
       int index = 0;
-      int middle_x = cur->dst_x + (cur->w >> 1), middle_y = cur->dst_y + (cur->h >> 1);
+      int middle_x = cur->dst_x + (cur->w >> 1),
+          middle_y = cur->dst_y + (cur->h >> 1);
       if (middle_y > split_y_high) {
         index += 2 * 3;
       } else if (middle_y > split_y_low) {
@@ -740,7 +751,8 @@ public:
   }
 
   RenderResult *renderBlendPart(const BoundingBox &rect, ASS_Image *img) {
-    int width = rect.max_x - rect.min_x + 1, height = rect.max_y - rect.min_y + 1;
+    int width = rect.max_x - rect.min_x + 1,
+        height = rect.max_y - rect.min_y + 1;
 
     // make float buffer for blending
     const size_t buffer_size = width * height * 4 * sizeof(float);
@@ -756,35 +768,35 @@ public:
       int curw = cur->w, curh = cur->h;
       if (curw == 0 || curh == 0)
         continue; // skip empty images
-      
+
       // Calculate image bounds
       int img_right = curx_abs + curw - 1;
       int img_bottom = cury_abs + curh - 1;
-      
+
       // Skip images that don't intersect with the render region at all
       if (curx_abs > rect.max_x || img_right < rect.min_x ||
           cury_abs > rect.max_y || img_bottom < rect.min_y)
         continue;
-      
+
       // Only render this image if its CENTER falls within this region
       int center_x = curx_abs + (curw >> 1);
       int center_y = cury_abs + (curh >> 1);
       if (center_x < rect.min_x || center_x > rect.max_x ||
           center_y < rect.min_y || center_y > rect.max_y)
         continue;
-      
+
       int a = (255 - (cur->color & 0xFF));
       if (a == 0)
         continue; // skip transparent images
 
       int curs = (cur->stride >= curw) ? cur->stride : curw;
-      
+
       // Clip coordinates to region bounds
       int render_left = MAX(curx_abs, rect.min_x);
       int render_top = MAX(cury_abs, rect.min_y);
       int render_right = MIN(img_right, rect.max_x);
       int render_bottom = MIN(img_bottom, rect.max_y);
-      
+
       int src_x_off = render_left - curx_abs;
       int src_y_off = render_top - cury_abs;
       int dst_x = render_left - rect.min_x;
@@ -793,7 +805,7 @@ public:
       int render_h = render_bottom - render_top + 1;
 
       unsigned char *bitmap = cur->bitmap;
-      
+
       // Pre-compute color components as floats
       float normalized_a = a * INV_255;
       float r = ((cur->color >> 24) & 0xFF) * INV_255;
@@ -804,20 +816,21 @@ public:
       for (int y = 0; y < render_h; y++) {
         int buf_line_start = (dst_y + y) * width + dst_x;
         unsigned char *bitmap_row = bitmap + (src_y_off + y) * curs + src_x_off;
-        
+
         for (int x = 0; x < render_w; x++) {
           unsigned char mask = bitmap_row[x];
-          if (mask == 0) continue; // Early exit for transparent pixels
-          
+          if (mask == 0)
+            continue; // Early exit for transparent pixels
+
           float pix_alpha = mask * a_factor;
           float inv_alpha = 1.0f - pix_alpha;
 
           int buf_idx = (buf_line_start + x) << 2;
-          
+
           // Pre-multiply image RGB with alpha for current pixel
           float old_a = buf[buf_idx + 3];
           buf[buf_idx + 3] = pix_alpha + old_a * inv_alpha;
-          buf[buf_idx]     = r * pix_alpha + buf[buf_idx] * inv_alpha;
+          buf[buf_idx] = r * pix_alpha + buf[buf_idx] * inv_alpha;
           buf[buf_idx + 1] = g * pix_alpha + buf[buf_idx + 1] * inv_alpha;
           buf[buf_idx + 2] = b_val * pix_alpha + buf[buf_idx + 2] * inv_alpha;
         }
@@ -826,8 +839,10 @@ public:
 
     // find closest free buffer
     size_t needed = sizeof(unsigned int) * width * height;
-    RenderBlendStorage *storage = m_blendParts, *bigBuffer = NULL, *smallBuffer = NULL;
-    for (int buffer_index = 0; buffer_index < MAX_BLEND_STORAGES; buffer_index++, storage++) {
+    RenderBlendStorage *storage = m_blendParts, *bigBuffer = NULL,
+                       *smallBuffer = NULL;
+    for (int buffer_index = 0; buffer_index < MAX_BLEND_STORAGES;
+         buffer_index++, storage++) {
       if (storage->taken)
         continue;
       if (storage->buf.size >= needed) {
@@ -860,22 +875,22 @@ public:
     for (int i = 0; i < total_pixels; i++) {
       int buf_coord = i << 2;
       float alpha = buf[buf_coord + 3];
-      
+
       if (alpha > MIN_UINT8_CAST) {
         // need to un-multiply the result
         float inv_alpha = 1.0f / alpha;
-        
+
         int r = (int)(buf[buf_coord] * inv_alpha * 255.0f + 0.5f);
         int g = (int)(buf[buf_coord + 1] * inv_alpha * 255.0f + 0.5f);
         int b_val = (int)(buf[buf_coord + 2] * inv_alpha * 255.0f + 0.5f);
         int a = (int)(alpha * 255.0f + 0.5f);
-        
+
         // Clamp values
         r = r < 0 ? 0 : (r > 255 ? 255 : r);
         g = g < 0 ? 0 : (g > 255 ? 255 : g);
         b_val = b_val < 0 ? 0 : (b_val > 255 ? 255 : b_val);
         a = a < 0 ? 0 : (a > 255 ? 255 : a);
-        
+
         result[i] = r | (g << 8) | (b_val << 16) | (a << 24);
       } else {
         result[i] = 0;
@@ -893,18 +908,14 @@ public:
   }
 
   // BINDING
-  ASS_Event *getEvent(int i) {
-    return &track->events[i];
-  }
+  ASS_Event *getEvent(int i) { return &track->events[i]; }
 
-  ASS_Style *getStyle(int i) {
-    return &track->styles[i];
-  }
+  ASS_Style *getStyle(int i) { return &track->styles[i]; }
 
   void styleOverride(ASS_Style style) {
-    int set_force_flags = ASS_OVERRIDE_BIT_STYLE
-      | ASS_OVERRIDE_BIT_SELECTIVE_FONT_SCALE;
-    
+    int set_force_flags =
+        ASS_OVERRIDE_BIT_STYLE | ASS_OVERRIDE_BIT_SELECTIVE_FONT_SCALE;
+
     ass_set_selective_style_override_enabled(ass_renderer, set_force_flags);
     ass_set_selective_style_override(ass_renderer, &style);
     ass_set_font_scale(ass_renderer, 0.3);
@@ -920,48 +931,34 @@ static uint32_t getDuration(const ASS_Event &evt) {
   return (uint32_t)evt.Duration;
 }
 
-static void setDuration(ASS_Event &evt, const long ms) {
-  evt.Duration = ms;
-}
+static void setDuration(ASS_Event &evt, const long ms) { evt.Duration = ms; }
 
-static uint32_t getStart(const ASS_Event &evt) {
-  return (uint32_t)evt.Start;
-}
+static uint32_t getStart(const ASS_Event &evt) { return (uint32_t)evt.Start; }
 
-static void setStart(ASS_Event &evt, const long ms) {
-  evt.Start = ms;
-}
+static void setStart(ASS_Event &evt, const long ms) { evt.Start = ms; }
 
-static std::string getEventName(const ASS_Event &evt) {
-  return evt.Name;
-}
+static std::string getEventName(const ASS_Event &evt) { return evt.Name; }
 
 static void setEventName(ASS_Event &evt, const std::string &str) {
   free(evt.Name);
   evt.Name = copyString(str);
 }
 
-static std::string getText(const ASS_Event &evt) {
-  return evt.Text;
-}
+static std::string getText(const ASS_Event &evt) { return evt.Text; }
 
 static void setText(ASS_Event &evt, const std::string &str) {
   free(evt.Text);
   evt.Text = copyString(str);
 }
 
-static std::string getEffect(const ASS_Event &evt) {
-  return evt.Effect;
-}
+static std::string getEffect(const ASS_Event &evt) { return evt.Effect; }
 
 static void setEffect(ASS_Event &evt, const std::string &str) {
   free(evt.Effect);
   evt.Effect = copyString(str);
 }
 
-static std::string getStyleName(const ASS_Style &style) {
-  return style.Name;
-}
+static std::string getStyleName(const ASS_Style &style) { return style.Name; }
 
 static void setStyleName(ASS_Style &style, const std::string &str) {
   free(style.Name);
@@ -987,82 +984,86 @@ static RenderResult getNext(const RenderResult &res) {
 
 EMSCRIPTEN_BINDINGS(JASSUB) {
   emscripten::class_<RenderResult>("RenderResult")
-    .property("x", &RenderResult::x)
-    .property("y", &RenderResult::y)
-    .property("w", &RenderResult::w)
-    .property("h", &RenderResult::h)
-    .property("next", &getNext)
-    .property("image", &RenderResult::image);
+      .property("x", &RenderResult::x)
+      .property("y", &RenderResult::y)
+      .property("w", &RenderResult::w)
+      .property("h", &RenderResult::h)
+      .property("next", &getNext)
+      .property("image", &RenderResult::image);
 
   emscripten::class_<ASS_Style>("ASS_Style")
-    .property("Name", &getStyleName, &setStyleName)    
-    .property("FontName", &getFontName, &setFontName) 
-    .property("FontSize", &ASS_Style::FontSize)
-    .property("PrimaryColour", &ASS_Style::PrimaryColour)
-    .property("SecondaryColour", &ASS_Style::SecondaryColour)
-    .property("OutlineColour", &ASS_Style::OutlineColour)
-    .property("BackColour", &ASS_Style::BackColour)
-    .property("Bold", &ASS_Style::Bold)     
-    .property("Italic", &ASS_Style::Italic)   
-    .property("Underline", &ASS_Style::Underline) 
-    .property("StrikeOut", &ASS_Style::StrikeOut)
-    .property("ScaleX", &ASS_Style::ScaleX) 
-    .property("ScaleY", &ASS_Style::ScaleY) 
-    .property("Spacing", &ASS_Style::Spacing)
-    .property("Angle", &ASS_Style::Angle)
-    .property("BorderStyle", &ASS_Style::BorderStyle)
-    .property("Outline", &ASS_Style::Outline)
-    .property("Shadow", &ASS_Style::Shadow)
-    .property("Alignment", &ASS_Style::Alignment) 
-    .property("MarginL", &ASS_Style::MarginL)
-    .property("MarginR", &ASS_Style::MarginR)
-    .property("MarginV", &ASS_Style::MarginV)
-    .property("Encoding", &ASS_Style::Encoding)
-    .property("treat_fontname_as_pattern", &ASS_Style::treat_fontname_as_pattern) 
-    .property("Blur", &ASS_Style::Blur) 
-    .property("Justify", &ASS_Style::Justify);
+      .property("Name", &getStyleName, &setStyleName)
+      .property("FontName", &getFontName, &setFontName)
+      .property("FontSize", &ASS_Style::FontSize)
+      .property("PrimaryColour", &ASS_Style::PrimaryColour)
+      .property("SecondaryColour", &ASS_Style::SecondaryColour)
+      .property("OutlineColour", &ASS_Style::OutlineColour)
+      .property("BackColour", &ASS_Style::BackColour)
+      .property("Bold", &ASS_Style::Bold)
+      .property("Italic", &ASS_Style::Italic)
+      .property("Underline", &ASS_Style::Underline)
+      .property("StrikeOut", &ASS_Style::StrikeOut)
+      .property("ScaleX", &ASS_Style::ScaleX)
+      .property("ScaleY", &ASS_Style::ScaleY)
+      .property("Spacing", &ASS_Style::Spacing)
+      .property("Angle", &ASS_Style::Angle)
+      .property("BorderStyle", &ASS_Style::BorderStyle)
+      .property("Outline", &ASS_Style::Outline)
+      .property("Shadow", &ASS_Style::Shadow)
+      .property("Alignment", &ASS_Style::Alignment)
+      .property("MarginL", &ASS_Style::MarginL)
+      .property("MarginR", &ASS_Style::MarginR)
+      .property("MarginV", &ASS_Style::MarginV)
+      .property("Encoding", &ASS_Style::Encoding)
+      .property("treat_fontname_as_pattern",
+                &ASS_Style::treat_fontname_as_pattern)
+      .property("Blur", &ASS_Style::Blur)
+      .property("Justify", &ASS_Style::Justify);
 
   emscripten::class_<ASS_Event>("ASS_Event")
-    .property("Start", &getStart, &setStart)
-    .property("Duration", &getDuration, &setDuration)
-    .property("Name", &getEventName, &setEventName)
-    .property("Effect", &getEffect, &setEffect)
-    .property("Text", &getText, &setText)
-    .property("ReadOrder", &ASS_Event::ReadOrder)
-    .property("Layer", &ASS_Event::Layer)
-    .property("Style", &ASS_Event::Style)
-    .property("MarginL", &ASS_Event::MarginL)
-    .property("MarginR", &ASS_Event::MarginR)
-    .property("MarginV", &ASS_Event::MarginV);
+      .property("Start", &getStart, &setStart)
+      .property("Duration", &getDuration, &setDuration)
+      .property("Name", &getEventName, &setEventName)
+      .property("Effect", &getEffect, &setEffect)
+      .property("Text", &getText, &setText)
+      .property("ReadOrder", &ASS_Event::ReadOrder)
+      .property("Layer", &ASS_Event::Layer)
+      .property("Style", &ASS_Event::Style)
+      .property("MarginL", &ASS_Event::MarginL)
+      .property("MarginR", &ASS_Event::MarginR)
+      .property("MarginV", &ASS_Event::MarginV);
 
   emscripten::class_<JASSUB>("JASSUB")
-    .constructor<int, int, std::string, bool>()
-    .function("setLogLevel", &JASSUB::setLogLevel)
-    .function("setDropAnimations", &JASSUB::setDropAnimations)
-    .function("createTrackMem", &JASSUB::createTrackMem)
-    .function("removeTrack", &JASSUB::removeTrack)
-    .function("resizeCanvas", &JASSUB::resizeCanvas)
-    .function("quitLibrary", &JASSUB::quitLibrary)
-    .function("addFont", &JASSUB::addFont)
-    .function("reloadFonts", &JASSUB::reloadFonts)
-    .function("setMargin", &JASSUB::setMargin)
-    .function("getEventCount", &JASSUB::getEventCount)
-    .function("allocEvent", &JASSUB::allocEvent)
-    .function("allocStyle", &JASSUB::allocStyle)
-    .function("removeEvent", &JASSUB::removeEvent)
-    .function("getStyleCount", &JASSUB::getStyleCount)
-    .function("removeStyle", &JASSUB::removeStyle)
-    .function("removeAllEvents", &JASSUB::removeAllEvents)
-    .function("setMemoryLimits", &JASSUB::setMemoryLimits)
-    .function("renderBlend", &JASSUB::renderBlend, emscripten::allow_raw_pointers())
-    .function("renderImage", &JASSUB::renderImage, emscripten::allow_raw_pointers())
-    .function("getEvent", &JASSUB::getEvent, emscripten::allow_raw_pointers())
-    .function("getStyle", &JASSUB::getStyle, emscripten::allow_raw_pointers())
-    .function("styleOverride", &JASSUB::styleOverride, emscripten::allow_raw_pointers())
-    .function("disableStyleOverride", &JASSUB::disableStyleOverride)
-    .function("setDefaultFont", &JASSUB::setDefaultFont)
-    .property("trackColorSpace", &JASSUB::trackColorSpace)
-    .property("changed", &JASSUB::changed)
-    .property("count", &JASSUB::count)
-    .property("time", &JASSUB::time);
+      .constructor<int, int, std::string, bool>()
+      .function("setLogLevel", &JASSUB::setLogLevel)
+      .function("setDropAnimations", &JASSUB::setDropAnimations)
+      .function("createTrackMem", &JASSUB::createTrackMem)
+      .function("removeTrack", &JASSUB::removeTrack)
+      .function("resizeCanvas", &JASSUB::resizeCanvas)
+      .function("quitLibrary", &JASSUB::quitLibrary)
+      .function("addFont", &JASSUB::addFont)
+      .function("reloadFonts", &JASSUB::reloadFonts)
+      .function("setMargin", &JASSUB::setMargin)
+      .function("getEventCount", &JASSUB::getEventCount)
+      .function("allocEvent", &JASSUB::allocEvent)
+      .function("allocStyle", &JASSUB::allocStyle)
+      .function("removeEvent", &JASSUB::removeEvent)
+      .function("getStyleCount", &JASSUB::getStyleCount)
+      .function("removeStyle", &JASSUB::removeStyle)
+      .function("removeAllEvents", &JASSUB::removeAllEvents)
+      .function("setMemoryLimits", &JASSUB::setMemoryLimits)
+      .function("renderBlend", &JASSUB::renderBlend,
+                emscripten::allow_raw_pointers())
+      .function("renderImage", &JASSUB::renderImage,
+                emscripten::allow_raw_pointers())
+      .function("getEvent", &JASSUB::getEvent, emscripten::allow_raw_pointers())
+      .function("getStyle", &JASSUB::getStyle, emscripten::allow_raw_pointers())
+      .function("styleOverride", &JASSUB::styleOverride,
+                emscripten::allow_raw_pointers())
+      .function("disableStyleOverride", &JASSUB::disableStyleOverride)
+      .function("setDefaultFont", &JASSUB::setDefaultFont)
+      .property("trackColorSpace", &JASSUB::trackColorSpace)
+      .property("changed", &JASSUB::changed)
+      .property("count", &JASSUB::count)
+      .property("time", &JASSUB::time);
 }
