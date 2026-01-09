@@ -3,7 +3,6 @@
  * High-level ASS/SSA subtitle renderer for web browsers using libass.
  */
 
-import 'rvfc-polyfill'
 import type {
   JASSUBOptions,
   ASSEvent,
@@ -25,8 +24,6 @@ import {
   computeCanvasSize,
   getVideoPosition,
   fixAlpha,
-  runFeatureTests,
-  getSIMDSupport,
   getAlphaBug,
   getBitmapBug
 } from './utils'
@@ -50,7 +47,6 @@ import {
  */
 export default class JASSUB extends EventTarget {
   // Feature detection cache (static)
-  private static _supportsSIMD: boolean | null = null
   private static _hasAlphaBug: boolean | null = null
   private static _hasBitmapBug: boolean | null = null
 
@@ -169,19 +165,9 @@ export default class JASSUB extends EventTarget {
 
     // Initialize worker after feature tests complete
     test.then(() => {
-      const fallbackWasmUrl = options.wasmUrl ?? 'jassub-worker.wasm'
-      const selectedWasmUrl =
-        options.forceModernWasmUrl && options.modernWasmUrl
-          ? options.modernWasmUrl
-          : JASSUB._supportsSIMD && options.modernWasmUrl
-            ? options.modernWasmUrl
-            : fallbackWasmUrl
-
       this._worker.postMessage({
         target: 'init',
-        wasmUrl: selectedWasmUrl,
-        fallbackWasmUrl,
-        legacyWasmUrl: options.legacyWasmUrl ?? 'jassub-worker.wasm.js',
+        wasmUrl: options.wasmUrl ?? 'jassub-worker.wasm',
         asyncRender: typeof createImageBitmap !== 'undefined' && (options.asyncRender ?? true),
         onDemandRender: this._onDemandRender,
         width: this._canvasctrl.width || 0,
@@ -212,39 +198,6 @@ export default class JASSUB extends EventTarget {
   // ==========================================================================
   // Static Methods
   // ==========================================================================
-
-  private static async _testSIMD(): Promise<void> {
-    if (JASSUB._supportsSIMD !== null) return
-
-    try {
-      if (typeof WebAssembly !== 'object' || typeof WebAssembly.validate !== 'function') {
-        JASSUB._supportsSIMD = false
-        return
-      }
-
-      const simdProbe = Uint8Array.of(
-        0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
-        0x01, 0x05, 0x01, 0x60, 0x00, 0x01, 0x7b, 0x03,
-        0x02, 0x01, 0x00, 0x0a, 0x16, 0x01, 0x14, 0x00,
-        0xfd, 0x0c, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0x00, 0x00, 0x0b
-      )
-
-      let supports = WebAssembly.validate(simdProbe)
-      if (supports) {
-        try {
-          await WebAssembly.compile(simdProbe)
-        } catch {
-          supports = false
-        }
-      }
-
-      JASSUB._supportsSIMD = supports
-    } catch {
-      JASSUB._supportsSIMD = false
-    }
-  }
 
   private static async _testImageBugs(): Promise<void> {
     if (JASSUB._hasBitmapBug !== null) return
@@ -303,7 +256,6 @@ export default class JASSUB extends EventTarget {
   }
 
   private static async _test(): Promise<void> {
-    await JASSUB._testSIMD()
     await JASSUB._testImageBugs()
   }
 

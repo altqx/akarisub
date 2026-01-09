@@ -166,12 +166,6 @@ export interface JASSUBOptions {
   workerUrl?: string
   /** URL to the WASM binary */
   wasmUrl?: string
-  /** URL to legacy WASM (for non-WASM browsers) */
-  legacyWasmUrl?: string
-  /** URL to modern WASM with SIMD */
-  modernWasmUrl?: string
-  /** Force using modernWasmUrl (default: false) */
-  forceModernWasmUrl?: boolean
   /** URL to subtitle file */
   subUrl?: string
   /** Subtitle content as string */
@@ -250,8 +244,6 @@ export type WorkerOutboundMessage =
 export interface WorkerInitMessage {
   target: 'init'
   wasmUrl: string
-  fallbackWasmUrl: string
-  legacyWasmUrl: string
   asyncRender: boolean
   onDemandRender: boolean
   width: number

@@ -4,11 +4,6 @@
 BASE_DIR:=$(dir $(realpath $(firstword $(MAKEFILE_LIST))))
 DIST_DIR:=$(BASE_DIR)dist/libraries
 
-export CFLAGS = -O3 -flto -fno-rtti -fno-exceptions -s USE_PTHREADS=0
-export CXXFLAGS = $(CFLAGS)
-export PKG_CONFIG_PATH = $(DIST_DIR)/lib/pkgconfig
-export EM_PKG_CONFIG_PATH = $(PKG_CONFIG_PATH)
-
 SIMD_ARGS = \
 	-msimd128 \
 	-msse \
@@ -21,23 +16,17 @@ SIMD_ARGS = \
 	-mavx \
 	-mavx2 \
 	-matomics \
-	-mnontrapping-fptoint 
+	-mnontrapping-fptoint
 
-ifeq (${MODERN},1)
-	WORKER_NAME = jassub-worker-modern
-	WORKER_ARGS = \
-		-s WASM=1 \
-		$(SIMD_ARGS)
+export CFLAGS = -O3 -flto -fno-rtti -fno-exceptions -s USE_PTHREADS=0 $(SIMD_ARGS)
+export CXXFLAGS = $(CFLAGS)
+export PKG_CONFIG_PATH = $(DIST_DIR)/lib/pkgconfig
+export EM_PKG_CONFIG_PATH = $(PKG_CONFIG_PATH)
 
-	override CFLAGS += $(SIMD_ARGS)
-	override CXXFLAGS += $(SIMD_ARGS)
-
-else
-	WORKER_NAME = jassub-worker
-	WORKER_ARGS = \
-		-s WASM=2 
-
-endif
+WORKER_NAME = jassub-worker
+WORKER_ARGS = \
+	-s WASM=1 \
+	$(SIMD_ARGS)
 
 all: jassub
 jassub: dist
@@ -262,17 +251,9 @@ dist/js/$(WORKER_NAME).js: src/JASSUB.cpp src/ts/worker.ts src/pre-worker.js src
 		-lembind \
 		-o $@
 
-.PHONY: worker worker-modern workers
+.PHONY: worker
 
-worker:
-	$(MAKE) MODERN=0 dist/js/jassub-worker.js
-
-worker-modern:
-	$(MAKE) MODERN=1 dist/js/jassub-worker-modern.js
-
-workers:
-	$(MAKE) worker
-	$(MAKE) worker-modern
+worker: dist/js/jassub-worker.js
 
 dist/js/jassub.js: src/jassub.js
 	mkdir -p dist/js

@@ -1,11 +1,10 @@
-import "rvfc-polyfill";
-const P = {
+const $ = {
   bt709: "BT709",
   bt470bg: "BT601",
   // BT.601 PAL
   smpte170m: "BT601"
   // BT.601 NTSC
-}, B = {
+}, D = {
   BT601: {
     BT709: "1.0863 -0.0723 -0.014 0 0 0.0965 0.8451 0.0584 0 0 -0.0141 -0.0277 1.0418"
   },
@@ -20,7 +19,7 @@ const P = {
     BT709: "0.9993 0.0006 0.0001 0 0 -0.0004 0.9812 0.0192 0 0 -0.0034 -0.0114 1.0148",
     BT601: "0.913 0.0774 0.0096 0 0 -0.1051 1.1508 -0.0456 0 0 0.0063 0.0207 0.973"
   }
-}, N = [
+}, V = [
   null,
   "BT601",
   null,
@@ -33,25 +32,25 @@ const P = {
   "FCC",
   "FCC"
 ];
-function Y(i, e) {
+function q(i, e) {
   if (!i || !e || i === e) return null;
-  const t = B[i]?.[e];
+  const t = D[i]?.[e];
   return t ? `url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg'><filter id='f'><feColorMatrix type='matrix' values='${t} 0 0 0 0 0 1 0'/></filter></svg>#f")` : null;
 }
-function I(i, e, t, s, a) {
-  const r = t <= 0 ? 1 : t, l = globalThis.devicePixelRatio || 1;
+function k(i, e, t, s, a) {
+  const r = t <= 0 ? 1 : t, h = globalThis.devicePixelRatio || 1;
   if (e <= 0 || i <= 0)
     return { width: 0, height: 0 };
   const o = r < 1 ? -1 : 1;
-  let h = e * l;
-  return o * h * r <= o * s ? h *= r : o * h < o * s && (h = s), a > 0 && h > a && (h = a), i *= h / e, e = h, { width: i, height: e };
+  let l = e * h;
+  return o * l * r <= o * s ? l *= r : o * l < o * s && (l = s), a > 0 && l > a && (l = a), i *= l / e, e = l, { width: i, height: e };
 }
-function $(i, e = i.videoWidth, t = i.videoHeight) {
-  const s = e / t, { offsetWidth: a, offsetHeight: r } = i, l = a / r;
-  let o = a, h = r;
-  l > s ? o = Math.floor(r * s) : h = Math.floor(a / s);
-  const m = (a - o) / 2, w = (r - h) / 2;
-  return { width: o, height: h, x: m, y: w };
+function P(i, e = i.videoWidth, t = i.videoHeight) {
+  const s = e / t, { offsetWidth: a, offsetHeight: r } = i, h = a / r;
+  let o = a, l = r;
+  h > s ? o = Math.floor(r * s) : l = Math.floor(a / s);
+  const m = (a - o) / 2, v = (r - l) / 2;
+  return { width: o, height: l, x: m, y: v };
 }
 function U(i, e) {
   if (e)
@@ -59,16 +58,16 @@ function U(i, e) {
       i[t] = i[t] > 1 ? i[t] : 1;
   return i;
 }
-function X(i, e = !1) {
+function j(i, e = !1) {
   const t = [], s = i.split(/[\r\n]+/g);
   let a = null;
   for (let r = 0; r < s.length; r++) {
-    const l = s[r].match(/^\[(.*)\]$/);
-    if (l) {
-      if (e && l[1].toLowerCase() === "events")
+    const h = s[r].match(/^\[(.*)\]$/);
+    if (h) {
+      if (e && h[1].toLowerCase() === "events")
         break;
       a = null, t.push({
-        name: l[1],
+        name: h[1],
         body: []
       });
     } else {
@@ -80,30 +79,30 @@ function X(i, e = !1) {
           value: s[r].substring(1)
         });
       else {
-        const h = s[r].split(":"), m = h[0];
-        let w = h.slice(1).join(":").trim();
+        const l = s[r].split(":"), m = l[0];
+        let v = l.slice(1).join(":").trim();
         if (a || m === "Format") {
-          let v = w.split(",");
-          if (a && v.length > a.length) {
-            const R = v.slice(a.length - 1).join(",");
-            v = v.slice(0, a.length - 1), v.push(R);
+          let p = v.split(",");
+          if (a && p.length > a.length) {
+            const R = p.slice(a.length - 1).join(",");
+            p = p.slice(0, a.length - 1), p.push(R);
           }
-          if (v = v.map((R) => R.trim()), a) {
+          if (p = p.map((R) => R.trim()), a) {
             const R = {};
-            for (let p = 0; p < v.length; p++)
-              R[a[p]] = v[p];
-            w = R;
+            for (let g = 0; g < p.length; g++)
+              R[a[g]] = p[g];
+            v = R;
           } else
-            w = v;
+            v = p;
         }
-        m === "Format" && (a = w), o.push({ key: m, value: w });
+        m === "Format" && (a = v), o.push({ key: m, value: v });
       }
     }
   }
   return t;
 }
 const A = /\\blur(?:[0-9]+\.)?[0-9]+/gm;
-function G(i) {
+function N(i) {
   return i.replace(A, "");
 }
 const H = [
@@ -118,149 +117,87 @@ const H = [
   { w: 1280, h: 720 }
   // 720p
 ];
-function z(i, e) {
+function W(i, e) {
   const t = [...H].sort((s, a) => s.w - a.w);
   for (const s of t)
     if (i <= s.w && e <= s.h)
       return s;
   return { w: Math.ceil(i / 100) * 100, h: Math.ceil(e / 100) * 100 };
 }
-function d(i, e) {
+function c(i, e) {
   return e && e.includes(".") ? i.toFixed(2).replace(/\.?0+$/, "") : Math.round(i);
 }
-function K(i) {
-  const e = i.match(/PlayResX:\s*(\d+)/i), t = i.match(/PlayResY:\s*(\d+)/i), s = e ? parseInt(e[1], 10) : 1920, a = t ? parseInt(t[1], 10) : 1080, r = /\\pos\s*\(\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*\)/g, l = /\\move\s*\(\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)/g, o = /\\org\s*\(\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*\)/g, h = /\\i?clip\s*\(\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*\)/g;
-  let m = 0, w = 0;
-  const v = (_, n, f) => {
+function Y(i) {
+  const e = i.match(/PlayResX:\s*(\d+)/i), t = i.match(/PlayResY:\s*(\d+)/i), s = e ? parseInt(e[1], 10) : 1920, a = t ? parseInt(t[1], 10) : 1080, r = /\\pos\s*\(\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*\)/g, h = /\\move\s*\(\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)/g, o = /\\org\s*\(\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*\)/g, l = /\\i?clip\s*\(\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*\)/g;
+  let m = 0, v = 0;
+  const p = (_, n, f) => {
     let u;
     const T = new RegExp(_.source, "g");
     for (; (u = T.exec(i)) !== null; ) {
-      for (const b of n)
-        if (u[b]) {
-          const C = Math.abs(parseFloat(u[b]));
+      for (const y of n)
+        if (u[y]) {
+          const C = Math.abs(parseFloat(u[y]));
           C > m && (m = C);
         }
-      for (const b of f)
-        if (u[b]) {
-          const C = Math.abs(parseFloat(u[b]));
-          C > w && (w = C);
+      for (const y of f)
+        if (u[y]) {
+          const C = Math.abs(parseFloat(u[y]));
+          C > v && (v = C);
         }
     }
   };
-  if (v(r, [1], [2]), v(l, [1, 3], [2, 4]), v(o, [1], [2]), v(h, [1, 3], [2, 4]), m <= s && w <= a) return i;
-  const R = z(m, w), p = s / R.w, y = a / R.h, L = Math.min(p, y), W = Math.max(p, y), S = 1;
+  if (p(r, [1], [2]), p(h, [1, 3], [2, 4]), p(o, [1], [2]), p(l, [1, 3], [2, 4]), m <= s && v <= a) return i;
+  const R = W(m, v), g = s / R.w, w = a / R.h, L = Math.min(g, w), I = Math.max(g, w), S = 1;
   let F = i;
-  const D = F.match(/(\[Events\][\s\S]*)/i);
-  if (!D) return F;
-  let c = D[1];
-  return c = c.replace(
+  const M = F.match(/(\[Events\][\s\S]*)/i);
+  if (!M) return F;
+  let d = M[1];
+  return d = d.replace(
     r,
-    (_, n, f) => `\\pos(${d(parseFloat(n) * p, n)},${d(parseFloat(f) * y, f)})`
-  ), c = c.replace(
+    (_, n, f) => `\\pos(${c(parseFloat(n) * g, n)},${c(parseFloat(f) * w, f)})`
+  ), d = d.replace(
     /\\move\s*\(\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)(?:\s*,\s*(-?[\d.]+)\s*,\s*(-?[\d.]+))?\s*\)/g,
-    (_, n, f, u, T, b, C) => {
-      const k = `\\move(${d(parseFloat(n) * p, n)},${d(parseFloat(f) * y, f)},${d(parseFloat(u) * p, u)},${d(parseFloat(T) * y, T)}`;
-      return b ? `${k},${b},${C})` : `${k})`;
+    (_, n, f, u, T, y, C) => {
+      const B = `\\move(${c(parseFloat(n) * g, n)},${c(parseFloat(f) * w, f)},${c(parseFloat(u) * g, u)},${c(parseFloat(T) * w, T)}`;
+      return y ? `${B},${y},${C})` : `${B})`;
     }
-  ), c = c.replace(
+  ), d = d.replace(
     o,
-    (_, n, f) => `\\org(${d(parseFloat(n) * p, n)},${d(parseFloat(f) * y, f)})`
-  ), c = c.replace(
+    (_, n, f) => `\\org(${c(parseFloat(n) * g, n)},${c(parseFloat(f) * w, f)})`
+  ), d = d.replace(
     /\\(i?clip)\s*\(\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*\)/g,
-    (_, n, f, u, T, b) => `\\${n}(${d(parseFloat(f) * p, f)},${d(parseFloat(u) * y, u)},${d(parseFloat(T) * p, T)},${d(parseFloat(b) * y, b)})`
-  ), c = c.replace(
+    (_, n, f, u, T, y) => `\\${n}(${c(parseFloat(f) * g, f)},${c(parseFloat(u) * w, u)},${c(parseFloat(T) * g, T)},${c(parseFloat(y) * w, y)})`
+  ), d = d.replace(
     /\\fs([\d.]+)/g,
-    (_, n) => `\\fs${d(parseFloat(n) * W, n)}`
-  ), c = c.replace(
+    (_, n) => `\\fs${c(parseFloat(n) * I, n)}`
+  ), d = d.replace(
     /\\fscx([\d.]+)/g,
-    (_, n) => `\\fscx${d(parseFloat(n) * S, n)}`
-  ), c = c.replace(
+    (_, n) => `\\fscx${c(parseFloat(n) * S, n)}`
+  ), d = d.replace(
     /\\xbord([\d.]+)/g,
-    (_, n) => `\\xbord${d(parseFloat(n) * p, n)}`
-  ), c = c.replace(
+    (_, n) => `\\xbord${c(parseFloat(n) * g, n)}`
+  ), d = d.replace(
     /\\ybord([\d.]+)/g,
-    (_, n) => `\\ybord${d(parseFloat(n) * y, n)}`
-  ), c = c.replace(
+    (_, n) => `\\ybord${c(parseFloat(n) * w, n)}`
+  ), d = d.replace(
     /\\xshad(-?[\d.]+)/g,
-    (_, n) => `\\xshad${d(parseFloat(n) * p, n)}`
-  ), c = c.replace(
+    (_, n) => `\\xshad${c(parseFloat(n) * g, n)}`
+  ), d = d.replace(
     /\\yshad(-?[\d.]+)/g,
-    (_, n) => `\\yshad${d(parseFloat(n) * y, n)}`
+    (_, n) => `\\yshad${c(parseFloat(n) * w, n)}`
   ), ["fsp", "bord", "shad", "be", "blur"].forEach((_) => {
     const n = new RegExp(`\\\\${_}(-?[\\d.]+)`, "g");
-    c = c.replace(
+    d = d.replace(
       n,
-      (f, u) => `\\${_}${d(parseFloat(u) * L, u)}`
+      (f, u) => `\\${_}${c(parseFloat(u) * L, u)}`
     );
-  }), c = c.replace(
+  }), d = d.replace(
     /(\\i?clip\s*\([^,)]+m[^)]+\)|\\p[1-9][^}]*?)(?=[\\}]|$)/g,
-    (_) => _.replace(/(-?[\d.]+)\s+(-?[\d.]+)/g, (n, f, u) => `${d(parseFloat(f) * p, f)} ${d(parseFloat(u) * y, u)}`)
-  ), F.substring(0, D.index) + c;
+    (_) => _.replace(/(-?[\d.]+)\s+(-?[\d.]+)/g, (n, f, u) => `${c(parseFloat(f) * g, f)} ${c(parseFloat(u) * w, u)}`)
+  ), F.substring(0, M.index) + d;
 }
-let M = null, E = null, x = null;
-async function O() {
-  if (M !== null) return M;
-  try {
-    if (typeof WebAssembly != "object" || typeof WebAssembly.validate != "function")
-      return M = !1, !1;
-    const i = Uint8Array.of(
-      0,
-      97,
-      115,
-      109,
-      1,
-      0,
-      0,
-      0,
-      1,
-      5,
-      1,
-      96,
-      0,
-      1,
-      123,
-      3,
-      2,
-      1,
-      0,
-      10,
-      22,
-      1,
-      20,
-      0,
-      253,
-      12,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      0,
-      11
-    );
-    let e = WebAssembly.validate(i);
-    if (e)
-      try {
-        await WebAssembly.compile(i);
-      } catch {
-        e = !1;
-      }
-    return M = e, e;
-  } catch {
-    return M = !1, !1;
-  }
-}
-async function V() {
+let E = null, x = null;
+async function z() {
   if (E !== null && x !== null)
     return { hasAlphaBug: E, hasBitmapBug: x };
   const i = document.createElement("canvas"), e = i.getContext("2d", { willReadFrequently: !0 });
@@ -278,12 +215,12 @@ async function V() {
   e.putImageData(new ImageData(new Uint8ClampedArray([0, 255, 0, 0]), 1, 1), 0, 0), s.drawImage(i, 0, 0);
   const r = s.getImageData(0, 0, 1, 1).data;
   if (E = a[1] !== r[1], E && console.log("Detected a browser having issue with transparent pixels, applying workaround"), typeof createImageBitmap < "u") {
-    const l = new Uint8ClampedArray([255, 0, 255, 0, 255]).subarray(1, 5);
-    s.drawImage(await createImageBitmap(new ImageData(l, 1)), 0, 0);
+    const h = new Uint8ClampedArray([255, 0, 255, 0, 255]).subarray(1, 5);
+    s.drawImage(await createImageBitmap(new ImageData(h, 1)), 0, 0);
     const { data: o } = s.getImageData(0, 0, 1, 1);
     x = !1;
-    for (let h = 0; h < o.length; h++)
-      if (Math.abs(l[h] - o[h]) > 15) {
+    for (let l = 0; l < o.length; l++)
+      if (Math.abs(h[l] - o[l]) > 15) {
         x = !0, console.log("Detected a browser having issue with partial bitmaps, applying workaround");
         break;
       }
@@ -291,25 +228,17 @@ async function V() {
     x = !1;
   return i.remove(), t.remove(), { hasAlphaBug: E, hasBitmapBug: x };
 }
-async function Q() {
-  const [i, e] = await Promise.all([O(), V()]);
-  return {
-    supportsSIMD: i,
-    ...e
-  };
+async function X() {
+  return z();
 }
-function Z() {
-  return M;
-}
-function J() {
+function G() {
   return E;
 }
-function ee() {
+function K() {
   return x;
 }
-class g extends EventTarget {
+class b extends EventTarget {
   // Feature detection cache (static)
-  static _supportsSIMD = null;
   static _hasAlphaBug = null;
   static _hasBitmapBug = null;
   // Instance properties
@@ -353,7 +282,7 @@ class g extends EventTarget {
     this._loaded = new Promise((a) => {
       this._init = a;
     });
-    const t = g._test();
+    const t = b._test();
     if (this._onDemandRender = "requestVideoFrameCallback" in HTMLVideoElement.prototype && (e.onDemandRender ?? !0), this._offscreenRender = "transferControlToOffscreen" in HTMLCanvasElement.prototype && !e.canvas && (e.offscreenRender ?? !0), this.timeOffset = e.timeOffset || 0, this._video = e.video, this._canvas = e.canvas, this._video && !this._canvas)
       this._canvasParent = document.createElement("div"), this._canvasParent.className = "JASSUB", this._canvasParent.style.position = "relative", this._canvas = this._createCanvas(), this._video.insertAdjacentElement("afterend", this._canvasParent);
     else if (!this._canvas)
@@ -362,12 +291,9 @@ class g extends EventTarget {
     const s = this._bufferCanvas.getContext("2d");
     if (!s) throw this.destroy(new Error("Canvas rendering not supported"));
     this._bufferCtx = s, this._canvasctrl = this._offscreenRender ? this._canvas.transferControlToOffscreen() : this._canvas, this._ctx = this._offscreenRender ? null : this._canvasctrl.getContext("2d"), this._lastRenderTime = 0, this.debug = !!e.debug, this.prescaleFactor = e.prescaleFactor || 1, this.prescaleHeightLimit = e.prescaleHeightLimit || 1080, this.maxRenderHeight = e.maxRenderHeight || 0, this._boundResize = this.resize.bind(this), this._boundTimeUpdate = this._timeupdate.bind(this), this._boundSetRate = () => this.setRate(this._video.playbackRate), this._boundUpdateColorSpace = this._updateColorSpace.bind(this), this._video && this.setVideo(this._video), this._onDemandRender && (this.busy = !1, this._lastDemandTime = null), this._worker = new Worker(e.workerUrl || "jassub-worker.js"), this._worker.onmessage = (a) => this._onmessage(a), this._worker.onerror = (a) => this._error(a), t.then(() => {
-      const a = e.wasmUrl ?? "jassub-worker.wasm", r = e.forceModernWasmUrl && e.modernWasmUrl || g._supportsSIMD && e.modernWasmUrl ? e.modernWasmUrl : a;
       this._worker.postMessage({
         target: "init",
-        wasmUrl: r,
-        fallbackWasmUrl: a,
-        legacyWasmUrl: e.legacyWasmUrl ?? "jassub-worker.wasm.js",
+        wasmUrl: e.wasmUrl ?? "jassub-worker.wasm",
         asyncRender: typeof createImageBitmap < "u" && (e.asyncRender ?? !0),
         onDemandRender: this._onDemandRender,
         width: this._canvasctrl.width || 0,
@@ -386,79 +312,15 @@ class g extends EventTarget {
         libassMemoryLimit: e.libassMemoryLimit ?? 128,
         libassGlyphLimit: e.libassGlyphLimit ?? 2048,
         useLocalFonts: typeof globalThis.queryLocalFonts < "u" && (e.useLocalFonts ?? !0),
-        hasBitmapBug: g._hasBitmapBug
+        hasBitmapBug: b._hasBitmapBug
       }), this._offscreenRender && this.sendMessage("offscreenCanvas", {}, [this._canvasctrl]);
     });
   }
   // ==========================================================================
   // Static Methods
   // ==========================================================================
-  static async _testSIMD() {
-    if (g._supportsSIMD === null)
-      try {
-        if (typeof WebAssembly != "object" || typeof WebAssembly.validate != "function") {
-          g._supportsSIMD = !1;
-          return;
-        }
-        const e = Uint8Array.of(
-          0,
-          97,
-          115,
-          109,
-          1,
-          0,
-          0,
-          0,
-          1,
-          5,
-          1,
-          96,
-          0,
-          1,
-          123,
-          3,
-          2,
-          1,
-          0,
-          10,
-          22,
-          1,
-          20,
-          0,
-          253,
-          12,
-          0,
-          0,
-          0,
-          0,
-          0,
-          0,
-          0,
-          0,
-          0,
-          0,
-          0,
-          0,
-          0,
-          0,
-          0,
-          0,
-          11
-        );
-        let t = WebAssembly.validate(e);
-        if (t)
-          try {
-            await WebAssembly.compile(e);
-          } catch {
-            t = !1;
-          }
-        g._supportsSIMD = t;
-      } catch {
-        g._supportsSIMD = !1;
-      }
-  }
   static async _testImageBugs() {
-    if (g._hasBitmapBug !== null) return;
+    if (b._hasBitmapBug !== null) return;
     const e = document.createElement("canvas"), t = e.getContext("2d", { willReadFrequently: !0 });
     if (!t) throw new Error("Canvas rendering not supported");
     if (typeof ImageData.prototype.constructor == "function")
@@ -472,23 +334,23 @@ class g extends EventTarget {
     e.width = s.width = 1, e.height = s.height = 1, t.clearRect(0, 0, 1, 1), a.clearRect(0, 0, 1, 1);
     const r = a.getImageData(0, 0, 1, 1).data;
     t.putImageData(new ImageData(new Uint8ClampedArray([0, 255, 0, 0]), 1, 1), 0, 0), a.drawImage(e, 0, 0);
-    const l = a.getImageData(0, 0, 1, 1).data;
-    if (g._hasAlphaBug = r[1] !== l[1], g._hasAlphaBug && console.log("Detected a browser having issue with transparent pixels, applying workaround"), typeof createImageBitmap < "u") {
+    const h = a.getImageData(0, 0, 1, 1).data;
+    if (b._hasAlphaBug = r[1] !== h[1], b._hasAlphaBug && console.log("Detected a browser having issue with transparent pixels, applying workaround"), typeof createImageBitmap < "u") {
       const o = new Uint8ClampedArray([255, 0, 255, 0, 255]).subarray(1, 5);
       a.drawImage(await createImageBitmap(new ImageData(o, 1)), 0, 0);
-      const { data: h } = a.getImageData(0, 0, 1, 1);
-      g._hasBitmapBug = !1;
-      for (let m = 0; m < h.length; m++)
-        if (Math.abs(o[m] - h[m]) > 15) {
-          g._hasBitmapBug = !0, console.log("Detected a browser having issue with partial bitmaps, applying workaround");
+      const { data: l } = a.getImageData(0, 0, 1, 1);
+      b._hasBitmapBug = !1;
+      for (let m = 0; m < l.length; m++)
+        if (Math.abs(o[m] - l[m]) > 15) {
+          b._hasBitmapBug = !0, console.log("Detected a browser having issue with partial bitmaps, applying workaround");
           break;
         }
     } else
-      g._hasBitmapBug = !1;
+      b._hasBitmapBug = !1;
     e.remove(), s.remove();
   }
   static async _test() {
-    await g._testSIMD(), await g._testImageBugs();
+    await b._testImageBugs();
   }
   // ==========================================================================
   // Canvas Management
@@ -501,26 +363,26 @@ class g extends EventTarget {
    */
   resize(e = 0, t = 0, s = 0, a = 0, r = this._video?.paused ?? !1) {
     if ((!e || !t) && this._video) {
-      const l = $(this._video);
+      const h = P(this._video);
       let o;
       if (this._videoWidth) {
-        const h = this._video.videoWidth / this._videoWidth, m = this._video.videoHeight / this._videoHeight;
-        o = I(
-          (l.width || 0) / h,
-          (l.height || 0) / m,
+        const l = this._video.videoWidth / this._videoWidth, m = this._video.videoHeight / this._videoHeight;
+        o = k(
+          (h.width || 0) / l,
+          (h.height || 0) / m,
           this.prescaleFactor,
           this.prescaleHeightLimit,
           this.maxRenderHeight
         );
       } else
-        o = I(
-          l.width || 0,
-          l.height || 0,
+        o = k(
+          h.width || 0,
+          h.height || 0,
           this.prescaleFactor,
           this.prescaleHeightLimit,
           this.maxRenderHeight
         );
-      e = o.width, t = o.height, this._canvasParent && (s = l.y - (this._canvasParent.getBoundingClientRect().top - this._video.getBoundingClientRect().top), a = l.x), this._canvas.style.width = l.width + "px", this._canvas.style.height = l.height + "px";
+      e = o.width, t = o.height, this._canvasParent && (s = h.y - (this._canvasParent.getBoundingClientRect().top - this._video.getBoundingClientRect().top), a = h.x), this._canvas.style.width = h.width + "px", this._canvas.style.height = h.height + "px";
     }
     this._canvas.style.top = s + "px", this._canvas.style.left = a + "px", r && this.busy === !1 ? this.busy = !0 : r = !1, this.sendMessage("canvas", {
       width: e,
@@ -766,7 +628,7 @@ class g extends EventTarget {
     this._video.requestVideoFrameCallback(() => {
       try {
         const e = new globalThis.VideoFrame(this._video);
-        this._videoColorSpace = P[e.colorSpace.matrix] ?? null, e.close(), this.sendMessage("getColorSpace");
+        this._videoColorSpace = $[e.colorSpace.matrix] ?? null, e.close(), this.sendMessage("getColorSpace");
       } catch (e) {
         console.warn(e);
       }
@@ -776,7 +638,7 @@ class g extends EventTarget {
     const { subtitleColorSpace: t, videoColorSpace: s = this._videoColorSpace } = e;
     if (!t || !s || t === s) return;
     this._detachOffscreen();
-    const a = B[t]?.[s];
+    const a = D[t]?.[s];
     a && this._ctx && (this._ctx.filter = `url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg'><filter id='f'><feColorMatrix type='matrix' values='${a} 0 0 0 0 0 1 0'/></filter></svg>#f")`);
   }
   _render(e) {
@@ -788,7 +650,7 @@ class g extends EventTarget {
             this._ctx.drawImage(t.image, t.x, t.y), t.image.close();
           else {
             this._bufferCanvas.width = t.w, this._bufferCanvas.height = t.h;
-            const s = new Uint8ClampedArray(t.image), a = U(s, g._hasAlphaBug ?? !1);
+            const s = new Uint8ClampedArray(t.image), a = U(s, b._hasAlphaBug ?? !1);
             this._bufferCtx.putImageData(
               new ImageData(a, t.w, t.h),
               0,
@@ -818,13 +680,13 @@ class g extends EventTarget {
   _fetchFromWorker(e, t) {
     try {
       const s = e.target, a = setTimeout(() => {
-        l(new Error("Error: Timeout while trying to fetch " + s));
+        h(new Error("Error: Timeout while trying to fetch " + s));
       }, 5e3), r = (o) => {
-        o.data.target === s && (t(null, o.data), this._worker.removeEventListener("message", r), this._worker.removeEventListener("error", l), clearTimeout(a));
-      }, l = (o) => {
-        t(o instanceof Error ? o : o.error || new Error("Worker error")), this._worker.removeEventListener("message", r), this._worker.removeEventListener("error", l), clearTimeout(a);
+        o.data.target === s && (t(null, o.data), this._worker.removeEventListener("message", r), this._worker.removeEventListener("error", h), clearTimeout(a));
+      }, h = (o) => {
+        t(o instanceof Error ? o : o.error || new Error("Worker error")), this._worker.removeEventListener("message", r), this._worker.removeEventListener("error", h), clearTimeout(a);
       };
-      this._worker.addEventListener("message", r), this._worker.addEventListener("error", l), this._worker.postMessage(e);
+      this._worker.addEventListener("message", r), this._worker.addEventListener("error", h), this._worker.postMessage(e);
     } catch (s) {
       this._error(s);
     }
@@ -852,22 +714,20 @@ class g extends EventTarget {
   }
 }
 export {
-  g as JASSUB,
-  B as colorMatrixConversionMap,
-  I as computeCanvasSize,
-  g as default,
-  G as dropBlur,
+  b as JASSUB,
+  D as colorMatrixConversionMap,
+  k as computeCanvasSize,
+  b as default,
+  N as dropBlur,
   U as fixAlpha,
-  K as fixPlayRes,
-  J as getAlphaBug,
-  ee as getBitmapBug,
-  Y as getColorSpaceFilterUrl,
-  Z as getSIMDSupport,
-  $ as getVideoPosition,
-  N as libassYCbCrMap,
-  X as parseAss,
-  Q as runFeatureTests,
-  V as testImageBugs,
-  O as testSIMD,
-  P as webYCbCrMap
+  Y as fixPlayRes,
+  G as getAlphaBug,
+  K as getBitmapBug,
+  q as getColorSpaceFilterUrl,
+  P as getVideoPosition,
+  V as libassYCbCrMap,
+  j as parseAss,
+  X as runFeatureTests,
+  z as testImageBugs,
+  $ as webYCbCrMap
 };

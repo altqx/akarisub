@@ -19,136 +19,6 @@ import type {
 import { parseAss, dropBlur, fixPlayRes, libassYCbCrMap } from './utils'
 
 // =============================================================================
-// Polyfills for older/weird engines
-// =============================================================================
-
-if (!String.prototype.startsWith) {
-  ;(String.prototype as any).startsWith = function (s: string, p: number = 0): boolean {
-    return this.substring(p, s.length) === s
-  }
-}
-
-if (!String.prototype.includes) {
-  ;(String.prototype as any).includes = function (s: string, p?: number): boolean {
-    return this.indexOf(s, p) !== -1
-  }
-}
-
-if (!(Uint8Array.prototype as any).slice) {
-  ;(Uint8Array.prototype as any).slice = function (b: number, e: number): Uint8Array {
-    return new Uint8Array(this.subarray(b, e))
-  }
-}
-
-function toAbsoluteIndex(index: number, length: number): number {
-  const integer = index >> 0
-  return integer < 0 ? Math.max(integer + length, 0) : Math.min(integer, length)
-}
-
-if (!(Uint8Array.prototype as any).fill) {
-  const fillImpl = function (this: any, value: any): any {
-    if (this == null) throw new TypeError('this is null or not defined')
-    const O = Object(this)
-    const length = O.length >>> 0
-    const argumentsLength = arguments.length
-    let index = toAbsoluteIndex(argumentsLength > 1 ? arguments[1] : undefined, length)
-    const end = argumentsLength > 2 ? arguments[2] : undefined
-    const endPos = end === undefined ? length : toAbsoluteIndex(end, length)
-    while (endPos > index) O[index++] = value
-    return O
-  }
-  ;(Int8Array.prototype as any).fill =
-    (Int16Array.prototype as any).fill =
-    (Int32Array.prototype as any).fill =
-    (Uint8Array.prototype as any).fill =
-    (Uint16Array.prototype as any).fill =
-    (Uint32Array.prototype as any).fill =
-    (Float32Array.prototype as any).fill =
-    (Float64Array.prototype as any).fill =
-    (Array.prototype as any).fill =
-      fillImpl
-}
-
-if (!(Uint8Array.prototype as any).copyWithin) {
-  const copyWithinImpl = function (this: any, target: number, start: number): any {
-    const O = Object(this)
-    const len = O.length >>> 0
-    let to = toAbsoluteIndex(target, len)
-    let from = toAbsoluteIndex(start, len)
-    const end = arguments.length > 2 ? arguments[2] : undefined
-    let count = Math.min((end === undefined ? len : toAbsoluteIndex(end, len)) - from, len - to)
-    let inc = 1
-    if (from < to && to < from + count) {
-      inc = -1
-      from += count - 1
-      to += count - 1
-    }
-    while (count-- > 0) {
-      if (from in O) O[to] = O[from]
-      else delete O[to]
-      to += inc
-      from += inc
-    }
-    return O
-  }
-  ;(Int8Array.prototype as any).copyWithin =
-    (Int16Array.prototype as any).copyWithin =
-    (Int32Array.prototype as any).copyWithin =
-    (Uint8Array.prototype as any).copyWithin =
-    (Uint16Array.prototype as any).copyWithin =
-    (Uint32Array.prototype as any).copyWithin =
-    (Float32Array.prototype as any).copyWithin =
-    (Float64Array.prototype as any).copyWithin =
-    (Array.prototype as any).copyWithin =
-      copyWithinImpl
-}
-
-if (!Date.now) Date.now = () => new Date().getTime()
-
-if (!('performance' in self)) {
-  ;(self as any).performance = { now: () => Date.now() }
-}
-
-// Console polyfill for environments without it
-if (typeof console === 'undefined') {
-  const msg = (command: string, a: IArguments) => {
-    postMessage({
-      target: 'console',
-      command,
-      content: JSON.stringify(Array.prototype.slice.call(a))
-    })
-  }
-  ;(self as any).console = {
-    log: function () { msg('log', arguments) },
-    debug: function () { msg('debug', arguments) },
-    info: function () { msg('info', arguments) },
-    warn: function () { msg('warn', arguments) },
-    error: function () { msg('error', arguments) }
-  }
-  ;(self as any).console.log('Detected lack of console, overridden console')
-}
-
-// Promise polyfill check
-let promiseSupported = typeof Promise !== 'undefined'
-if (promiseSupported) {
-  try {
-    let res: () => void
-    new Promise<void>((resolve) => { res = resolve })
-    res!()
-  } catch {
-    promiseSupported = false
-  }
-}
-
-if (!promiseSupported) {
-  ;(self as any).Promise = function <T>(cb: (resolve: (value: T) => void) => void): { then: (fn: (value: T) => void) => void } {
-    let then: (value: T) => void = () => {}
-    cb((a) => setTimeout(() => then(a), 0))
-    return { then: (fn) => (then = fn) }
-  }
-}
-
-// =============================================================================
 // Worker State
 // =============================================================================
 
@@ -623,19 +493,6 @@ const requestAnimationFrame = ((): (func: () => void) => number => {
 self.init = async (data: any): Promise<void> => {
   hasBitmapBug = data.hasBitmapBug
 
-  try {
-    const wasmProbe = Uint8Array.of(0x0, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00)
-    const module = await WebAssembly.compile(wasmProbe)
-    const instance = await WebAssembly.instantiate(module)
-    if (!(module instanceof WebAssembly.Module) || !(instance instanceof WebAssembly.Instance)) {
-      throw new Error('WASM not supported')
-    }
-  } catch (e) {
-    console.warn(e)
-    // Load WASM2JS fallback
-    eval(read_(data.legacyWasmUrl) as string)
-  }
-
   const _fetch = self.fetch
   const setWasmUrl = (wasmUrl: string): void => {
     if ((WebAssembly as any).instantiateStreaming) {
@@ -695,15 +552,7 @@ self.init = async (data: any): Promise<void> => {
     postMessage({ target: 'verifyColorSpace', subtitleColorSpace })
   }
 
-  loadWasm(data.wasmUrl)
-    .then(onWasmLoaded)
-    .catch((e) => {
-      if (data.fallbackWasmUrl && data.fallbackWasmUrl !== data.wasmUrl) {
-        console.warn('Failed to load selected WASM, falling back', e)
-        return loadWasm(data.fallbackWasmUrl).then(onWasmLoaded)
-      }
-      throw e
-    })
+  loadWasm(data.wasmUrl).then(onWasmLoaded)
 }
 
 // =============================================================================

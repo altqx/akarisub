@@ -38,10 +38,8 @@ export {
   parseAss,
   dropBlur,
   fixPlayRes,
-  testSIMD,
   testImageBugs,
   runFeatureTests,
-  getSIMDSupport,
   getAlphaBug,
   getBitmapBug,
   getColorSpaceFilterUrl

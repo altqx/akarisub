@@ -404,47 +404,8 @@ export function fixPlayRes(subContent: string): string {
 // Feature Detection
 // =============================================================================
 
-let _supportsSIMD: boolean | null = null
 let _hasAlphaBug: boolean | null = null
 let _hasBitmapBug: boolean | null = null
-
-/**
- * Test WASM SIMD support.
- */
-export async function testSIMD(): Promise<boolean> {
-  if (_supportsSIMD !== null) return _supportsSIMD
-
-  try {
-    if (typeof WebAssembly !== 'object' || typeof WebAssembly.validate !== 'function') {
-      _supportsSIMD = false
-      return false
-    }
-
-    const simdProbe = Uint8Array.of(
-      0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
-      0x01, 0x05, 0x01, 0x60, 0x00, 0x01, 0x7b, 0x03,
-      0x02, 0x01, 0x00, 0x0a, 0x16, 0x01, 0x14, 0x00,
-      0xfd, 0x0c, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-      0x00, 0x00, 0x0b
-    )
-
-    let supports = WebAssembly.validate(simdProbe)
-    if (supports) {
-      try {
-        await WebAssembly.compile(simdProbe)
-      } catch {
-        supports = false
-      }
-    }
-
-    _supportsSIMD = supports
-    return supports
-  } catch {
-    _supportsSIMD = false
-    return false
-  }
-}
 
 /**
  * Test for browser image bugs.
@@ -464,7 +425,6 @@ export async function testImageBugs(): Promise<{ hasAlphaBug: boolean; hasBitmap
       new ImageData(new Uint8ClampedArray([0, 0, 0, 0]), 1, 1)
     } catch {
       console.log('Detected that ImageData is not constructable despite browser saying so')
-      // Polyfill would go here if needed
     }
   }
 
@@ -516,20 +476,10 @@ export async function testImageBugs(): Promise<{ hasAlphaBug: boolean; hasBitmap
  * Run all feature detection tests.
  */
 export async function runFeatureTests(): Promise<{
-  supportsSIMD: boolean
   hasAlphaBug: boolean
   hasBitmapBug: boolean
 }> {
-  const [supportsSIMD, imageBugs] = await Promise.all([testSIMD(), testImageBugs()])
-  return {
-    supportsSIMD,
-    ...imageBugs
-  }
-}
-
-/** Get cached SIMD support value */
-export function getSIMDSupport(): boolean | null {
-  return _supportsSIMD
+  return testImageBugs()
 }
 
 /** Get cached alpha bug value */

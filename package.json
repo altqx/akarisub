@@ -25,13 +25,11 @@
     "src/ts"
   ],
   "scripts": {
-    "build:wasm": "make workers",
+    "build:wasm": "make worker",
     "build:ts": "tsc",
     "build:bundle": "bun --bun vite.build.js",
     "build": "bun run build:wasm && bun run build:ts && bun run build:bundle",
-    "typecheck": "tsc --noEmit",
-    "docker:build": "docker build -t thaunknown/jassub-build .",
-    "docker:run": "docker run -it --rm -v ${PWD}:/code --name thaunknown_jassub-build thaunknown/jassub-build:latest"
+    "typecheck": "tsc --noEmit"
   },
   "repository": {
     "type": "git",
@@ -52,9 +50,6 @@
     "url": "https://github.com/ThaUnknown/jassub/issues"
   },
   "homepage": "https://github.com/ThaUnknown/jassub",
-  "dependencies": {
-    "rvfc-polyfill": "^1.0.7"
-  },
   "devDependencies": {
     "@types/emscripten": "^1.41.5",
     "terser": "^5.44.1",
