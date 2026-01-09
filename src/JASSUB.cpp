@@ -761,9 +761,16 @@ public:
       int img_right = curx_abs + curw - 1;
       int img_bottom = cury_abs + curh - 1;
       
-      // Only render images that are fully contained within this render region
-      if (curx_abs < rect.min_x || img_right > rect.max_x ||
-          cury_abs < rect.min_y || img_bottom > rect.max_y)
+      // Skip images that don't intersect with the render region at all
+      if (curx_abs > rect.max_x || img_right < rect.min_x ||
+          cury_abs > rect.max_y || img_bottom < rect.min_y)
+        continue;
+      
+      // Only render this image if its CENTER falls within this region
+      int center_x = curx_abs + (curw >> 1);
+      int center_y = cury_abs + (curh >> 1);
+      if (center_x < rect.min_x || center_x > rect.max_x ||
+          center_y < rect.min_y || center_y > rect.max_y)
         continue;
       
       int a = (255 - (cur->color & 0xFF));
@@ -771,7 +778,19 @@ public:
         continue; // skip transparent images
 
       int curs = (cur->stride >= curw) ? cur->stride : curw;
-      int curx = curx_abs - rect.min_x, cury = cury_abs - rect.min_y;
+      
+      // Clip coordinates to region bounds
+      int render_left = MAX(curx_abs, rect.min_x);
+      int render_top = MAX(cury_abs, rect.min_y);
+      int render_right = MIN(img_right, rect.max_x);
+      int render_bottom = MIN(img_bottom, rect.max_y);
+      
+      int src_x_off = render_left - curx_abs;
+      int src_y_off = render_top - cury_abs;
+      int dst_x = render_left - rect.min_x;
+      int dst_y = render_top - rect.min_y;
+      int render_w = render_right - render_left + 1;
+      int render_h = render_bottom - render_top + 1;
 
       unsigned char *bitmap = cur->bitmap;
       
@@ -782,11 +801,11 @@ public:
       float b_val = ((cur->color >> 8) & 0xFF) * INV_255;
       float a_factor = normalized_a * INV_255;
 
-      for (int y = 0; y < curh; y++) {
-        int buf_line_start = (cury + y) * width + curx;
-        unsigned char *bitmap_row = bitmap + y * curs;
+      for (int y = 0; y < render_h; y++) {
+        int buf_line_start = (dst_y + y) * width + dst_x;
+        unsigned char *bitmap_row = bitmap + (src_y_off + y) * curs + src_x_off;
         
-        for (int x = 0; x < curw; x++) {
+        for (int x = 0; x < render_w; x++) {
           unsigned char mask = bitmap_row[x];
           if (mask == 0) continue; // Early exit for transparent pixels
           
