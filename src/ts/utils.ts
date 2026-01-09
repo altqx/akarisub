@@ -139,11 +139,25 @@ export function getVideoPosition(
  * Fix alpha bug in some browsers (transparent pixels rendered as non-black).
  */
 export function fixAlpha(uint8: Uint8ClampedArray, hasAlphaBug: boolean): Uint8ClampedArray {
-  if (hasAlphaBug) {
-    for (let j = 3; j < uint8.length; j += 4) {
-      uint8[j] = uint8[j] > 1 ? uint8[j] : 1
-    }
+  if (!hasAlphaBug) return uint8
+  
+  const len = uint8.length
+  const len4 = len - (len % 16) // Process 4 pixels at a time (16 bytes)
+  
+  // Unrolled loop for 4 pixels at a time
+  let j = 3
+  for (; j < len4; j += 16) {
+    if (uint8[j] < 2) uint8[j] = 1
+    if (uint8[j + 4] < 2) uint8[j + 4] = 1
+    if (uint8[j + 8] < 2) uint8[j + 8] = 1
+    if (uint8[j + 12] < 2) uint8[j + 12] = 1
   }
+  
+  // Handle remaining pixels
+  for (; j < len; j += 4) {
+    if (uint8[j] < 2) uint8[j] = 1
+  }
+  
   return uint8
 }
 
@@ -170,62 +184,74 @@ interface ASSBodyEntry {
 export function parseAss(content: string, stopAtEvents: boolean = false): ASSSection[] {
   const sections: ASSSection[] = []
   const lines = content.split(/[\r\n]+/g)
+  const lineCount = lines.length
   let format: string[] | null = null
+  let currentSection: ASSSection | null = null
 
-  for (let i = 0; i < lines.length; i++) {
-    const m = lines[i].match(/^\[(.*)\]$/)
-    if (m) {
-      // Early termination for font detection performance
-      if (stopAtEvents && m[1].toLowerCase() === 'events') {
-        break
+  for (let i = 0; i < lineCount; i++) {
+    const line = lines[i]
+    if (!line || /^\s*$/.test(line)) continue
+    
+    const firstChar = line[0]
+    
+    if (firstChar === '[') {
+      const m = line.match(/^\[(.*)\]$/)
+      if (m) {
+        // Early termination for font detection performance
+        if (stopAtEvents && m[1].toLowerCase() === 'events') {
+          break
+        }
+        format = null
+        currentSection = { name: m[1], body: [] }
+        sections.push(currentSection)
+        continue
       }
-      format = null
-      sections.push({
-        name: m[1],
-        body: []
+    }
+    
+    if (!currentSection) continue
+
+    if (firstChar === ';') {
+      currentSection.body.push({
+        type: 'comment',
+        value: line.substring(1)
       })
     } else {
-      if (/^\s*$/.test(lines[i])) continue
-      if (sections.length === 0) continue
+      const colonIdx = line.indexOf(':')
+      if (colonIdx === -1) continue
+      
+      const key = line.substring(0, colonIdx)
+      let value: string | string[] | Record<string, string> = line.substring(colonIdx + 1).trim()
 
-      const body = sections[sections.length - 1].body
-
-      if (lines[i][0] === ';') {
-        body.push({
-          type: 'comment',
-          value: lines[i].substring(1)
-        })
-      } else {
-        const parts = lines[i].split(':')
-        const key = parts[0]
-        let value: string | string[] | Record<string, string> = parts.slice(1).join(':').trim()
-
-        if (format || key === 'Format') {
-          let valueArr = value.split(',')
-          if (format && valueArr.length > format.length) {
-            const lastPart = valueArr.slice(format.length - 1).join(',')
-            valueArr = valueArr.slice(0, format.length - 1)
-            valueArr.push(lastPart)
-          }
-          valueArr = valueArr.map((s) => s.trim())
-
-          if (format) {
-            const tmp: Record<string, string> = {}
-            for (let j = 0; j < valueArr.length; j++) {
-              tmp[format[j]] = valueArr[j]
-            }
-            value = tmp
-          } else {
-            value = valueArr
-          }
+      if (format || key === 'Format') {
+        let valueArr = value.split(',')
+        if (format && valueArr.length > format.length) {
+          const lastPart = valueArr.slice(format.length - 1).join(',')
+          valueArr = valueArr.slice(0, format.length - 1)
+          valueArr.push(lastPart)
+        }
+        
+        const arrLen = valueArr.length
+        for (let j = 0; j < arrLen; j++) {
+          valueArr[j] = valueArr[j].trim()
         }
 
-        if (key === 'Format') {
-          format = value as string[]
+        if (format) {
+          const tmp: Record<string, string> = {}
+          const formatLen = Math.min(format.length, arrLen)
+          for (let j = 0; j < formatLen; j++) {
+            tmp[format[j]] = valueArr[j]
+          }
+          value = tmp
+        } else {
+          value = valueArr
         }
-
-        body.push({ key, value })
       }
+
+      if (key === 'Format') {
+        format = value as string[]
+      }
+
+      currentSection.body.push({ key, value })
     }
   }
 

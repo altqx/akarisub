@@ -102,6 +102,34 @@ let dropAllBlur = false
 let _malloc: (size: number) => number
 let hasBitmapBug = false
 
+// Pre-allocated object pool for render results
+const MAX_POOLED_IMAGES = 128
+const imagePool: RenderResultItem[] = new Array(MAX_POOLED_IMAGES)
+let poolInitialized = false
+
+interface RenderResultItem {
+  w: number
+  h: number
+  x: number
+  y: number
+  image: number | ImageBitmap | ArrayBuffer
+}
+
+const initPool = (): void => {
+  if (poolInitialized) return
+  for (let i = 0; i < MAX_POOLED_IMAGES; i++) {
+    imagePool[i] = { w: 0, h: 0, x: 0, y: 0, image: 0 }
+  }
+  poolInitialized = true
+}
+
+const getPooledItem = (index: number): RenderResultItem => {
+  if (index < MAX_POOLED_IMAGES) {
+    return imagePool[index]
+  }
+  return { w: 0, h: 0, x: 0, y: 0, image: 0 }
+}
+
 // =============================================================================
 // Font Management
 // =============================================================================
@@ -276,14 +304,6 @@ const setIsPaused = (isPaused: boolean): void => {
 // Rendering
 // =============================================================================
 
-interface RenderResultItem {
-  w: number
-  h: number
-  x: number
-  y: number
-  image: number | ImageBitmap | ArrayBuffer
-}
-
 interface RenderTimes {
   WASMRenderTime?: number
   WASMBitmapDecodeTime?: number
@@ -293,6 +313,8 @@ interface RenderTimes {
 }
 
 const render = (time: number, force?: boolean | number): void => {
+  initPool() // Ensure pool is ready
+  
   const times: RenderTimes = {}
   const renderStartTime = performance.now()
   metrics.renderStartTime = renderStartTime
@@ -332,54 +354,65 @@ const render = (time: number, force?: boolean | number): void => {
   }
 
   if (jassubObj!.changed !== 0 || force) {
-    const images: RenderResultItem[] = []
+    const imageCount = jassubObj!.count
+    const images: RenderResultItem[] = new Array(imageCount)
     const buffers: ArrayBuffer[] = []
 
-    if (!renderResult) return paintImages({ images, buffers, times })
+    if (!renderResult) return paintImages({ images: [], buffers, times })
 
     if (asyncRender) {
-      const promises: Promise<ImageBitmap>[] = []
+      const promises: Promise<ImageBitmap>[] = new Array(imageCount)
       let result = renderResult
-      for (let i = 0; i < jassubObj!.count; result = result.next!, ++i) {
-        const reassigned: RenderResultItem = {
-          w: result.w,
-          h: result.h,
-          x: result.x,
-          y: result.y,
-          image: 0
-        }
+      
+      for (let i = 0; i < imageCount; result = result.next!, ++i) {
+        const item = getPooledItem(i)
+        item.w = result.w
+        item.h = result.h
+        item.x = result.x
+        item.y = result.y
+        item.image = 0
+        
         const pointer = result.image
+        const byteLength = item.w * item.h * 4
+        
+        // Avoid slice when possible
         const rawData = hasBitmapBug
-          ? self.HEAPU8C.slice(pointer, pointer + reassigned.w * reassigned.h * 4)
-          : self.HEAPU8C.subarray(pointer, pointer + reassigned.w * reassigned.h * 4)
-        const data = new Uint8ClampedArray(rawData.buffer, rawData.byteOffset, rawData.byteLength)
-        promises.push(createImageBitmap(new ImageData(data as Uint8ClampedArray<ArrayBuffer>, reassigned.w, reassigned.h)))
-        images.push(reassigned)
+          ? self.HEAPU8C.slice(pointer, pointer + byteLength)
+          : self.HEAPU8C.subarray(pointer, pointer + byteLength)
+        
+        promises[i] = createImageBitmap(
+          new ImageData(
+            new Uint8ClampedArray(rawData.buffer, rawData.byteOffset, rawData.byteLength) as Uint8ClampedArray<ArrayBuffer>,
+            item.w,
+            item.h
+          )
+        )
+        images[i] = item
       }
 
       Promise.all(promises).then((bitmaps) => {
-        for (let i = 0; i < images.length; i++) {
+        for (let i = 0; i < imageCount; i++) {
           images[i].image = bitmaps[i]
         }
         if (debug) times.JSBitmapGenerationTime = Date.now() - (times.JSRenderTime || 0)
         paintImages({ images, buffers: bitmaps, times })
       })
     } else {
-      let image = renderResult
-      for (let i = 0; i < jassubObj!.count; image = image.next!, ++i) {
-        const reassigned: RenderResultItem = {
-          w: image.w,
-          h: image.h,
-          x: image.x,
-          y: image.y,
-          image: image.image
-        }
+      let result = renderResult
+      for (let i = 0; i < imageCount; result = result.next!, ++i) {
+        const item = getPooledItem(i)
+        item.w = result.w
+        item.h = result.h
+        item.x = result.x
+        item.y = result.y
+        item.image = result.image
+        
         if (!offCanvasCtx) {
-          const buf = self.wasmMemory.buffer.slice(image.image, image.image + image.w * image.h * 4)
+          const buf = self.wasmMemory.buffer.slice(result.image, result.image + result.w * result.h * 4)
           buffers.push(buf)
-          reassigned.image = buf
+          item.image = buf
         }
-        images.push(reassigned)
+        images[i] = item
       }
       paintImages({ images, buffers, times })
     }
@@ -403,47 +436,73 @@ const renderLoop = (force?: boolean | number): void => {
 
 const paintImages = ({ times, images, buffers }: { times: RenderTimes; images: RenderResultItem[]; buffers: (ArrayBuffer | ImageBitmap)[] }): void => {
   metrics.pendingRenders--
+  
+  const width = self.width
+  const height = self.height
+  const imageCount = images.length
 
   const resultObject = {
     target: 'render',
     asyncRender,
     images,
     times,
-    width: self.width,
-    height: self.height,
+    width,
+    height,
     colorSpace: subtitleColorSpace
   }
 
   if (offscreenRender) {
-    if (offCanvas!.height !== self.height || offCanvas!.width !== self.width) {
-      offCanvas!.width = self.width
-      offCanvas!.height = self.height
+    // Only resize canvas when dimensions actually change
+    if (offCanvas!.height !== height || offCanvas!.width !== width) {
+      offCanvas!.width = width
+      offCanvas!.height = height
     }
-    offCanvasCtx!.clearRect(0, 0, self.width, self.height)
+    offCanvasCtx!.clearRect(0, 0, width, height)
 
-    for (const image of images) {
-      if (image.image) {
-        if (asyncRender) {
-          offCanvasCtx!.drawImage(image.image as ImageBitmap, image.x, image.y)
-          ;(image.image as ImageBitmap).close()
-        } else {
-          bufferCanvas!.width = image.w
-          bufferCanvas!.height = image.h
-          const rawData = self.HEAPU8C.subarray(image.image as number, (image.image as number) + image.w * image.h * 4)
-          const data = new Uint8ClampedArray(rawData.buffer, rawData.byteOffset, rawData.byteLength)
+    if (asyncRender) {
+      // Batch draw all images
+      for (let i = 0; i < imageCount; i++) {
+        const img = images[i]
+        if (img.image) {
+          offCanvasCtx!.drawImage(img.image as ImageBitmap, img.x, img.y)
+          ;(img.image as ImageBitmap).close()
+        }
+      }
+    } else {
+      // Non-async path with buffer canvas
+      for (let i = 0; i < imageCount; i++) {
+        const img = images[i]
+        if (img.image) {
+          const imgW = img.w
+          const imgH = img.h
+          
+          // Only resize buffer canvas when needed
+          if (bufferCanvas!.width !== imgW || bufferCanvas!.height !== imgH) {
+            bufferCanvas!.width = imgW
+            bufferCanvas!.height = imgH
+          }
+          
+          const pointer = img.image as number
+          const byteLength = imgW * imgH * 4
+          const rawData = self.HEAPU8C.subarray(pointer, pointer + byteLength)
+          
           bufferCtx!.putImageData(
-            new ImageData(data as Uint8ClampedArray<ArrayBuffer>, image.w, image.h),
+            new ImageData(
+              new Uint8ClampedArray(rawData.buffer, rawData.byteOffset, rawData.byteLength) as Uint8ClampedArray<ArrayBuffer>,
+              imgW,
+              imgH
+            ),
             0,
             0
           )
-          offCanvasCtx!.drawImage(bufferCanvas!, image.x, image.y)
+          offCanvasCtx!.drawImage(bufferCanvas!, img.x, img.y)
         }
       }
     }
 
     if (offscreenRender === 'hybrid') {
-      if (!images.length) return postMessage(resultObject)
-      if (debug) times.bitmaps = images.length
+      if (!imageCount) return postMessage(resultObject)
+      if (debug) times.bitmaps = imageCount
       try {
         const bitmap = offCanvas!.transferToImageBitmap()
         const result = {
@@ -460,7 +519,7 @@ const paintImages = ({ times, images, buffers }: { times: RenderTimes; images: R
         times.JSRenderTime = Date.now() - (times.JSRenderTime || 0) - (times.JSBitmapGenerationTime || 0)
         let total = 0
         for (const key in times) total += (times as any)[key] || 0
-        console.log('Bitmaps: ' + images.length + ' Total: ' + (total | 0) + 'ms', times)
+        console.log('Bitmaps: ' + imageCount + ' Total: ' + (total | 0) + 'ms', times)
       }
       postMessage({ target: 'unbusy' })
     }

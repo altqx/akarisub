@@ -85,6 +85,10 @@ export default class JASSUB extends EventTarget {
   private _preferWebGPU: boolean = true
   private _onWebGPUFallback?: () => void
 
+  // Cached render data to reduce allocations
+  private _lastRenderWidth: number = 0
+  private _lastRenderHeight: number = 0
+
   // Public properties
   public timeOffset: number
   public debug: boolean
@@ -779,17 +783,24 @@ export default class JASSUB extends EventTarget {
   }): void {
     this._unbusy()
 
+    const dataWidth = data.width
+    const dataHeight = data.height
+
     if (this.debug) {
       data.times.IPCTime = Date.now() - (data.times.JSRenderTime || 0)
     }
 
-    if (this._canvasctrl.width !== data.width || this._canvasctrl.height !== data.height) {
-      this._canvasctrl.width = data.width
-      this._canvasctrl.height = data.height
+    // Check if canvas size changed
+    const sizeChanged = this._canvasctrl.width !== dataWidth || this._canvasctrl.height !== dataHeight
+    if (sizeChanged) {
+      this._canvasctrl.width = dataWidth
+      this._canvasctrl.height = dataHeight
+      this._lastRenderWidth = dataWidth
+      this._lastRenderHeight = dataHeight
 
       // Update WebGPU renderer size if using WebGPU
       if (this._useWebGPU && this._webgpuRenderer) {
-        this._webgpuRenderer.updateSize(data.width, data.height)
+        this._webgpuRenderer.updateSize(dataWidth, dataHeight)
       }
 
       this._verifyColorSpace({ subtitleColorSpace: data.colorSpace })
@@ -803,24 +814,47 @@ export default class JASSUB extends EventTarget {
 
     if (!this._ctx) return
 
-    this._ctx.clearRect(0, 0, this._canvasctrl.width, this._canvasctrl.height)
+    const ctx = this._ctx
+    const images = data.images
+    const imageCount = images.length
 
-    for (const image of data.images) {
-      if (image.image) {
-        if (data.asyncRender) {
-          this._ctx.drawImage(image.image as ImageBitmap, image.x, image.y)
+    ctx.clearRect(0, 0, dataWidth, dataHeight)
+
+    if (data.asyncRender) {
+      // Fast path for ImageBitmap - batch drawImage calls
+      for (let i = 0; i < imageCount; i++) {
+        const image = images[i]
+        if (image.image) {
+          ctx.drawImage(image.image as ImageBitmap, image.x, image.y)
           ;(image.image as ImageBitmap).close()
-        } else {
-          this._bufferCanvas.width = image.w
-          this._bufferCanvas.height = image.h
+        }
+      }
+    } else {
+      // Non-async path with buffer canvas
+      const bufferCanvas = this._bufferCanvas
+      const bufferCtx = this._bufferCtx
+      const hasAlphaBug = JASSUB._hasAlphaBug ?? false
+      
+      for (let i = 0; i < imageCount; i++) {
+        const image = images[i]
+        if (image.image) {
+          const imgW = image.w
+          const imgH = image.h
+          
+          // Only resize when necessary
+          if (bufferCanvas.width !== imgW || bufferCanvas.height !== imgH) {
+            bufferCanvas.width = imgW
+            bufferCanvas.height = imgH
+          }
+          
           const rawData = new Uint8ClampedArray(image.image as ArrayBuffer)
-          const fixedData = fixAlpha(rawData, JASSUB._hasAlphaBug ?? false)
-          this._bufferCtx.putImageData(
-            new ImageData(fixedData as Uint8ClampedArray<ArrayBuffer>, image.w, image.h),
+          const fixedData = fixAlpha(rawData, hasAlphaBug)
+          bufferCtx.putImageData(
+            new ImageData(fixedData as Uint8ClampedArray<ArrayBuffer>, imgW, imgH),
             0,
             0
           )
-          this._ctx.drawImage(this._bufferCanvas, image.x, image.y)
+          ctx.drawImage(bufferCanvas, image.x, image.y)
         }
       }
     }
@@ -828,7 +862,7 @@ export default class JASSUB extends EventTarget {
     if (this.debug) {
       data.times.JSRenderTime = Date.now() - (data.times.JSRenderTime || 0) - (data.times.IPCTime || 0)
       let total = 0
-      const count = data.times.bitmaps || data.images.length
+      const count = data.times.bitmaps || imageCount
       delete data.times.bitmaps
 
       for (const key in data.times) {

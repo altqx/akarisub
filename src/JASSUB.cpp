@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <string>
+#include <algorithm>
 
 #include <emscripten.h>
 #include <emscripten/bind.h>
@@ -73,6 +74,8 @@ void msg_callback(int level, const char *fmt, va_list va, void *data) {
 
 const float MIN_UINT8_CAST = 0.9 / 255;
 const float MAX_UINT8_CAST = 255.9 / 255;
+const float INV_255 = 1.0f / 255.0f;
+const float INV_255_SQ = 1.0f / (255.0f * 255.0f);
 
 #define CLAMP_UINT8(value) ((value > MIN_UINT8_CAST) ? ((value < MAX_UINT8_CAST) ? (int)(value * 255) : 255) : 0)
 
@@ -407,15 +410,10 @@ public:
       event_index[i].end_ms = ev->Start + ev->Duration;
     }
     
-    for (int i = 1; i < event_index_size; i++) {
-      EventTimeEntry key = event_index[i];
-      int j = i - 1;
-      while (j >= 0 && event_index[j].start_ms > key.start_ms) {
-        event_index[j + 1] = event_index[j];
-        j--;
-      }
-      event_index[j + 1] = key;
-    }
+    std::sort(event_index, event_index + event_index_size, 
+      [](const EventTimeEntry &a, const EventTimeEntry &b) {
+        return a.start_ms < b.start_ms;
+      });
     
     event_index_valid = true;
     if (debug) {
@@ -528,7 +526,7 @@ public:
       if (alpha == 0.0) continue;
 
       unsigned int datasize = sizeof(uint32_t) * w * h;
-      size_t *data = (size_t *)rawbuffer;
+      uint32_t *data = (uint32_t *)rawbuffer;
       decodeBitmap(alpha, data, img, w, h);
       RenderResult *result = (RenderResult *)(rawbuffer + datasize);
       result->w = w;
@@ -551,15 +549,39 @@ public:
     return renderResult;
   }
 
-  void decodeBitmap(double alpha, size_t *data, ASS_Image *img, int w, int h) {
+  void decodeBitmap(double alpha, uint32_t *out, ASS_Image *img, int w, int h) {
     uint32_t color = ((img->color << 8) & 0xff0000) | ((img->color >> 8) & 0xff00) | ((img->color >> 24) & 0xff);
-    uint8_t *pos = img->bitmap;
-    uint32_t res = 0;
-    for (uint32_t y = 0; y < h; ++y, pos += img->stride) {
-      for (uint32_t z = 0; z < w; ++z, ++res) {
-        uint8_t mask = pos[z];
-        if (mask != 0)
-          data[res] = ((uint32_t)(alpha * mask) << 24) | color;
+    uint8_t *bitmap = img->bitmap;
+    int stride = img->stride;
+    
+    // Pre-compute alpha factor (avoid per-pixel double->float conversion)
+    float alpha_f = (float)alpha;
+    
+    // Process 4 pixels at a time when possible
+    int w4 = w & ~3;  // Round down to multiple of 4
+    
+    for (int y = 0; y < h; ++y) {
+      uint8_t *row = bitmap + y * stride;
+      int row_offset = y * w;
+      
+      // Unrolled loop for 4 pixels at a time
+      int x = 0;
+      for (; x < w4; x += 4) {
+        uint8_t m0 = row[x];
+        uint8_t m1 = row[x + 1];
+        uint8_t m2 = row[x + 2];
+        uint8_t m3 = row[x + 3];
+        
+        out[row_offset + x]     = m0 ? (((uint32_t)(alpha_f * m0)) << 24) | color : 0;
+        out[row_offset + x + 1] = m1 ? (((uint32_t)(alpha_f * m1)) << 24) | color : 0;
+        out[row_offset + x + 2] = m2 ? (((uint32_t)(alpha_f * m2)) << 24) | color : 0;
+        out[row_offset + x + 3] = m3 ? (((uint32_t)(alpha_f * m3)) << 24) | color : 0;
+      }
+      
+      // Handle remaining pixels
+      for (; x < w; ++x) {
+        uint8_t mask = row[x];
+        out[row_offset + x] = mask ? (((uint32_t)(alpha_f * mask)) << 24) | color : 0;
       }
     }
   }
@@ -730,41 +752,47 @@ public:
 
     // blend things in
     for (ASS_Image *cur = img; cur != NULL; cur = cur->next) {
-      if (cur->dst_x < rect.min_x || cur->dst_y < rect.min_y)
+      int curx_abs = cur->dst_x, cury_abs = cur->dst_y;
+      if (curx_abs < rect.min_x || cury_abs < rect.min_y)
         continue; // skip images not fully within render region
       int curw = cur->w, curh = cur->h;
-      if (curw == 0 || curh == 0 || cur->dst_x + curw - 1 > rect.max_x || cur->dst_y + curh - 1 > rect.max_y)
+      if (curw == 0 || curh == 0 || curx_abs + curw - 1 > rect.max_x || cury_abs + curh - 1 > rect.max_y)
         continue; // skip empty images or images outside render region
       int a = (255 - (cur->color & 0xFF));
       if (a == 0)
         continue; // skip transparent images
 
       int curs = (cur->stride >= curw) ? cur->stride : curw;
-      int curx = cur->dst_x - rect.min_x, cury = cur->dst_y - rect.min_y;
+      int curx = curx_abs - rect.min_x, cury = cury_abs - rect.min_y;
 
       unsigned char *bitmap = cur->bitmap;
-      float normalized_a = a / 255.0;
-      float r = ((cur->color >> 24) & 0xFF) / 255.0;
-      float g = ((cur->color >> 16) & 0xFF) / 255.0;
-      float b = ((cur->color >> 8) & 0xFF) / 255.0;
+      
+      // Pre-compute color components as floats
+      float normalized_a = a * INV_255;
+      float r = ((cur->color >> 24) & 0xFF) * INV_255;
+      float g = ((cur->color >> 16) & 0xFF) * INV_255;
+      float b_val = ((cur->color >> 8) & 0xFF) * INV_255;
+      float a_factor = normalized_a * INV_255;
 
-      int buf_line_coord = cury * width;
-      for (int y = 0, bitmap_offset = 0; y < curh; y++, bitmap_offset += curs, buf_line_coord += width) {
+      for (int y = 0; y < curh; y++) {
+        int buf_line_start = (cury + y) * width + curx;
+        unsigned char *bitmap_row = bitmap + y * curs;
+        
         for (int x = 0; x < curw; x++) {
-          float pix_alpha = bitmap[bitmap_offset + x] * normalized_a / 255.0;
-          float inv_alpha = 1.0 - pix_alpha;
+          unsigned char mask = bitmap_row[x];
+          if (mask == 0) continue; // Early exit for transparent pixels
+          
+          float pix_alpha = mask * a_factor;
+          float inv_alpha = 1.0f - pix_alpha;
 
-          int buf_coord = (buf_line_coord + curx + x) << 2;
-          float *buf_r = buf + buf_coord;
-          float *buf_g = buf + buf_coord + 1;
-          float *buf_b = buf + buf_coord + 2;
-          float *buf_a = buf + buf_coord + 3;
-
-          // do the compositing, pre-multiply image RGB with alpha for current pixel
-          *buf_a = pix_alpha + *buf_a * inv_alpha;
-          *buf_r = r * pix_alpha + *buf_r * inv_alpha;
-          *buf_g = g * pix_alpha + *buf_g * inv_alpha;
-          *buf_b = b * pix_alpha + *buf_b * inv_alpha;
+          int buf_idx = (buf_line_start + x) << 2;
+          
+          // Pre-multiply image RGB with alpha for current pixel
+          float old_a = buf[buf_idx + 3];
+          buf[buf_idx + 3] = pix_alpha + old_a * inv_alpha;
+          buf[buf_idx]     = r * pix_alpha + buf[buf_idx] * inv_alpha;
+          buf[buf_idx + 1] = g * pix_alpha + buf[buf_idx + 1] * inv_alpha;
+          buf[buf_idx + 2] = b_val * pix_alpha + buf[buf_idx + 2] * inv_alpha;
         }
       }
     }
@@ -800,23 +828,30 @@ public:
     }
     storage->taken = true;
 
-    // now build the result;
-    for (int y = 0, buf_line_coord = 0; y < height; y++, buf_line_coord += width) {
-      for (int x = 0; x < width; x++) {
-        unsigned int pixel = 0;
-        int buf_coord = (buf_line_coord + x) << 2;
-        float alpha = buf[buf_coord + 3];
-        if (alpha > MIN_UINT8_CAST) {
-          // need to un-multiply the result
-          float value = buf[buf_coord] / alpha;
-          pixel |= CLAMP_UINT8(value); // R
-          value = buf[buf_coord + 1] / alpha;
-          pixel |= CLAMP_UINT8(value) << 8; // G
-          value = buf[buf_coord + 2] / alpha;
-          pixel |= CLAMP_UINT8(value) << 16; // B
-          pixel |= CLAMP_UINT8(alpha) << 24; // A
-        }
-        result[buf_line_coord + x] = pixel;
+    // now build the result
+    int total_pixels = width * height;
+    for (int i = 0; i < total_pixels; i++) {
+      int buf_coord = i << 2;
+      float alpha = buf[buf_coord + 3];
+      
+      if (alpha > MIN_UINT8_CAST) {
+        // need to un-multiply the result
+        float inv_alpha = 1.0f / alpha;
+        
+        int r = (int)(buf[buf_coord] * inv_alpha * 255.0f + 0.5f);
+        int g = (int)(buf[buf_coord + 1] * inv_alpha * 255.0f + 0.5f);
+        int b_val = (int)(buf[buf_coord + 2] * inv_alpha * 255.0f + 0.5f);
+        int a = (int)(alpha * 255.0f + 0.5f);
+        
+        // Clamp values
+        r = r < 0 ? 0 : (r > 255 ? 255 : r);
+        g = g < 0 ? 0 : (g > 255 ? 255 : g);
+        b_val = b_val < 0 ? 0 : (b_val > 255 ? 255 : b_val);
+        a = a < 0 ? 0 : (a > 255 ? 255 : a);
+        
+        result[i] = r | (g << 8) | (b_val << 16) | (a << 24);
+      } else {
+        result[i] = 0;
       }
     }
 

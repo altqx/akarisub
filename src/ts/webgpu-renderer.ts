@@ -2,24 +2,29 @@
 
 import type { RenderImage } from './types'
 
+// Maximum images per batch
+const MAX_IMAGES_PER_BATCH = 512
+
 // WGSL Vertex Shader
 const VERTEX_SHADER = /* wgsl */ `
 struct VertexOutput {
   @builtin(position) position: vec4f,
-  @location(0) texCoord: vec2f,
+  @location(0) @interpolate(flat) instanceIndex: u32,
+  @location(1) @interpolate(flat) destXY: vec2f,
+  @location(2) @interpolate(flat) texSize: vec2f,
 }
 
 struct Uniforms {
   resolution: vec2f,
 }
 
-struct QuadData {
-  destRect: vec4f,   // x, y, w, h in pixels
-  texSize: vec4f,    // texW, texH, 0, 0
+struct ImageData {
+  destRect: vec4f,   // x, y, w, h
+  texInfo: vec4f,    // texW, texH, texIndex, 0
 }
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
-@group(0) @binding(1) var<storage, read> quadData: QuadData;
+@group(0) @binding(1) var<storage, read> imageData: array<ImageData>;
 
 // Quad vertices (two triangles)
 const QUAD_POSITIONS = array<vec2f, 6>(
@@ -32,51 +37,71 @@ const QUAD_POSITIONS = array<vec2f, 6>(
 );
 
 @vertex
-fn vertexMain(@builtin(vertex_index) vertexIndex: u32) -> VertexOutput {
+fn vertexMain(
+  @builtin(vertex_index) vertexIndex: u32,
+  @builtin(instance_index) instanceIndex: u32
+) -> VertexOutput {
   var output: VertexOutput;
-
+  
+  let data = imageData[instanceIndex];
   let quadPos = QUAD_POSITIONS[vertexIndex];
-  let wh = quadData.destRect.zw;
-
+  let wh = data.destRect.zw;
+  
   // Calculate pixel position
-  let pixelPos = quadData.destRect.xy + quadPos * wh;
-
+  let pixelPos = data.destRect.xy + quadPos * wh;
+  
   // Convert to clip space (-1 to 1)
   var clipPos = (pixelPos / uniforms.resolution) * 2.0 - 1.0;
-  clipPos.y = -clipPos.y;  // Flip Y for canvas coordinates
-
+  clipPos.y = -clipPos.y;
+  
   output.position = vec4f(clipPos, 0.0, 1.0);
-  output.texCoord = quadPos;
-
+  output.instanceIndex = instanceIndex;
+  output.destXY = data.destRect.xy;
+  output.texSize = data.texInfo.xy;
+  
   return output;
 }
 `
 
-// WGSL Fragment Shader - sample RGBA texture directly
+// WGSL Fragment Shader
 const FRAGMENT_SHADER = /* wgsl */ `
-@group(0) @binding(2) var texSampler: sampler;
-@group(0) @binding(3) var tex: texture_2d<f32>;
+@group(0) @binding(2) var texArray: texture_2d_array<f32>;
+
+struct ImageData {
+  destRect: vec4f,
+  texInfo: vec4f,
+}
+
+@group(0) @binding(1) var<storage, read> imageData: array<ImageData>;
 
 struct FragmentInput {
-  @location(0) texCoord: vec2f,
+  @builtin(position) fragCoord: vec4f,
+  @location(0) @interpolate(flat) instanceIndex: u32,
+  @location(1) @interpolate(flat) destXY: vec2f,
+  @location(2) @interpolate(flat) texSize: vec2f,
 }
 
 @fragment
 fn fragmentMain(input: FragmentInput) -> @location(0) vec4f {
-  // Sample RGBA texture
-  let color = textureSample(tex, texSampler, input.texCoord);
+  let data = imageData[input.instanceIndex];
+  let texIndex = u32(data.texInfo.z);
   
-  // Output with premultiplied alpha
+  // Calculate integer texel coordinates
+  let texCoord = vec2i(floor(input.fragCoord.xy - input.destXY));
+  
+  // Bounds check
+  let texSizeI = vec2i(input.texSize);
+  if (texCoord.x < 0 || texCoord.y < 0 || texCoord.x >= texSizeI.x || texCoord.y >= texSizeI.y) {
+    return vec4f(0.0);
+  }
+  
+  // Load from texture array
+  let color = textureLoad(texArray, texCoord, texIndex, 0);
+  
+  // Premultiplied alpha output
   return vec4f(color.rgb * color.a, color.a);
 }
 `
-
-interface TextureInfo {
-  texture: GPUTexture
-  view: GPUTextureView
-  width: number
-  height: number
-}
 
 /**
  * Check if WebGPU is supported in the current browser.
@@ -86,25 +111,41 @@ export function isWebGPUSupported(): boolean {
 }
 
 /**
- * WebGPU-based subtitle renderer for JASSUB.
- * Uploads RGBA bitmap data to GPU textures and renders textured quads.
+ * High-performance WebGPU subtitle renderer for JASSUB.
  */
 export class WebGPURenderer {
-  device: GPUDevice | null = null
-  context: GPUCanvasContext | null = null
-  pipeline: GPURenderPipeline | null = null
-  sampler: GPUSampler | null = null
-  bindGroupLayout: GPUBindGroupLayout | null = null
+  private device: GPUDevice | null = null
+  private context: GPUCanvasContext | null = null
+  private pipeline: GPURenderPipeline | null = null
+  private bindGroupLayout: GPUBindGroupLayout | null = null
 
-  // Uniform buffer for resolution
-  uniformBuffer: GPUBuffer | null = null
-
-  // Quad data buffers (one per image)
-  quadDataBuffers: GPUBuffer[] = []
-
-  // Textures for images
-  textures: TextureInfo[] = []
-  pendingDestroyTextures: GPUTexture[] = []
+  private uniformBuffer: GPUBuffer | null = null
+  private imageDataBuffer: GPUBuffer | null = null
+  
+  // Texture array for batched rendering
+  private textureArray: GPUTexture | null = null
+  private textureArrayView: GPUTextureView | null = null
+  private textureArraySize = 0
+  private textureArrayWidth = 0
+  private textureArrayHeight = 0
+  
+  private pendingDestroyTextures: GPUTexture[] = []
+  
+  // Pre-allocated typed arrays (reused every frame - ZERO allocations in hot path)
+  private readonly imageDataArray: Float32Array
+  private readonly resolutionArray = new Float32Array(2)
+  
+  // Reusable conversion buffer for RGBA->BGRA (grows as needed, never shrinks)
+  private conversionBuffer: Uint8Array | null = null
+  private conversionBufferSize = 0
+  
+  // Bind group (recreated only when texture array changes)
+  private bindGroup: GPUBindGroup | null = null
+  private bindGroupDirty = true
+  
+  // Track canvas size to avoid redundant updates
+  private lastCanvasWidth = 0
+  private lastCanvasHeight = 0
 
   format: GPUTextureFormat = 'bgra8unorm'
 
@@ -112,10 +153,11 @@ export class WebGPURenderer {
   private _initPromise: Promise<void> | null = null
   private _initialized = false
 
-  /**
-   * Initialize the WebGPU renderer.
-   * Returns a promise that resolves when initialization is complete.
-   */
+  constructor() {
+    // Pre-allocate buffer for max images (8 floats per image: destRect + texInfo)
+    this.imageDataArray = new Float32Array(MAX_IMAGES_PER_BATCH * 8)
+  }
+
   async init(): Promise<void> {
     if (this._initPromise) return this._initPromise
     this._initPromise = this._initDevice()
@@ -138,114 +180,140 @@ export class WebGPURenderer {
     this.device = await adapter.requestDevice()
     this.format = navigator.gpu.getPreferredCanvasFormat()
 
-    // Create shader modules
-    const vertexModule = this.device.createShaderModule({
-      code: VERTEX_SHADER
-    })
+    const vertexModule = this.device.createShaderModule({ code: VERTEX_SHADER })
+    const fragmentModule = this.device.createShaderModule({ code: FRAGMENT_SHADER })
 
-    const fragmentModule = this.device.createShaderModule({
-      code: FRAGMENT_SHADER
-    })
-
-    // Create sampler - use linear filtering for smooth scaling
-    this.sampler = this.device.createSampler({
-      magFilter: 'linear',
-      minFilter: 'linear',
-      addressModeU: 'clamp-to-edge',
-      addressModeV: 'clamp-to-edge'
-    })
-
-    // Create uniform buffer
     this.uniformBuffer = this.device.createBuffer({
-      size: 16, // vec2f resolution + padding
+      size: 16,
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
     })
 
-    // Create bind group layout
+    // Large storage buffer for all image data
+    this.imageDataBuffer = this.device.createBuffer({
+      size: MAX_IMAGES_PER_BATCH * 8 * 4,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
+    })
+
+    // Create initial texture array with reasonable defaults
+    this.createTextureArray(256, 256, 32)
+
     this.bindGroupLayout = this.device.createBindGroupLayout({
       entries: [
-        {
-          binding: 0,
-          visibility: GPUShaderStage.VERTEX,
-          buffer: { type: 'uniform' }
-        },
-        {
-          binding: 1,
-          visibility: GPUShaderStage.VERTEX,
-          buffer: { type: 'read-only-storage' }
-        },
-        {
-          binding: 2,
-          visibility: GPUShaderStage.FRAGMENT,
-          sampler: { type: 'filtering' }
-        },
-        {
-          binding: 3,
-          visibility: GPUShaderStage.FRAGMENT,
-          texture: { sampleType: 'float' }
-        }
+        { binding: 0, visibility: GPUShaderStage.VERTEX, buffer: { type: 'uniform' } },
+        { binding: 1, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: 'read-only-storage' } },
+        { binding: 2, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'unfilterable-float', viewDimension: '2d-array' } }
       ]
     })
 
-    // Create pipeline layout
     const pipelineLayout = this.device.createPipelineLayout({
       bindGroupLayouts: [this.bindGroupLayout]
     })
 
-    // Create render pipeline with alpha blending
     this.pipeline = this.device.createRenderPipeline({
       layout: pipelineLayout,
-      vertex: {
-        module: vertexModule,
-        entryPoint: 'vertexMain'
-      },
+      vertex: { module: vertexModule, entryPoint: 'vertexMain' },
       fragment: {
         module: fragmentModule,
         entryPoint: 'fragmentMain',
-        targets: [
-          {
-            format: this.format,
-            blend: {
-              color: {
-                srcFactor: 'one',
-                dstFactor: 'one-minus-src-alpha',
-                operation: 'add'
-              },
-              alpha: {
-                srcFactor: 'one',
-                dstFactor: 'one-minus-src-alpha',
-                operation: 'add'
-              }
-            }
+        targets: [{
+          format: this.format,
+          blend: {
+            color: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+            alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' }
           }
-        ]
+        }]
       },
-      primitive: {
-        topology: 'triangle-list'
-      }
+      primitive: { topology: 'triangle-list' }
     })
 
     this._initialized = true
   }
 
-  /**
-   * Configure the canvas for WebGPU rendering.
-   */
+  // Round up to next power of 2 for GPU-friendly sizes
+  private nextPowerOf2(n: number): number {
+    n--
+    n |= n >> 1
+    n |= n >> 2
+    n |= n >> 4
+    n |= n >> 8
+    n |= n >> 16
+    return n + 1
+  }
+
+  private createTextureArray(width: number, height: number, layers: number): void {
+    if (this.textureArray) {
+      this.pendingDestroyTextures.push(this.textureArray)
+    }
+
+    // Use power-of-2 dimensions for better GPU performance
+    const w = this.nextPowerOf2(Math.max(width, 64))
+    const h = this.nextPowerOf2(Math.max(height, 64))
+    const l = this.nextPowerOf2(Math.max(layers, 16))
+
+    this.textureArray = this.device!.createTexture({
+      size: [w, h, l],
+      format: this.format,
+      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT
+    })
+    this.textureArrayView = this.textureArray.createView({ dimension: '2d-array' })
+    this.textureArrayWidth = w
+    this.textureArrayHeight = h
+    this.textureArraySize = l
+    this.bindGroupDirty = true
+  }
+
+  private ensureTextureArray(maxWidth: number, maxHeight: number, count: number): boolean {
+    if (maxWidth <= this.textureArrayWidth && 
+        maxHeight <= this.textureArrayHeight && 
+        count <= this.textureArraySize) {
+      return false
+    }
+    
+    // Grow with some headroom to avoid frequent resizes
+    const newWidth = this.nextPowerOf2(Math.max(this.textureArrayWidth, maxWidth))
+    const newHeight = this.nextPowerOf2(Math.max(this.textureArrayHeight, maxHeight))
+    const newLayers = this.nextPowerOf2(Math.max(this.textureArraySize, count, count + 16))
+    
+    this.createTextureArray(newWidth, newHeight, newLayers)
+    return true
+  }
+
+  private updateBindGroup(): void {
+    if (!this.bindGroupDirty || !this.device || !this.bindGroupLayout) return
+
+    this.bindGroup = this.device.createBindGroup({
+      layout: this.bindGroupLayout,
+      entries: [
+        { binding: 0, resource: { buffer: this.uniformBuffer! } },
+        { binding: 1, resource: { buffer: this.imageDataBuffer! } },
+        { binding: 2, resource: this.textureArrayView! }
+      ]
+    })
+    this.bindGroupDirty = false
+  }
+
+  private ensureConversionBuffer(size: number): Uint8Array {
+    if (this.conversionBufferSize < size) {
+      // Grow with 50% headroom to reduce reallocations
+      this.conversionBufferSize = Math.max(size, (this.conversionBufferSize * 1.5) | 0, 65536)
+      this.conversionBuffer = new Uint8Array(this.conversionBufferSize)
+    }
+    return this.conversionBuffer!
+  }
+
   async setCanvas(canvas: HTMLCanvasElement, width: number, height: number): Promise<void> {
     await this.init()
 
-    if (!this.device) {
-      throw new Error('WebGPU device not initialized')
-    }
+    if (!this.device) throw new Error('WebGPU device not initialized')
+    if (width <= 0 || height <= 0) return
 
     this._canvas = canvas
+    canvas.width = width
+    canvas.height = height
 
-    // Get WebGPU context
     if (!this.context) {
       this.context = canvas.getContext('webgpu')
-      if (!this.context) {
-        throw new Error('Could not get WebGPU context')
-      }
+      if (!this.context) throw new Error('Could not get WebGPU context')
 
       this.context.configure({
         device: this.device,
@@ -254,342 +322,304 @@ export class WebGPURenderer {
       })
     }
 
-    // Update canvas size
-    canvas.width = width
-    canvas.height = height
-
-    // Update uniform buffer with resolution
-    this.device.queue.writeBuffer(this.uniformBuffer!, 0, new Float32Array([width, height]))
+    this.resolutionArray[0] = width
+    this.resolutionArray[1] = height
+    this.device.queue.writeBuffer(this.uniformBuffer!, 0, this.resolutionArray)
+    
+    this.lastCanvasWidth = width
+    this.lastCanvasHeight = height
   }
 
-  /**
-   * Update canvas dimensions.
-   */
   updateSize(width: number, height: number): void {
-    if (!this.device || !this._canvas) return
-
+    if (!this.device || !this._canvas || width <= 0 || height <= 0) return
+    if (width === this.lastCanvasWidth && height === this.lastCanvasHeight) return
+    
     this._canvas.width = width
     this._canvas.height = height
-
-    this.device.queue.writeBuffer(this.uniformBuffer!, 0, new Float32Array([width, height]))
-  }
-
-  private createTextureInfo(width: number, height: number): TextureInfo {
-    const texture = this.device!.createTexture({
-      size: [width, height],
-      format: this.format,
-      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT
-    })
-
-    return {
-      texture,
-      view: texture.createView(),
-      width,
-      height
-    }
+    this.resolutionArray[0] = width
+    this.resolutionArray[1] = height
+    this.device.queue.writeBuffer(this.uniformBuffer!, 0, this.resolutionArray)
+    
+    this.lastCanvasWidth = width
+    this.lastCanvasHeight = height
   }
 
   /**
-   * Render subtitle images to the canvas.
-   * @param images - Array of render images from JASSUB worker
-   * @param canvasWidth - Canvas width in pixels
-   * @param canvasHeight - Canvas height in pixels
-   * @param getImageData - Function to get raw RGBA data for an image (for non-async render)
+   * Render ImageBitmaps (async render mode)
    */
-  render(
-    images: RenderImage[],
-    canvasWidth: number,
-    canvasHeight: number,
-    getImageData?: (image: RenderImage) => Uint8ClampedArray | null
+  renderBitmaps(
+    images: { image: ImageBitmap; x: number; y: number }[],
+    _canvasWidth: number,
+    _canvasHeight: number
   ): void {
     if (!this.device || !this.context || !this.pipeline) return
-    if (images.length === 0) {
+    
+    const len = images.length
+    if (len === 0) {
       this.clear()
       return
     }
 
-    const commandEncoder = this.device.createCommandEncoder()
-    const textureView = this.context.getCurrentTexture().createView()
+    const currentTexture = this.context.getCurrentTexture()
+    if (currentTexture.width === 0 || currentTexture.height === 0) return
 
-    // Begin render pass with clear
+    // Single pass: find max dimensions and count valid images
+    let maxW = 0, maxH = 0, validCount = 0
+    for (let i = 0; i < len; i++) {
+      const { image } = images[i]
+      const w = image.width, h = image.height
+      if (w > 0 && h > 0) {
+        if (w > maxW) maxW = w
+        if (h > maxH) maxH = h
+        validCount++
+      }
+    }
+
+    if (validCount === 0) {
+      this.clear()
+      return
+    }
+
+    // Ensure texture array is large enough
+    this.ensureTextureArray(maxW, maxH, validCount)
+    this.updateBindGroup()
+
+    const device = this.device
+    const queue = device.queue
+    const textureArray = this.textureArray!
+    const imageDataArray = this.imageDataArray
+
+    // Upload all textures and fill image data in single loop
+    let texIndex = 0
+    for (let i = 0; i < len; i++) {
+      const img = images[i]
+      const bitmap = img.image
+      const w = bitmap.width, h = bitmap.height
+      if (w <= 0 || h <= 0) continue
+
+      // Copy to texture array layer
+      queue.copyExternalImageToTexture(
+        { source: bitmap, flipY: false },
+        { texture: textureArray, origin: [0, 0, texIndex], premultipliedAlpha: true },
+        { width: w, height: h }
+      )
+
+      // Fill pre-allocated array directly (no allocation!)
+      const offset = texIndex << 3 // * 8
+      imageDataArray[offset] = img.x
+      imageDataArray[offset + 1] = img.y
+      imageDataArray[offset + 2] = w
+      imageDataArray[offset + 3] = h
+      imageDataArray[offset + 4] = w
+      imageDataArray[offset + 5] = h
+      imageDataArray[offset + 6] = texIndex
+      // imageDataArray[offset + 7] = 0 // Already 0 from init
+
+      texIndex++
+    }
+
+    // Single buffer upload for all image data
+    queue.writeBuffer(this.imageDataBuffer!, 0, imageDataArray.buffer, 0, texIndex << 5) // * 32
+
+    const commandEncoder = device.createCommandEncoder()
     const renderPass = commandEncoder.beginRenderPass({
-      colorAttachments: [
-        {
-          view: textureView,
-          clearValue: { r: 0, g: 0, b: 0, a: 0 },
-          loadOp: 'clear',
-          storeOp: 'store'
-        }
-      ]
+      colorAttachments: [{
+        view: currentTexture.createView(),
+        clearValue: { r: 0, g: 0, b: 0, a: 0 },
+        loadOp: 'clear',
+        storeOp: 'store'
+      }]
     })
 
     renderPass.setPipeline(this.pipeline)
+    renderPass.setBindGroup(0, this.bindGroup!)
+    renderPass.draw(6, texIndex) // Single instanced draw!
+    renderPass.end()
 
-    // Grow buffers if needed
-    while (this.textures.length < images.length) {
-      this.textures.push(this.createTextureInfo(64, 64))
-    }
-    while (this.quadDataBuffers.length < images.length) {
-      this.quadDataBuffers.push(
-        this.device.createBuffer({
-          size: 32, // 2 x vec4f
-          usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
-        })
-      )
+    queue.submit([commandEncoder.finish()])
+    this.cleanupPendingTextures()
+  }
+
+  /**
+   * Render from raw ArrayBuffer data (non-async render mode)
+   */
+  render(
+    images: RenderImage[],
+    _canvasWidth: number,
+    _canvasHeight: number,
+    _getImageData?: (image: RenderImage) => Uint8ClampedArray | null
+  ): void {
+    if (!this.device || !this.context || !this.pipeline) return
+    
+    const len = images.length
+    if (len === 0) {
+      this.clear()
+      return
     }
 
-    // Render each image
-    for (let i = 0; i < images.length; i++) {
+    const currentTexture = this.context.getCurrentTexture()
+    if (currentTexture.width === 0 || currentTexture.height === 0) return
+
+    // Single pass: find max dimensions and count valid images
+    let maxW = 0, maxH = 0, validCount = 0
+    for (let i = 0; i < len; i++) {
+      const { w, h } = images[i]
+      if (w > 0 && h > 0) {
+        if (w > maxW) maxW = w
+        if (h > maxH) maxH = h
+        validCount++
+      }
+    }
+
+    if (validCount === 0) {
+      this.clear()
+      return
+    }
+
+    this.ensureTextureArray(maxW, maxH, validCount)
+    this.updateBindGroup()
+
+    const device = this.device
+    const queue = device.queue
+    const textureArray = this.textureArray!
+    const imageDataArray = this.imageDataArray
+    const isBGRA = this.format === 'bgra8unorm'
+
+    let texIndex = 0
+    for (let i = 0; i < len; i++) {
       const img = images[i]
-      const { w: width, h: height, x, y } = img
+      const w = img.w, h = img.h
+      if (w <= 0 || h <= 0) continue
 
-      if (width <= 0 || height <= 0) continue
-
-      let texInfo = this.textures[i]!
-
-      // Recreate texture if size changed
-      if (texInfo.width !== width || texInfo.height !== height) {
-        this.pendingDestroyTextures.push(texInfo.texture)
-        texInfo = this.createTextureInfo(width, height)
-        this.textures[i] = texInfo
+      // Upload texture data
+      const imgData = img.image
+      if (imgData instanceof ImageBitmap) {
+        queue.copyExternalImageToTexture(
+          { source: imgData, flipY: false },
+          { texture: textureArray, origin: [0, 0, texIndex], premultipliedAlpha: true },
+          { width: w, height: h }
+        )
+      } else if (imgData instanceof ArrayBuffer) {
+        this.uploadTextureData(texIndex, imgData, w, h, isBGRA)
       }
 
-      // Get RGBA data
-      let rgbaData: Uint8ClampedArray | Uint8Array | null = null
+      // Fill pre-allocated array
+      const offset = texIndex << 3
+      imageDataArray[offset] = img.x
+      imageDataArray[offset + 1] = img.y
+      imageDataArray[offset + 2] = w
+      imageDataArray[offset + 3] = h
+      imageDataArray[offset + 4] = w
+      imageDataArray[offset + 5] = h
+      imageDataArray[offset + 6] = texIndex
 
-      if (img.image instanceof ImageBitmap) {
-        // For async render with ImageBitmap, we need to extract the data
-        // This is less efficient but ensures compatibility
-        const tempCanvas = new OffscreenCanvas(width, height)
-        const tempCtx = tempCanvas.getContext('2d')
-        if (tempCtx) {
-          tempCtx.drawImage(img.image, 0, 0)
-          rgbaData = tempCtx.getImageData(0, 0, width, height).data
-        }
-      } else if (img.image instanceof ArrayBuffer) {
-        rgbaData = new Uint8ClampedArray(img.image)
-      } else if (typeof img.image === 'number' && getImageData) {
-        rgbaData = getImageData(img)
+      texIndex++
+    }
+
+    queue.writeBuffer(this.imageDataBuffer!, 0, imageDataArray.buffer, 0, texIndex << 5)
+
+    const commandEncoder = device.createCommandEncoder()
+    const renderPass = commandEncoder.beginRenderPass({
+      colorAttachments: [{
+        view: currentTexture.createView(),
+        clearValue: { r: 0, g: 0, b: 0, a: 0 },
+        loadOp: 'clear',
+        storeOp: 'store'
+      }]
+    })
+
+    renderPass.setPipeline(this.pipeline)
+    renderPass.setBindGroup(0, this.bindGroup!)
+    renderPass.draw(6, texIndex)
+    renderPass.end()
+
+    queue.submit([commandEncoder.finish()])
+    this.cleanupPendingTextures()
+  }
+
+  private uploadTextureData(layerIndex: number, rgbaBuffer: ArrayBuffer, width: number, height: number, swapRB: boolean): void {
+    const size = width * height * 4
+    
+    if (swapRB) {
+      // Use reusable conversion buffer
+      const uploadData = this.ensureConversionBuffer(size)
+      const src = new Uint8Array(rgbaBuffer)
+      
+      // Unrolled loop for better performance
+      for (let j = 0; j < size; j += 4) {
+        uploadData[j] = src[j + 2]     // B <- R
+        uploadData[j + 1] = src[j + 1] // G
+        uploadData[j + 2] = src[j]     // R <- B
+        uploadData[j + 3] = src[j + 3] // A
       }
-
-      if (!rgbaData) continue
-
-      // Convert RGBA to BGRA for WebGPU (if format is bgra8unorm)
-      let uploadData: Uint8Array
-      if (this.format === 'bgra8unorm') {
-        const bgraData = new Uint8Array(rgbaData.length)
-        for (let j = 0; j < rgbaData.length; j += 4) {
-          bgraData[j] = rgbaData[j + 2]     // B <- R
-          bgraData[j + 1] = rgbaData[j + 1] // G <- G
-          bgraData[j + 2] = rgbaData[j]     // R <- B
-          bgraData[j + 3] = rgbaData[j + 3] // A <- A
-        }
-        uploadData = bgraData
-      } else {
-        uploadData = new Uint8Array(rgbaData.buffer, rgbaData.byteOffset, rgbaData.byteLength)
-      }
-
-      // Upload pixel data to texture
-      this.device.queue.writeTexture(
-        { texture: texInfo.texture },
+      
+      this.device!.queue.writeTexture(
+        { texture: this.textureArray!, origin: [0, 0, layerIndex] },
         uploadData.buffer,
         { bytesPerRow: width * 4 },
         { width, height }
       )
-
-      // Update quad data buffer - position directly in canvas coordinates
-      const quadData = new Float32Array([
-        // destRect
-        x,
-        y,
-        width,
-        height,
-        // texSize
-        width,
-        height,
-        0,
-        0
-      ])
-
-      const quadBuffer = this.quadDataBuffers[i]!
-      this.device.queue.writeBuffer(quadBuffer, 0, quadData)
-
-      // Create bind group for this image
-      const bindGroup = this.device.createBindGroup({
-        layout: this.bindGroupLayout!,
-        entries: [
-          { binding: 0, resource: { buffer: this.uniformBuffer! } },
-          { binding: 1, resource: { buffer: quadBuffer } },
-          { binding: 2, resource: this.sampler! },
-          { binding: 3, resource: texInfo.view }
-        ]
-      })
-
-      renderPass.setBindGroup(0, bindGroup)
-      renderPass.draw(6) // 6 vertices for quad
-    }
-
-    renderPass.end()
-    this.device.queue.submit([commandEncoder.finish()])
-
-    // Destroy old textures after submit
-    for (const tex of this.pendingDestroyTextures) {
-      tex.destroy()
-    }
-    this.pendingDestroyTextures = []
-  }
-
-  /**
-   * Render using ImageBitmaps (async render mode).
-   */
-  renderBitmaps(
-    images: { image: ImageBitmap; x: number; y: number }[],
-    canvasWidth: number,
-    canvasHeight: number
-  ): void {
-    if (!this.device || !this.context || !this.pipeline) return
-    if (images.length === 0) {
-      this.clear()
-      return
-    }
-
-    const commandEncoder = this.device.createCommandEncoder()
-    const textureView = this.context.getCurrentTexture().createView()
-
-    // Begin render pass with clear
-    const renderPass = commandEncoder.beginRenderPass({
-      colorAttachments: [
-        {
-          view: textureView,
-          clearValue: { r: 0, g: 0, b: 0, a: 0 },
-          loadOp: 'clear',
-          storeOp: 'store'
-        }
-      ]
-    })
-
-    renderPass.setPipeline(this.pipeline)
-
-    // Grow buffers if needed
-    while (this.textures.length < images.length) {
-      this.textures.push(this.createTextureInfo(64, 64))
-    }
-    while (this.quadDataBuffers.length < images.length) {
-      this.quadDataBuffers.push(
-        this.device.createBuffer({
-          size: 32,
-          usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
-        })
-      )
-    }
-
-    for (let i = 0; i < images.length; i++) {
-      const { image, x, y } = images[i]
-      const width = image.width
-      const height = image.height
-
-      if (width <= 0 || height <= 0) continue
-
-      let texInfo = this.textures[i]!
-
-      // Recreate texture if size changed
-      if (texInfo.width !== width || texInfo.height !== height) {
-        this.pendingDestroyTextures.push(texInfo.texture)
-        texInfo = this.createTextureInfo(width, height)
-        this.textures[i] = texInfo
-      }
-
-      // Copy ImageBitmap to texture using copyExternalImageToTexture
-      this.device.queue.copyExternalImageToTexture(
-        { source: image, flipY: false },
-        { texture: texInfo.texture, premultipliedAlpha: true },
+    } else {
+      this.device!.queue.writeTexture(
+        { texture: this.textureArray!, origin: [0, 0, layerIndex] },
+        rgbaBuffer,
+        { bytesPerRow: width * 4 },
         { width, height }
       )
-
-      // Update quad data buffer
-      const quadData = new Float32Array([
-        x, y, width, height,
-        width, height, 0, 0
-      ])
-
-      const quadBuffer = this.quadDataBuffers[i]!
-      this.device.queue.writeBuffer(quadBuffer, 0, quadData)
-
-      // Create bind group
-      const bindGroup = this.device.createBindGroup({
-        layout: this.bindGroupLayout!,
-        entries: [
-          { binding: 0, resource: { buffer: this.uniformBuffer! } },
-          { binding: 1, resource: { buffer: quadBuffer } },
-          { binding: 2, resource: this.sampler! },
-          { binding: 3, resource: texInfo.view }
-        ]
-      })
-
-      renderPass.setBindGroup(0, bindGroup)
-      renderPass.draw(6)
     }
-
-    renderPass.end()
-    this.device.queue.submit([commandEncoder.finish()])
-
-    // Destroy old textures
-    for (const tex of this.pendingDestroyTextures) {
-      tex.destroy()
-    }
-    this.pendingDestroyTextures = []
   }
 
-  /**
-   * Clear the canvas.
-   */
+  private cleanupPendingTextures(): void {
+    const pending = this.pendingDestroyTextures
+    const len = pending.length
+    if (len === 0) return
+    
+    for (let i = 0; i < len; i++) {
+      pending[i].destroy()
+    }
+    pending.length = 0
+  }
+
   clear(): void {
     if (!this.device || !this.context) return
 
-    const commandEncoder = this.device.createCommandEncoder()
-    const textureView = this.context.getCurrentTexture().createView()
+    try {
+      const currentTexture = this.context.getCurrentTexture()
+      if (currentTexture.width === 0 || currentTexture.height === 0) return
 
-    const renderPass = commandEncoder.beginRenderPass({
-      colorAttachments: [
-        {
-          view: textureView,
+      const commandEncoder = this.device.createCommandEncoder()
+      const renderPass = commandEncoder.beginRenderPass({
+        colorAttachments: [{
+          view: currentTexture.createView(),
           clearValue: { r: 0, g: 0, b: 0, a: 0 },
           loadOp: 'clear',
           storeOp: 'store'
-        }
-      ]
-    })
-
-    renderPass.end()
-    this.device.queue.submit([commandEncoder.finish()])
+        }]
+      })
+      renderPass.end()
+      this.device.queue.submit([commandEncoder.finish()])
+    } catch {
+      // Ignore errors
+    }
   }
 
-  /**
-   * Check if renderer is initialized.
-   */
   get initialized(): boolean {
     return this._initialized
   }
 
-  /**
-   * Destroy all resources.
-   */
   destroy(): void {
-    for (const tex of this.textures) {
-      tex.texture.destroy()
-    }
-    this.textures = []
+    this.cleanupPendingTextures()
 
-    for (const tex of this.pendingDestroyTextures) {
-      tex.destroy()
-    }
-    this.pendingDestroyTextures = []
+    this.textureArray?.destroy()
+    this.textureArray = null
+    this.textureArrayView = null
 
     this.uniformBuffer?.destroy()
-    for (const buf of this.quadDataBuffers) {
-      buf.destroy()
-    }
-    this.quadDataBuffers = []
+    this.imageDataBuffer?.destroy()
+
+    this.bindGroup = null
+    this.conversionBuffer = null
+    this.conversionBufferSize = 0
 
     this.device?.destroy()
     this.device = null
