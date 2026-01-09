@@ -145,16 +145,16 @@ export default class JASSUB extends EventTarget {
     if (!bufferCtx) throw this.destroy(new Error('Canvas rendering not supported'))
     this._bufferCtx = bufferCtx
 
-    // Try WebGPU first if preferred
+    // Try WebGPU first if preferred (like libbitsub pattern)
     if (canUseWebGPU) {
       this._initWebGPU()
+    } else if (!this._offscreenRender) {
+      this._ctx = this._canvas.getContext('2d')
     }
 
     this._canvasctrl = this._offscreenRender
       ? (this._canvas as HTMLCanvasElement & { transferControlToOffscreen(): OffscreenCanvas }).transferControlToOffscreen()
       : this._canvas
-
-    this._ctx = !this._offscreenRender && !this._useWebGPU ? (this._canvasctrl as HTMLCanvasElement).getContext('2d') : null
 
     this._lastRenderTime = 0
     this.debug = !!options.debug
@@ -288,6 +288,8 @@ export default class JASSUB extends EventTarget {
       this._webgpuRenderer = new WebGPURenderer()
       await this._webgpuRenderer.init()
 
+      if (!this._canvas) return
+
       const width = Math.max(1, this._canvas.width || 1)
       const height = Math.max(1, this._canvas.height || 1)
 
@@ -299,6 +301,10 @@ export default class JASSUB extends EventTarget {
       this._webgpuRenderer?.destroy()
       this._webgpuRenderer = null
       this._useWebGPU = false
+      // Fall back to Canvas2D
+      if (!this._offscreenRender && !this._ctx) {
+        this._ctx = this._canvas.getContext('2d')
+      }
       this._onWebGPUFallback?.()
     }
   }

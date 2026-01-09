@@ -82,18 +82,18 @@ function X(n, e = !1) {
         const o = s[r].split(":"), u = o[0];
         let g = o.slice(1).join(":").trim();
         if (i || u === "Format") {
-          let d = g.split(",");
-          if (i && d.length > i.length) {
-            const v = d.slice(i.length - 1).join(",");
-            d = d.slice(0, i.length - 1), d.push(v);
+          let l = g.split(",");
+          if (i && l.length > i.length) {
+            const v = l.slice(i.length - 1).join(",");
+            l = l.slice(0, i.length - 1), l.push(v);
           }
-          if (d = d.map((v) => v.trim()), i) {
+          if (l = l.map((v) => v.trim()), i) {
             const v = {};
-            for (let f = 0; f < d.length; f++)
-              v[i[f]] = d[f];
+            for (let f = 0; f < l.length; f++)
+              v[i[f]] = l[f];
             g = v;
           } else
-            g = d;
+            g = l;
         }
         u === "Format" && (i = g), a.push({ key: u, value: g });
       }
@@ -130,7 +130,7 @@ function p(n, e) {
 function J(n) {
   const e = n.match(/PlayResX:\s*(\d+)/i), t = n.match(/PlayResY:\s*(\d+)/i), s = e ? parseInt(e[1], 10) : 1920, i = t ? parseInt(t[1], 10) : 1080, r = /\\pos\s*\(\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*\)/g, h = /\\move\s*\(\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)/g, a = /\\org\s*\(\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*\)/g, o = /\\i?clip\s*\(\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*\)/g;
   let u = 0, g = 0;
-  const d = (y, c, b) => {
+  const l = (y, c, b) => {
     let w;
     const P = new RegExp(y.source, "g");
     for (; (w = P.exec(n)) !== null; ) {
@@ -146,55 +146,55 @@ function J(n) {
         }
     }
   };
-  if (d(r, [1], [2]), d(h, [1, 3], [2, 4]), d(a, [1], [2]), d(o, [1, 3], [2, 4]), u <= s && g <= i) return n;
+  if (l(r, [1], [2]), l(h, [1, 3], [2, 4]), l(a, [1], [2]), l(o, [1, 3], [2, 4]), u <= s && g <= i) return n;
   const v = q(u, g), f = s / v.w, m = i / v.h, _ = Math.min(f, m), C = Math.max(f, m), M = 1;
   let F = n;
   const U = F.match(/(\[Events\][\s\S]*)/i);
   if (!U) return F;
-  let l = U[1];
-  return l = l.replace(
+  let d = U[1];
+  return d = d.replace(
     r,
     (y, c, b) => `\\pos(${p(parseFloat(c) * f, c)},${p(parseFloat(b) * m, b)})`
-  ), l = l.replace(
+  ), d = d.replace(
     /\\move\s*\(\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)(?:\s*,\s*(-?[\d.]+)\s*,\s*(-?[\d.]+))?\s*\)/g,
     (y, c, b, w, P, R, E) => {
       const S = `\\move(${p(parseFloat(c) * f, c)},${p(parseFloat(b) * m, b)},${p(parseFloat(w) * f, w)},${p(parseFloat(P) * m, P)}`;
       return R ? `${S},${R},${E})` : `${S})`;
     }
-  ), l = l.replace(
+  ), d = d.replace(
     a,
     (y, c, b) => `\\org(${p(parseFloat(c) * f, c)},${p(parseFloat(b) * m, b)})`
-  ), l = l.replace(
+  ), d = d.replace(
     /\\(i?clip)\s*\(\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*\)/g,
     (y, c, b, w, P, R) => `\\${c}(${p(parseFloat(b) * f, b)},${p(parseFloat(w) * m, w)},${p(parseFloat(P) * f, P)},${p(parseFloat(R) * m, R)})`
-  ), l = l.replace(
+  ), d = d.replace(
     /\\fs([\d.]+)/g,
     (y, c) => `\\fs${p(parseFloat(c) * C, c)}`
-  ), l = l.replace(
+  ), d = d.replace(
     /\\fscx([\d.]+)/g,
     (y, c) => `\\fscx${p(parseFloat(c) * M, c)}`
-  ), l = l.replace(
+  ), d = d.replace(
     /\\xbord([\d.]+)/g,
     (y, c) => `\\xbord${p(parseFloat(c) * f, c)}`
-  ), l = l.replace(
+  ), d = d.replace(
     /\\ybord([\d.]+)/g,
     (y, c) => `\\ybord${p(parseFloat(c) * m, c)}`
-  ), l = l.replace(
+  ), d = d.replace(
     /\\xshad(-?[\d.]+)/g,
     (y, c) => `\\xshad${p(parseFloat(c) * f, c)}`
-  ), l = l.replace(
+  ), d = d.replace(
     /\\yshad(-?[\d.]+)/g,
     (y, c) => `\\yshad${p(parseFloat(c) * m, c)}`
   ), ["fsp", "bord", "shad", "be", "blur"].forEach((y) => {
     const c = new RegExp(`\\\\${y}(-?[\\d.]+)`, "g");
-    l = l.replace(
+    d = d.replace(
       c,
       (b, w) => `\\${y}${p(parseFloat(w) * _, w)}`
     );
-  }), l = l.replace(
+  }), d = d.replace(
     /(\\i?clip\s*\([^,)]+m[^)]+\)|\\p[1-9][^}]*?)(?=[\\}]|$)/g,
     (y) => y.replace(/(-?[\d.]+)\s+(-?[\d.]+)/g, (c, b, w) => `${p(parseFloat(b) * f, b)} ${p(parseFloat(w) * m, w)}`)
-  ), F.substring(0, U.index) + l;
+  ), F.substring(0, U.index) + d;
 }
 let D = null, B = null;
 async function z() {
@@ -486,39 +486,39 @@ class N {
         })
       );
     for (let o = 0; o < e.length; o++) {
-      const u = e[o], { w: g, h: d, x: v, y: f } = u;
-      if (g <= 0 || d <= 0) continue;
+      const u = e[o], { w: g, h: l, x: v, y: f } = u;
+      if (g <= 0 || l <= 0) continue;
       let m = this.textures[o];
-      (m.width !== g || m.height !== d) && (this.pendingDestroyTextures.push(m.texture), m = this.createTextureInfo(g, d), this.textures[o] = m);
+      (m.width !== g || m.height !== l) && (this.pendingDestroyTextures.push(m.texture), m = this.createTextureInfo(g, l), this.textures[o] = m);
       let _ = null;
       if (u.image instanceof ImageBitmap) {
-        const x = new OffscreenCanvas(g, d).getContext("2d");
-        x && (x.drawImage(u.image, 0, 0), _ = x.getImageData(0, 0, g, d).data);
+        const x = new OffscreenCanvas(g, l).getContext("2d");
+        x && (x.drawImage(u.image, 0, 0), _ = x.getImageData(0, 0, g, l).data);
       } else u.image instanceof ArrayBuffer ? _ = new Uint8ClampedArray(u.image) : typeof u.image == "number" && i && (_ = i(u));
       if (!_) continue;
       let C;
       if (this.format === "bgra8unorm") {
-        const l = new Uint8Array(_.length);
+        const d = new Uint8Array(_.length);
         for (let x = 0; x < _.length; x += 4)
-          l[x] = _[x + 2], l[x + 1] = _[x + 1], l[x + 2] = _[x], l[x + 3] = _[x + 3];
-        C = l;
+          d[x] = _[x + 2], d[x + 1] = _[x + 1], d[x + 2] = _[x], d[x + 3] = _[x + 3];
+        C = d;
       } else
         C = new Uint8Array(_.buffer, _.byteOffset, _.byteLength);
       this.device.queue.writeTexture(
         { texture: m.texture },
         C.buffer,
         { bytesPerRow: g * 4 },
-        { width: g, height: d }
+        { width: g, height: l }
       );
       const M = new Float32Array([
         // destRect
         v,
         f,
         g,
-        d,
+        l,
         // texSize
         g,
-        d,
+        l,
         0,
         0
       ]), F = this.quadDataBuffers[o];
@@ -568,20 +568,20 @@ class N {
         })
       );
     for (let a = 0; a < e.length; a++) {
-      const { image: o, x: u, y: g } = e[a], d = o.width, v = o.height;
-      if (d <= 0 || v <= 0) continue;
+      const { image: o, x: u, y: g } = e[a], l = o.width, v = o.height;
+      if (l <= 0 || v <= 0) continue;
       let f = this.textures[a];
-      (f.width !== d || f.height !== v) && (this.pendingDestroyTextures.push(f.texture), f = this.createTextureInfo(d, v), this.textures[a] = f), this.device.queue.copyExternalImageToTexture(
+      (f.width !== l || f.height !== v) && (this.pendingDestroyTextures.push(f.texture), f = this.createTextureInfo(l, v), this.textures[a] = f), this.device.queue.copyExternalImageToTexture(
         { source: o, flipY: !1 },
         { texture: f.texture, premultipliedAlpha: !0 },
-        { width: d, height: v }
+        { width: l, height: v }
       );
       const m = new Float32Array([
         u,
         g,
-        d,
+        l,
         v,
-        d,
+        l,
         v,
         0,
         0
@@ -701,7 +701,7 @@ class T extends EventTarget {
     this._bufferCanvas = document.createElement("canvas");
     const i = this._bufferCanvas.getContext("2d");
     if (!i) throw this.destroy(new Error("Canvas rendering not supported"));
-    this._bufferCtx = i, s && this._initWebGPU(), this._canvasctrl = this._offscreenRender ? this._canvas.transferControlToOffscreen() : this._canvas, this._ctx = !this._offscreenRender && !this._useWebGPU ? this._canvasctrl.getContext("2d") : null, this._lastRenderTime = 0, this.debug = !!e.debug, this.prescaleFactor = e.prescaleFactor || 1, this.prescaleHeightLimit = e.prescaleHeightLimit || 1080, this.maxRenderHeight = e.maxRenderHeight || 0, this._boundResize = this.resize.bind(this), this._boundTimeUpdate = this._timeupdate.bind(this), this._boundSetRate = () => this.setRate(this._video.playbackRate), this._boundUpdateColorSpace = this._updateColorSpace.bind(this), this._video && this.setVideo(this._video), this._onDemandRender && (this.busy = !1, this._lastDemandTime = null), this._worker = new Worker(e.workerUrl || "jassub-worker.js"), this._worker.onmessage = (r) => this._onmessage(r), this._worker.onerror = (r) => this._error(r), t.then(() => {
+    this._bufferCtx = i, s ? this._initWebGPU() : this._offscreenRender || (this._ctx = this._canvas.getContext("2d")), this._canvasctrl = this._offscreenRender ? this._canvas.transferControlToOffscreen() : this._canvas, this._lastRenderTime = 0, this.debug = !!e.debug, this.prescaleFactor = e.prescaleFactor || 1, this.prescaleHeightLimit = e.prescaleHeightLimit || 1080, this.maxRenderHeight = e.maxRenderHeight || 0, this._boundResize = this.resize.bind(this), this._boundTimeUpdate = this._timeupdate.bind(this), this._boundSetRate = () => this.setRate(this._video.playbackRate), this._boundUpdateColorSpace = this._updateColorSpace.bind(this), this._video && this.setVideo(this._video), this._onDemandRender && (this.busy = !1, this._lastDemandTime = null), this._worker = new Worker(e.workerUrl || "jassub-worker.js"), this._worker.onmessage = (r) => this._onmessage(r), this._worker.onerror = (r) => this._error(r), t.then(() => {
       this._worker.postMessage({
         target: "init",
         wasmUrl: e.wasmUrl ?? "jassub-worker.wasm",
@@ -769,11 +769,11 @@ class T extends EventTarget {
   /** Initialize WebGPU renderer. */
   async _initWebGPU() {
     try {
-      this._webgpuRenderer = new N(), await this._webgpuRenderer.init();
+      if (this._webgpuRenderer = new N(), await this._webgpuRenderer.init(), !this._canvas) return;
       const e = Math.max(1, this._canvas.width || 1), t = Math.max(1, this._canvas.height || 1);
       await this._webgpuRenderer.setCanvas(this._canvas, e, t), this._useWebGPU = !0, console.log("[JASSUB] Using WebGPU renderer");
     } catch (e) {
-      console.warn("[JASSUB] WebGPU init failed, falling back to Canvas2D:", e), this._webgpuRenderer?.destroy(), this._webgpuRenderer = null, this._useWebGPU = !1, this._onWebGPUFallback?.();
+      console.warn("[JASSUB] WebGPU init failed, falling back to Canvas2D:", e), this._webgpuRenderer?.destroy(), this._webgpuRenderer = null, this._useWebGPU = !1, !this._offscreenRender && !this._ctx && (this._ctx = this._canvas.getContext("2d")), this._onWebGPUFallback?.();
     }
   }
   /** Check if WebGPU is being used */
