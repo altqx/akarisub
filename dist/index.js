@@ -718,7 +718,6 @@ class E extends EventTarget {
         onDemandRender: this._onDemandRender,
         width: this._canvasctrl.width || 0,
         height: this._canvasctrl.height || 0,
-        // Default to 'wasm' blendMode for better performance (composites in WASM, fewer images)
         blendMode: e.blendMode ?? "wasm",
         subUrl: e.subUrl,
         subContent: e.subContent || null,

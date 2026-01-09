@@ -753,11 +753,19 @@ public:
     // blend things in
     for (ASS_Image *cur = img; cur != NULL; cur = cur->next) {
       int curx_abs = cur->dst_x, cury_abs = cur->dst_y;
-      if (curx_abs < rect.min_x || cury_abs < rect.min_y)
-        continue; // skip images not fully within render region
       int curw = cur->w, curh = cur->h;
-      if (curw == 0 || curh == 0 || curx_abs + curw - 1 > rect.max_x || cury_abs + curh - 1 > rect.max_y)
-        continue; // skip empty images or images outside render region
+      if (curw == 0 || curh == 0)
+        continue; // skip empty images
+      
+      // Calculate image bounds
+      int img_right = curx_abs + curw - 1;
+      int img_bottom = cury_abs + curh - 1;
+      
+      // Only render images that are fully contained within this render region
+      if (curx_abs < rect.min_x || img_right > rect.max_x ||
+          cury_abs < rect.min_y || img_bottom > rect.max_y)
+        continue;
+      
       int a = (255 - (cur->color & 0xFF));
       if (a == 0)
         continue; // skip transparent images
