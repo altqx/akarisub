@@ -127,8 +127,26 @@ public:
              other.min_y > max_y || other.max_y < min_y);
   }
 
+  // Check intersection with margin - for blur overlap detection
+  bool intersetsWithMargin(const BoundingBox &other, int margin) const {
+    return !(other.min_x > max_x + margin || other.max_x < min_x - margin ||
+             other.min_y > max_y + margin || other.max_y < min_y - margin);
+  }
+
   bool tryMerge(BoundingBox &other) {
     if (!intersets(other))
+      return false;
+
+    min_x = MIN(min_x, other.min_x);
+    min_y = MIN(min_y, other.min_y);
+    max_x = MAX(max_x, other.max_x);
+    max_y = MAX(max_y, other.max_y);
+    return true;
+  }
+
+  // Merge with margin check - for blur overlap
+  bool tryMergeWithMargin(BoundingBox &other, int margin) {
+    if (!intersetsWithMargin(other, margin))
       return false;
 
     min_x = MIN(min_x, other.min_x);
@@ -688,10 +706,19 @@ public:
     // split rendering region in 9 pieces (as on 3x3 grid)
     int split_x_low = canvas_w / 3, split_x_high = 2 * canvas_w / 3;
     int split_y_low = canvas_h / 3, split_y_high = 2 * canvas_h / 3;
+
+    // First pass: determine which region each image belongs to based on center
+    // Store the region assignment to use for bounding box expansion
+    int region_assignments[1024];
+    int image_count = 0;
     BoundingBox boxes[MAX_BLEND_STORAGES];
+
     for (ASS_Image *cur = img; cur != NULL; cur = cur->next) {
-      if (cur->w == 0 || cur->h == 0)
-        continue; // skip empty images
+      if (cur->w == 0 || cur->h == 0) {
+        if (image_count < 1024)
+          region_assignments[image_count++] = -1;
+        continue;
+      }
       int index = 0;
       int middle_x = cur->dst_x + (cur->w >> 1),
           middle_y = cur->dst_y + (cur->h >> 1);
@@ -705,10 +732,27 @@ public:
       } else if (middle_x > split_x_low) {
         index += 1;
       }
+      if (image_count < 1024)
+        region_assignments[image_count++] = index;
+      // Mark region as having content (will expand bounds in second pass)
+      boxes[index].add(middle_x, middle_y, 1, 1);
+    }
+
+    // Second pass: expand bounding boxes to include full bounds of all images
+    // that will be rendered in each region (based on center-based assignment)
+    image_count = 0;
+    for (ASS_Image *cur = img; cur != NULL; cur = cur->next) {
+      if (image_count >= 1024)
+        break;
+      int index = region_assignments[image_count++];
+      if (index < 0 || cur->w == 0 || cur->h == 0)
+        continue;
+      // Expand the region's bounding box to fully include this image
       boxes[index].add(cur->dst_x, cur->dst_y, cur->w, cur->h);
     }
 
     // now merge regions as long as there are intersecting regions
+    const int BLUR_MERGE_MARGIN = 100;
     for (;;) {
       bool merged = false;
       for (int box1 = 0; box1 < MAX_BLEND_STORAGES - 1; box1++) {
@@ -717,7 +761,7 @@ public:
         for (int box2 = box1 + 1; box2 < MAX_BLEND_STORAGES; box2++) {
           if (boxes[box2].empty())
             continue;
-          if (boxes[box1].tryMerge(boxes[box2])) {
+          if (boxes[box1].tryMergeWithMargin(boxes[box2], BLUR_MERGE_MARGIN)) {
             boxes[box2].clear();
             merged = true;
           }
