@@ -16,6 +16,7 @@ venv/
 node_modules/
 build/lib/*
 dist/js
+dist/ts
 dist/libraries
 dist/license
 test

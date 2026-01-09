@@ -7,6 +7,7 @@ import { appendFile } from 'fs/promises'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
+// Build main library (TypeScript entry point)
 await build({
   configFile: false,
   build: {
@@ -14,13 +15,39 @@ await build({
     emptyOutDir: false,
     minify: 'esbuild',
     lib: {
-      entry: resolve(__dirname, 'src/jassub.js'),
+      entry: resolve(__dirname, 'src/index.ts'),
       name: 'JASSUB',
-      fileName: (format) => `jassub.${format}.js`
+      fileName: (format) => format === 'es' ? 'index.js' : `jassub.${format}.js`,
+      formats: ['es', 'umd']
+    },
+    rollupOptions: {
+      external: ['rvfc-polyfill'],
+      output: {
+        globals: {
+          'rvfc-polyfill': 'rvfcPolyfill'
+        }
+      }
     }
   }
 })
 
+// Build UMD bundle for direct script tag usage
+await build({
+  configFile: false,
+  build: {
+    target: 'esnext',
+    emptyOutDir: false,
+    minify: 'esbuild',
+    lib: {
+      entry: resolve(__dirname, 'src/index.ts'),
+      name: 'JASSUB',
+      fileName: () => 'jassub.umd.js',
+      formats: ['umd']
+    }
+  }
+})
+
+// Build worker from TypeScript
 await build({
   configFile: false,
   plugins: [
@@ -48,7 +75,7 @@ await build({
     minify: 'esbuild',
     lib: {
       fileName: () => 'jassub-worker.js',
-      entry: 'src/worker.js',
+      entry: 'src/ts/worker.ts',
       formats: ['iife'],
       name: 'JASSUBWorker'
     },

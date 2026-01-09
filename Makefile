@@ -219,7 +219,6 @@ PERFORMANCE_ARGS = \
 		-s DISABLE_EXCEPTION_CATCHING=1 \
 		-s TEXTDECODER=1 \
 		-s MINIMAL_RUNTIME_STREAMING_WASM_INSTANTIATION=1 \
-		--no-heap-copy \
 		-flto \
 		-fno-exceptions \
 		-O3
@@ -240,12 +239,11 @@ COMPAT_ARGS = \
 		-s EXPORTED_FUNCTIONS="['_malloc']" \
 		-s EXPORTED_RUNTIME_METHODS="['getTempRet0', 'setTempRet0']" \
 		-s IMPORTED_MEMORY=1 \
-		-s MIN_CHROME_VERSION=27 \
-		-s MIN_SAFARI_VERSION=60005 \
-		-mbulk-memory \
-		--memory-init-file 0
+		-s MIN_CHROME_VERSION=74 \
+		-s MIN_SAFARI_VERSION=120200 \
+		-mbulk-memory
 
-dist/js/$(WORKER_NAME).js: src/JASSUB.cpp src/worker.js src/pre-worker.js src/post-worker.js
+dist/js/$(WORKER_NAME).js: src/JASSUB.cpp src/ts/worker.ts src/pre-worker.js src/post-worker.js
 	mkdir -p dist/js
 	emcc src/JASSUB.cpp $(LIBASS_DEPS) \
 		$(WORKER_ARGS) \
