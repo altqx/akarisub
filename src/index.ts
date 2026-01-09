@@ -44,3 +44,6 @@ export {
   getBitmapBug,
   getColorSpaceFilterUrl
 } from './ts/utils'
+
+// WebGPU renderer exports
+export { WebGPURenderer, isWebGPUSupported } from './ts/webgpu-renderer'

@@ -27,6 +27,7 @@ import {
   getAlphaBug,
   getBitmapBug
 } from './utils'
+import { WebGPURenderer, isWebGPUSupported } from './webgpu-renderer'
 
 /**
  * JASSUB - JavaScript ASS/SSA Subtitle Renderer
@@ -78,6 +79,12 @@ export default class JASSUB extends EventTarget {
   private _boundSetRate: () => void
   private _boundUpdateColorSpace: () => void
 
+  // WebGPU renderer
+  private _webgpuRenderer: WebGPURenderer | null = null
+  private _useWebGPU: boolean = false
+  private _preferWebGPU: boolean = true
+  private _onWebGPUFallback?: () => void
+
   // Public properties
   public timeOffset: number
   public debug: boolean
@@ -106,10 +113,17 @@ export default class JASSUB extends EventTarget {
     this._onDemandRender =
       'requestVideoFrameCallback' in HTMLVideoElement.prototype && (options.onDemandRender ?? true)
 
+    this._preferWebGPU = options.preferWebGPU !== false // Default to true
+    this._onWebGPUFallback = options.onWebGPUFallback
+
+    // When preferWebGPU is enabled and WebGPU is supported, disable offscreenRender
+    const canUseWebGPU = this._preferWebGPU && !options.canvas && isWebGPUSupported()
+
     // Don't support offscreen rendering on custom canvases
     this._offscreenRender =
       'transferControlToOffscreen' in HTMLCanvasElement.prototype &&
       !options.canvas &&
+      !canUseWebGPU &&
       (options.offscreenRender ?? true)
 
     this.timeOffset = options.timeOffset || 0
@@ -131,11 +145,16 @@ export default class JASSUB extends EventTarget {
     if (!bufferCtx) throw this.destroy(new Error('Canvas rendering not supported'))
     this._bufferCtx = bufferCtx
 
+    // Try WebGPU first if preferred
+    if (canUseWebGPU) {
+      this._initWebGPU()
+    }
+
     this._canvasctrl = this._offscreenRender
       ? (this._canvas as HTMLCanvasElement & { transferControlToOffscreen(): OffscreenCanvas }).transferControlToOffscreen()
       : this._canvas
 
-    this._ctx = !this._offscreenRender ? (this._canvasctrl as HTMLCanvasElement).getContext('2d') : null
+    this._ctx = !this._offscreenRender && !this._useWebGPU ? (this._canvasctrl as HTMLCanvasElement).getContext('2d') : null
 
     this._lastRenderTime = 0
     this.debug = !!options.debug
@@ -260,6 +279,36 @@ export default class JASSUB extends EventTarget {
   }
 
   // ==========================================================================
+  // WebGPU Management
+  // ==========================================================================
+
+  /** Initialize WebGPU renderer. */
+  private async _initWebGPU(): Promise<void> {
+    try {
+      this._webgpuRenderer = new WebGPURenderer()
+      await this._webgpuRenderer.init()
+
+      const width = Math.max(1, this._canvas.width || 1)
+      const height = Math.max(1, this._canvas.height || 1)
+
+      await this._webgpuRenderer.setCanvas(this._canvas, width, height)
+      this._useWebGPU = true
+      console.log('[JASSUB] Using WebGPU renderer')
+    } catch (error) {
+      console.warn('[JASSUB] WebGPU init failed, falling back to Canvas2D:', error)
+      this._webgpuRenderer?.destroy()
+      this._webgpuRenderer = null
+      this._useWebGPU = false
+      this._onWebGPUFallback?.()
+    }
+  }
+
+  /** Check if WebGPU is being used */
+  get isUsingWebGPU(): boolean {
+    return this._useWebGPU
+  }
+
+  // ==========================================================================
   // Canvas Management
   // ==========================================================================
 
@@ -314,6 +363,11 @@ export default class JASSUB extends EventTarget {
 
     this._canvas.style.top = top + 'px'
     this._canvas.style.left = left + 'px'
+
+    // Update WebGPU renderer size if using WebGPU
+    if (this._useWebGPU && this._webgpuRenderer && width > 0 && height > 0) {
+      this._webgpuRenderer.updateSize(width, height)
+    }
 
     if (force && this.busy === false) {
       this.busy = true
@@ -726,7 +780,19 @@ export default class JASSUB extends EventTarget {
     if (this._canvasctrl.width !== data.width || this._canvasctrl.height !== data.height) {
       this._canvasctrl.width = data.width
       this._canvasctrl.height = data.height
+
+      // Update WebGPU renderer size if using WebGPU
+      if (this._useWebGPU && this._webgpuRenderer) {
+        this._webgpuRenderer.updateSize(data.width, data.height)
+      }
+
       this._verifyColorSpace({ subtitleColorSpace: data.colorSpace })
+    }
+
+    // Use WebGPU renderer if available
+    if (this._useWebGPU && this._webgpuRenderer) {
+      this._renderWebGPU(data)
+      return
     }
 
     if (!this._ctx) return
@@ -764,6 +830,63 @@ export default class JASSUB extends EventTarget {
       }
 
       console.log('Bitmaps: ' + count + ' Total: ' + (total | 0) + 'ms', data.times)
+    }
+  }
+
+  private _renderWebGPU(data: {
+    images: RenderImage[]
+    asyncRender: boolean
+    times: RenderTimes
+  }): void {
+    if (!this._webgpuRenderer) return
+
+    if (data.images.length === 0) {
+      this._webgpuRenderer.clear()
+      return
+    }
+
+    if (data.asyncRender) {
+      // For async render mode with ImageBitmaps
+      const bitmapImages = data.images
+        .filter((img) => img.image instanceof ImageBitmap)
+        .map((img) => ({
+          image: img.image as ImageBitmap,
+          x: img.x,
+          y: img.y
+        }))
+
+      this._webgpuRenderer.renderBitmaps(
+        bitmapImages,
+        this._canvasctrl.width,
+        this._canvasctrl.height
+      )
+
+      // Close ImageBitmaps after rendering
+      for (const img of data.images) {
+        if (img.image instanceof ImageBitmap) {
+          img.image.close()
+        }
+      }
+    } else {
+      // For non-async render mode with ArrayBuffer data
+      this._webgpuRenderer.render(
+        data.images,
+        this._canvasctrl.width,
+        this._canvasctrl.height
+      )
+    }
+
+    if (this.debug) {
+      data.times.JSRenderTime = Date.now() - (data.times.JSRenderTime || 0) - (data.times.IPCTime || 0)
+      let total = 0
+      const count = (data.times as any).bitmaps || data.images.length
+      delete (data.times as any).bitmaps
+
+      for (const key in data.times) {
+        total += (data.times as any)[key] || 0
+      }
+
+      console.log('[WebGPU] Bitmaps: ' + count + ' Total: ' + (total | 0) + 'ms', data.times)
     }
   }
 
@@ -873,6 +996,13 @@ export default class JASSUB extends EventTarget {
 
     if (this._video && this._canvasParent) {
       this._video.parentNode?.removeChild(this._canvasParent)
+    }
+
+    // Clean up WebGPU renderer
+    if (this._webgpuRenderer) {
+      this._webgpuRenderer.destroy()
+      this._webgpuRenderer = null
+      this._useWebGPU = false
     }
 
     this._destroyed = true

@@ -182,6 +182,10 @@ export interface JASSUBOptions {
   libassMemoryLimit?: number
   /** libass glyph cache limit */
   libassGlyphLimit?: number
+  /** Prefer WebGPU renderer if available (default: true) */
+  preferWebGPU?: boolean
+  /** Callback when WebGPU is unavailable and falling back to Canvas2D */
+  onWebGPUFallback?: () => void
 }
 
 // =============================================================================
