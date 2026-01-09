@@ -177,10 +177,7 @@ function K(c) {
   ), u = u.replace(
     /\\(i?clip)\s*\(\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*\)/g,
     (_, d, R, T, A, B) => `\\${d}(${y(parseFloat(R) * l, R)},${y(parseFloat(T) * p, T)},${y(parseFloat(A) * l, A)},${y(parseFloat(B) * p, B)})`
-  ), u = u.replace(
-    /\\fs([\d.]+)/g,
-    (_, d) => `\\fs${y(parseFloat(d) * C, d)}`
-  ), u = u.replace(
+  ), u = u.replace(/\\fs([\d.]+)/g, (_, d) => `\\fs${y(parseFloat(d) * C, d)}`), u = u.replace(
     /\\fscx([\d.]+)/g,
     (_, d) => `\\fscx${y(parseFloat(d) * w, d)}`
   ), u = u.replace(
@@ -197,14 +194,8 @@ function K(c) {
     (_, d) => `\\yshad${y(parseFloat(d) * p, d)}`
   ), ["fsp", "bord", "shad", "be", "blur"].forEach((_) => {
     const d = new RegExp(`\\\\${_}(-?[\\d.]+)`, "g");
-    u = u.replace(
-      d,
-      (R, T) => `\\${_}${y(parseFloat(T) * g, T)}`
-    );
-  }), u = u.replace(
-    /(\\i?clip\s*\([^,)]+m[^)]+\)|\\p[1-9][^}]*?)(?=[\\}]|$)/g,
-    (_) => _.replace(/(-?[\d.]+)\s+(-?[\d.]+)/g, (d, R, T) => `${y(parseFloat(R) * l, R)} ${y(parseFloat(T) * p, T)}`)
-  ), x.substring(0, v.index) + u;
+    u = u.replace(d, (R, T) => `\\${_}${y(parseFloat(T) * g, T)}`);
+  }), u = u.replace(/(\\i?clip\s*\([^,)]+m[^)]+\)|\\p[1-9][^}]*?)(?=[\\}]|$)/g, (_) => _.replace(/(-?[\d.]+)\s+(-?[\d.]+)/g, (d, R, T) => `${y(parseFloat(R) * l, R)} ${y(parseFloat(T) * p, T)}`)), x.substring(0, v.index) + u;
 }
 let F = null, M = null;
 async function $() {
@@ -404,8 +395,16 @@ class Y {
     }), this.createTextureArray(256, 256, 32), this.bindGroupLayout = this.device.createBindGroupLayout({
       entries: [
         { binding: 0, visibility: GPUShaderStage.VERTEX, buffer: { type: "uniform" } },
-        { binding: 1, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: "read-only-storage" } },
-        { binding: 2, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "unfilterable-float", viewDimension: "2d-array" } }
+        {
+          binding: 1,
+          visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
+          buffer: { type: "read-only-storage" }
+        },
+        {
+          binding: 2,
+          visibility: GPUShaderStage.FRAGMENT,
+          texture: { sampleType: "unfilterable-float", viewDimension: "2d-array" }
+        }
       ]
     });
     const i = this.device.createPipelineLayout({
@@ -417,13 +416,15 @@ class Y {
       fragment: {
         module: s,
         entryPoint: "fragmentMain",
-        targets: [{
-          format: this.format,
-          blend: {
-            color: { srcFactor: "one", dstFactor: "one-minus-src-alpha", operation: "add" },
-            alpha: { srcFactor: "one", dstFactor: "one-minus-src-alpha", operation: "add" }
+        targets: [
+          {
+            format: this.format,
+            blend: {
+              color: { srcFactor: "one", dstFactor: "one-minus-src-alpha", operation: "add" },
+              alpha: { srcFactor: "one", dstFactor: "one-minus-src-alpha", operation: "add" }
+            }
           }
-        }]
+        ]
       },
       primitive: { topology: "triangle-list" }
     }), this._initialized = !0;
@@ -514,12 +515,14 @@ class Y {
     }
     m.writeBuffer(this.imageDataBuffer, 0, f.buffer, 0, l << 5);
     const p = h.createCommandEncoder(), g = p.beginRenderPass({
-      colorAttachments: [{
-        view: r.createView(),
-        clearValue: { r: 0, g: 0, b: 0, a: 0 },
-        loadOp: "clear",
-        storeOp: "store"
-      }]
+      colorAttachments: [
+        {
+          view: r.createView(),
+          clearValue: { r: 0, g: 0, b: 0, a: 0 },
+          loadOp: "clear",
+          storeOp: "store"
+        }
+      ]
     });
     g.setPipeline(this.pipeline), g.setBindGroup(0, this.bindGroup), g.draw(6, l), g.end(), m.submit([p.finish()]), this.cleanupPendingTextures();
   }
@@ -561,12 +564,14 @@ class Y {
     }
     b.writeBuffer(this.imageDataBuffer, 0, l.buffer, 0, g << 5);
     const C = m.createCommandEncoder(), w = C.beginRenderPass({
-      colorAttachments: [{
-        view: o.createView(),
-        clearValue: { r: 0, g: 0, b: 0, a: 0 },
-        loadOp: "clear",
-        storeOp: "store"
-      }]
+      colorAttachments: [
+        {
+          view: o.createView(),
+          clearValue: { r: 0, g: 0, b: 0, a: 0 },
+          loadOp: "clear",
+          storeOp: "store"
+        }
+      ]
     });
     w.setPipeline(this.pipeline), w.setBindGroup(0, this.bindGroup), w.draw(6, g), w.end(), b.submit([C.finish()]), this.cleanupPendingTextures();
   }
@@ -605,12 +610,14 @@ class Y {
         if (e.width === 0 || e.height === 0) return;
         const t = this.device.createCommandEncoder();
         t.beginRenderPass({
-          colorAttachments: [{
-            view: e.createView(),
-            clearValue: { r: 0, g: 0, b: 0, a: 0 },
-            loadOp: "clear",
-            storeOp: "store"
-          }]
+          colorAttachments: [
+            {
+              view: e.createView(),
+              clearValue: { r: 0, g: 0, b: 0, a: 0 },
+              loadOp: "clear",
+              storeOp: "store"
+            }
+          ]
         }).end(), this.device.queue.submit([t.finish()]);
       } catch {
       }
@@ -1075,11 +1082,7 @@ class E extends EventTarget {
           const l = f.w, p = f.h;
           (a.width !== l || a.height !== p) && (a.width = l, a.height = p);
           const g = new Uint8ClampedArray(f.image), C = k(g, m);
-          h.putImageData(
-            new ImageData(C, l, p),
-            0,
-            0
-          ), r.drawImage(a, f.x, f.y);
+          h.putImageData(new ImageData(C, l, p), 0, 0), r.drawImage(a, f.x, f.y);
         }
       }
     }
@@ -1105,19 +1108,11 @@ class E extends EventTarget {
           x: s.x,
           y: s.y
         }));
-        this._webgpuRenderer.renderBitmaps(
-          t,
-          this._canvasctrl.width,
-          this._canvasctrl.height
-        );
+        this._webgpuRenderer.renderBitmaps(t, this._canvasctrl.width, this._canvasctrl.height);
         for (const s of e.images)
           s.image instanceof ImageBitmap && s.image.close();
       } else
-        this._webgpuRenderer.render(
-          e.images,
-          this._canvasctrl.width,
-          this._canvasctrl.height
-        );
+        this._webgpuRenderer.render(e.images, this._canvasctrl.width, this._canvasctrl.height);
       if (this.debug) {
         e.times.JSRenderTime = Date.now() - (e.times.JSRenderTime || 0) - (e.times.IPCTime || 0);
         let t = 0;
