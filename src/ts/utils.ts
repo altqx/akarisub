@@ -140,10 +140,10 @@ export function getVideoPosition(
  */
 export function fixAlpha(uint8: Uint8ClampedArray, hasAlphaBug: boolean): Uint8ClampedArray {
   if (!hasAlphaBug) return uint8
-  
+
   const len = uint8.length
   const len4 = len - (len % 16) // Process 4 pixels at a time (16 bytes)
-  
+
   // Unrolled loop for 4 pixels at a time
   let j = 3
   for (; j < len4; j += 16) {
@@ -152,12 +152,12 @@ export function fixAlpha(uint8: Uint8ClampedArray, hasAlphaBug: boolean): Uint8C
     if (uint8[j + 8] < 2) uint8[j + 8] = 1
     if (uint8[j + 12] < 2) uint8[j + 12] = 1
   }
-  
+
   // Handle remaining pixels
   for (; j < len; j += 4) {
     if (uint8[j] < 2) uint8[j] = 1
   }
-  
+
   return uint8
 }
 
@@ -191,9 +191,9 @@ export function parseAss(content: string, stopAtEvents: boolean = false): ASSSec
   for (let i = 0; i < lineCount; i++) {
     const line = lines[i]
     if (!line || /^\s*$/.test(line)) continue
-    
+
     const firstChar = line[0]
-    
+
     if (firstChar === '[') {
       const m = line.match(/^\[(.*)\]$/)
       if (m) {
@@ -207,7 +207,7 @@ export function parseAss(content: string, stopAtEvents: boolean = false): ASSSec
         continue
       }
     }
-    
+
     if (!currentSection) continue
 
     if (firstChar === ';') {
@@ -218,7 +218,7 @@ export function parseAss(content: string, stopAtEvents: boolean = false): ASSSec
     } else {
       const colonIdx = line.indexOf(':')
       if (colonIdx === -1) continue
-      
+
       const key = line.substring(0, colonIdx)
       let value: string | string[] | Record<string, string> = line.substring(colonIdx + 1).trim()
 
@@ -229,7 +229,7 @@ export function parseAss(content: string, stopAtEvents: boolean = false): ASSSec
           valueArr = valueArr.slice(0, format.length - 1)
           valueArr.push(lastPart)
         }
-        
+
         const arrLen = valueArr.length
         for (let j = 0; j < arrLen; j++) {
           valueArr[j] = valueArr[j].trim()
@@ -358,8 +358,9 @@ export function fixPlayRes(subContent: string): string {
 
   let eventsSection = eventsMatch[1]
 
-  eventsSection = eventsSection.replace(posRegex, (_m, x, y) =>
-    `\\pos(${formatValue(parseFloat(x) * xnsize, x)},${formatValue(parseFloat(y) * ynsize, y)})`
+  eventsSection = eventsSection.replace(
+    posRegex,
+    (_m, x, y) => `\\pos(${formatValue(parseFloat(x) * xnsize, x)},${formatValue(parseFloat(y) * ynsize, y)})`
   )
 
   eventsSection = eventsSection.replace(
@@ -370,8 +371,9 @@ export function fixPlayRes(subContent: string): string {
     }
   )
 
-  eventsSection = eventsSection.replace(orgRegex, (_m, x, y) =>
-    `\\org(${formatValue(parseFloat(x) * xnsize, x)},${formatValue(parseFloat(y) * ynsize, y)})`
+  eventsSection = eventsSection.replace(
+    orgRegex,
+    (_m, x, y) => `\\org(${formatValue(parseFloat(x) * xnsize, x)},${formatValue(parseFloat(y) * ynsize, y)})`
   )
 
   eventsSection = eventsSection.replace(
@@ -380,10 +382,7 @@ export function fixPlayRes(subContent: string): string {
       `\\${type}(${formatValue(parseFloat(x1) * xnsize, x1)},${formatValue(parseFloat(y1) * ynsize, y1)},${formatValue(parseFloat(x2) * xnsize, x2)},${formatValue(parseFloat(y2) * ynsize, y2)})`
   )
 
-  eventsSection = eventsSection.replace(
-    /\\fs([\d.]+)/g,
-    (_m, s) => `\\fs${formatValue(parseFloat(s) * val1, s)}`
-  )
+  eventsSection = eventsSection.replace(/\\fs([\d.]+)/g, (_m, s) => `\\fs${formatValue(parseFloat(s) * val1, s)}`)
   eventsSection = eventsSection.replace(
     /\\fscx([\d.]+)/g,
     (_m, s) => `\\fscx${formatValue(parseFloat(s) * valFscx, s)}`
@@ -408,20 +407,14 @@ export function fixPlayRes(subContent: string): string {
   const minTags = ['fsp', 'bord', 'shad', 'be', 'blur']
   minTags.forEach((tag) => {
     const rgx = new RegExp(`\\\\${tag}(-?[\\d.]+)`, 'g')
-    eventsSection = eventsSection.replace(
-      rgx,
-      (_m, s) => `\\${tag}${formatValue(parseFloat(s) * val, s)}`
-    )
+    eventsSection = eventsSection.replace(rgx, (_m, s) => `\\${tag}${formatValue(parseFloat(s) * val, s)}`)
   })
 
-  eventsSection = eventsSection.replace(
-    /(\\i?clip\s*\([^,)]+m[^)]+\)|\\p[1-9][^}]*?)(?=[\\}]|$)/g,
-    (match) => {
-      return match.replace(/(-?[\d.]+)\s+(-?[\d.]+)/g, (_m, x, y) => {
-        return `${formatValue(parseFloat(x) * xnsize, x)} ${formatValue(parseFloat(y) * ynsize, y)}`
-      })
-    }
-  )
+  eventsSection = eventsSection.replace(/(\\i?clip\s*\([^,)]+m[^)]+\)|\\p[1-9][^}]*?)(?=[\\}]|$)/g, (match) => {
+    return match.replace(/(-?[\d.]+)\s+(-?[\d.]+)/g, (_m, x, y) => {
+      return `${formatValue(parseFloat(x) * xnsize, x)} ${formatValue(parseFloat(y) * ynsize, y)}`
+    })
+  })
 
   return newContent.substring(0, eventsMatch.index!) + eventsSection
 }

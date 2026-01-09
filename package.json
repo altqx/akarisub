@@ -29,7 +29,8 @@
     "build:ts": "tsc",
     "build:bundle": "bun --bun vite.build.js",
     "build": "bun run build:wasm && bun run build:ts && bun run build:bundle",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "format": "prettier . --write"
   },
   "repository": {
     "type": "git",
@@ -53,6 +54,7 @@
   "devDependencies": {
     "@types/emscripten": "^1.41.5",
     "@webgpu/types": "^0.1.68",
+    "prettier": "^3.7.4",
     "terser": "^5.44.1",
     "typescript": "^5.9.3",
     "vite": "^7.3.0",

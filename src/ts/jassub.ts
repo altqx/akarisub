@@ -114,8 +114,7 @@ export default class JASSUB extends EventTarget {
     // Run feature tests
     const test = JASSUB._test()
 
-    this._onDemandRender =
-      'requestVideoFrameCallback' in HTMLVideoElement.prototype && (options.onDemandRender ?? true)
+    this._onDemandRender = 'requestVideoFrameCallback' in HTMLVideoElement.prototype && (options.onDemandRender ?? true)
 
     this._preferWebGPU = options.preferWebGPU !== false // Default to true
     this._onWebGPUFallback = options.onWebGPUFallback
@@ -157,7 +156,9 @@ export default class JASSUB extends EventTarget {
     }
 
     this._canvasctrl = this._offscreenRender
-      ? (this._canvas as HTMLCanvasElement & { transferControlToOffscreen(): OffscreenCanvas }).transferControlToOffscreen()
+      ? (
+          this._canvas as HTMLCanvasElement & { transferControlToOffscreen(): OffscreenCanvas }
+        ).transferControlToOffscreen()
       : this._canvas
 
     this._lastRenderTime = 0
@@ -334,7 +335,13 @@ export default class JASSUB extends EventTarget {
   /**
    * Resize the canvas to given parameters. Auto-generated if values are omitted.
    */
-  resize(width: number = 0, height: number = 0, top: number = 0, left: number = 0, force: boolean = this._video?.paused ?? false): void {
+  resize(
+    width: number = 0,
+    height: number = 0,
+    top: number = 0,
+    left: number = 0,
+    force: boolean = this._video?.paused ?? false
+  ): void {
     if ((!width || !height) && this._video) {
       const videoSize = getVideoPosition(this._video)
       let renderSize: { width: number; height: number }
@@ -418,7 +425,7 @@ export default class JASSUB extends EventTarget {
       this._video = video
 
       if (this._onDemandRender) {
-        (video as any).requestVideoFrameCallback(this._handleRVFC.bind(this))
+        ;(video as any).requestVideoFrameCallback(this._handleRVFC.bind(this))
       } else {
         this._playstate = video.paused
 
@@ -759,7 +766,10 @@ export default class JASSUB extends EventTarget {
     })
   }
 
-  private _verifyColorSpace(data: { subtitleColorSpace: SubtitleColorSpace; videoColorSpace?: WebYCbCrColorSpace | null }): void {
+  private _verifyColorSpace(data: {
+    subtitleColorSpace: SubtitleColorSpace
+    videoColorSpace?: WebYCbCrColorSpace | null
+  }): void {
     const { subtitleColorSpace, videoColorSpace = this._videoColorSpace } = data
 
     if (!subtitleColorSpace || !videoColorSpace) return
@@ -834,26 +844,22 @@ export default class JASSUB extends EventTarget {
       const bufferCanvas = this._bufferCanvas
       const bufferCtx = this._bufferCtx
       const hasAlphaBug = JASSUB._hasAlphaBug ?? false
-      
+
       for (let i = 0; i < imageCount; i++) {
         const image = images[i]
         if (image.image) {
           const imgW = image.w
           const imgH = image.h
-          
+
           // Only resize when necessary
           if (bufferCanvas.width !== imgW || bufferCanvas.height !== imgH) {
             bufferCanvas.width = imgW
             bufferCanvas.height = imgH
           }
-          
+
           const rawData = new Uint8ClampedArray(image.image as ArrayBuffer)
           const fixedData = fixAlpha(rawData, hasAlphaBug)
-          bufferCtx.putImageData(
-            new ImageData(fixedData as Uint8ClampedArray<ArrayBuffer>, imgW, imgH),
-            0,
-            0
-          )
+          bufferCtx.putImageData(new ImageData(fixedData as Uint8ClampedArray<ArrayBuffer>, imgW, imgH), 0, 0)
           ctx.drawImage(bufferCanvas, image.x, image.y)
         }
       }
@@ -873,11 +879,7 @@ export default class JASSUB extends EventTarget {
     }
   }
 
-  private _renderWebGPU(data: {
-    images: RenderImage[]
-    asyncRender: boolean
-    times: RenderTimes
-  }): void {
+  private _renderWebGPU(data: { images: RenderImage[]; asyncRender: boolean; times: RenderTimes }): void {
     if (!this._webgpuRenderer) return
 
     if (data.images.length === 0) {
@@ -895,11 +897,7 @@ export default class JASSUB extends EventTarget {
           y: img.y
         }))
 
-      this._webgpuRenderer.renderBitmaps(
-        bitmapImages,
-        this._canvasctrl.width,
-        this._canvasctrl.height
-      )
+      this._webgpuRenderer.renderBitmaps(bitmapImages, this._canvasctrl.width, this._canvasctrl.height)
 
       // Close ImageBitmaps after rendering
       for (const img of data.images) {
@@ -909,11 +907,7 @@ export default class JASSUB extends EventTarget {
       }
     } else {
       // For non-async render mode with ArrayBuffer data
-      this._webgpuRenderer.render(
-        data.images,
-        this._canvasctrl.width,
-        this._canvasctrl.height
-      )
+      this._webgpuRenderer.render(data.images, this._canvasctrl.width, this._canvasctrl.height)
     }
 
     if (this.debug) {
@@ -948,10 +942,7 @@ export default class JASSUB extends EventTarget {
     }
   }
 
-  private _fetchFromWorker(
-    workerOptions: { target: string },
-    callback: (err: Error | null, data?: any) => void
-  ): void {
+  private _fetchFromWorker(workerOptions: { target: string }, callback: (err: Error | null, data?: any) => void): void {
     try {
       const target = workerOptions.target
 
@@ -1003,8 +994,7 @@ export default class JASSUB extends EventTarget {
           ? err.error || new Error(err.message)
           : new Error(String(err))
 
-    const event =
-      err instanceof Event ? new ErrorEvent(err.type, err) : new ErrorEvent('error', { error })
+    const event = err instanceof Event ? new ErrorEvent(err.type, err) : new ErrorEvent('error', { error })
 
     this.dispatchEvent(event)
     console.error(error)

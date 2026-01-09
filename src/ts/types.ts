@@ -381,12 +381,7 @@ export interface JASSUBWasmStyle extends ASSStyle {}
 
 /** Emscripten JASSUB Module */
 export interface JASSUBModule extends EmscriptenModule {
-  JASSUB: new (
-    width: number,
-    height: number,
-    fallbackFont: string | null,
-    debug: boolean
-  ) => JASSUBWasmObject
+  JASSUB: new (width: number, height: number, fallbackFont: string | null, debug: boolean) => JASSUBWasmObject
   _malloc: (size: number) => number
   _free: (ptr: number) => void
 }

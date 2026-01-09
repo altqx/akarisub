@@ -16,7 +16,7 @@ await build({
     lib: {
       entry: resolve(__dirname, 'src/index.ts'),
       name: 'JASSUB',
-      fileName: (format) => format === 'es' ? 'index.js' : `jassub.${format}.js`,
+      fileName: (format) => (format === 'es' ? 'index.js' : `jassub.${format}.js`),
       formats: ['es', 'umd']
     }
   }

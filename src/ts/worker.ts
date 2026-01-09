@@ -152,9 +152,13 @@ const findAvailableFonts = (font: string): void => {
 
 const asyncWrite = (font: string | Uint8Array): void => {
   if (typeof font === 'string') {
-    readAsync(font, (fontData) => {
-      allocFont(new Uint8Array(fontData))
-    }, console.error)
+    readAsync(
+      font,
+      (fontData) => {
+        allocFont(new Uint8Array(fontData))
+      },
+      console.error
+    )
   } else {
     allocFont(font)
   }
@@ -280,7 +284,9 @@ const setCurrentTime = (currentTime: number): void => {
       rafId = requestAnimationFrame(renderLoop)
     } else {
       renderLoop()
-      setTimeout(() => { nextIsRaf = false }, 20)
+      setTimeout(() => {
+        nextIsRaf = false
+      }, 20)
     }
   }
 }
@@ -314,15 +320,14 @@ interface RenderTimes {
 
 const render = (time: number, force?: boolean | number): void => {
   initPool() // Ensure pool is ready
-  
+
   const times: RenderTimes = {}
   const renderStartTime = performance.now()
   metrics.renderStartTime = renderStartTime
   metrics.pendingRenders++
 
-  const renderResult = blendMode === 'wasm'
-    ? jassubObj!.renderBlend(time, force ? 1 : 0)
-    : jassubObj!.renderImage(time, force ? 1 : 0)
+  const renderResult =
+    blendMode === 'wasm' ? jassubObj!.renderBlend(time, force ? 1 : 0) : jassubObj!.renderImage(time, force ? 1 : 0)
 
   // Update metrics
   const renderEndTime = performance.now()
@@ -363,7 +368,7 @@ const render = (time: number, force?: boolean | number): void => {
     if (asyncRender) {
       const promises: Promise<ImageBitmap>[] = new Array(imageCount)
       let result = renderResult
-      
+
       for (let i = 0; i < imageCount; result = result.next!, ++i) {
         const item = getPooledItem(i)
         item.w = result.w
@@ -371,18 +376,22 @@ const render = (time: number, force?: boolean | number): void => {
         item.x = result.x
         item.y = result.y
         item.image = 0
-        
+
         const pointer = result.image
         const byteLength = item.w * item.h * 4
-        
+
         // Avoid slice when possible
         const rawData = hasBitmapBug
           ? self.HEAPU8C.slice(pointer, pointer + byteLength)
           : self.HEAPU8C.subarray(pointer, pointer + byteLength)
-        
+
         promises[i] = createImageBitmap(
           new ImageData(
-            new Uint8ClampedArray(rawData.buffer, rawData.byteOffset, rawData.byteLength) as Uint8ClampedArray<ArrayBuffer>,
+            new Uint8ClampedArray(
+              rawData.buffer,
+              rawData.byteOffset,
+              rawData.byteLength
+            ) as Uint8ClampedArray<ArrayBuffer>,
             item.w,
             item.h
           )
@@ -406,7 +415,7 @@ const render = (time: number, force?: boolean | number): void => {
         item.x = result.x
         item.y = result.y
         item.image = result.image
-        
+
         if (!offCanvasCtx) {
           const buf = self.wasmMemory.buffer.slice(result.image, result.image + result.w * result.h * 4)
           buffers.push(buf)
@@ -434,9 +443,17 @@ const renderLoop = (force?: boolean | number): void => {
   }
 }
 
-const paintImages = ({ times, images, buffers }: { times: RenderTimes; images: RenderResultItem[]; buffers: (ArrayBuffer | ImageBitmap)[] }): void => {
+const paintImages = ({
+  times,
+  images,
+  buffers
+}: {
+  times: RenderTimes
+  images: RenderResultItem[]
+  buffers: (ArrayBuffer | ImageBitmap)[]
+}): void => {
   metrics.pendingRenders--
-  
+
   const width = self.width
   const height = self.height
   const imageCount = images.length
@@ -475,20 +492,24 @@ const paintImages = ({ times, images, buffers }: { times: RenderTimes; images: R
         if (img.image) {
           const imgW = img.w
           const imgH = img.h
-          
+
           // Only resize buffer canvas when needed
           if (bufferCanvas!.width !== imgW || bufferCanvas!.height !== imgH) {
             bufferCanvas!.width = imgW
             bufferCanvas!.height = imgH
           }
-          
+
           const pointer = img.image as number
           const byteLength = imgW * imgH * 4
           const rawData = self.HEAPU8C.subarray(pointer, pointer + byteLength)
-          
+
           bufferCtx!.putImageData(
             new ImageData(
-              new Uint8ClampedArray(rawData.buffer, rawData.byteOffset, rawData.byteLength) as Uint8ClampedArray<ArrayBuffer>,
+              new Uint8ClampedArray(
+                rawData.buffer,
+                rawData.byteOffset,
+                rawData.byteLength
+              ) as Uint8ClampedArray<ArrayBuffer>,
               imgW,
               imgH
             ),
@@ -529,7 +550,7 @@ const paintImages = ({ times, images, buffers }: { times: RenderTimes; images: R
 }
 
 // Custom requestAnimationFrame for worker
-const requestAnimationFrame = ((): (func: () => void) => number => {
+const requestAnimationFrame = ((): ((func: () => void) => number) => {
   let nextRAF = 0
   return (func: () => void): number => {
     const now = Date.now()
@@ -562,7 +583,7 @@ self.init = async (data: any): Promise<void> => {
   const loadWasm = (wasmUrl: string): Promise<JASSUBModule> => {
     setWasmUrl(wasmUrl)
     return WASM({
-      wasm: !(WebAssembly as any).instantiateStreaming ? read_(wasmUrl, true) as ArrayBuffer : undefined
+      wasm: !(WebAssembly as any).instantiateStreaming ? (read_(wasmUrl, true) as ArrayBuffer) : undefined
     })
   }
 
@@ -634,7 +655,13 @@ self.detachOffscreen = (): void => {
   offscreenRender = 'hybrid'
 }
 
-self.canvas = ({ width, height, videoWidth, videoHeight, force }: {
+self.canvas = ({
+  width,
+  height,
+  videoWidth,
+  videoHeight,
+  force
+}: {
   width: number
   height: number
   videoWidth: number
@@ -648,7 +675,11 @@ self.canvas = ({ width, height, videoWidth, videoHeight, force }: {
   if (force) render(lastCurrentTime, true)
 }
 
-self.video = ({ currentTime, isPaused, rate: newRate }: {
+self.video = ({
+  currentTime,
+  isPaused,
+  rate: newRate
+}: {
   currentTime?: number
   isPaused?: boolean
   rate?: number
@@ -668,7 +699,7 @@ self.destroy = (): void => {
 
 const _applyKeys = <T extends object>(input: Partial<T>, output: T): void => {
   for (const v of Object.keys(input) as (keyof T)[]) {
-    (output as any)[v] = input[v]
+    ;(output as any)[v] = input[v]
   }
 }
 
@@ -721,16 +752,60 @@ self.getStyles = (): void => {
   const styles: ASSStyle[] = []
   for (let i = 0; i < jassubObj!.getStyleCount(); i++) {
     const {
-      Name, FontName, FontSize, PrimaryColour, SecondaryColour, OutlineColour, BackColour,
-      Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle,
-      Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding,
-      treat_fontname_as_pattern, Blur, Justify
+      Name,
+      FontName,
+      FontSize,
+      PrimaryColour,
+      SecondaryColour,
+      OutlineColour,
+      BackColour,
+      Bold,
+      Italic,
+      Underline,
+      StrikeOut,
+      ScaleX,
+      ScaleY,
+      Spacing,
+      Angle,
+      BorderStyle,
+      Outline,
+      Shadow,
+      Alignment,
+      MarginL,
+      MarginR,
+      MarginV,
+      Encoding,
+      treat_fontname_as_pattern,
+      Blur,
+      Justify
     } = jassubObj!.getStyle(i)
     styles.push({
-      Name, FontName, FontSize, PrimaryColour, SecondaryColour, OutlineColour, BackColour,
-      Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle,
-      Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding,
-      treat_fontname_as_pattern, Blur, Justify
+      Name,
+      FontName,
+      FontSize,
+      PrimaryColour,
+      SecondaryColour,
+      OutlineColour,
+      BackColour,
+      Bold,
+      Italic,
+      Underline,
+      StrikeOut,
+      ScaleX,
+      ScaleY,
+      Spacing,
+      Angle,
+      BorderStyle,
+      Outline,
+      Shadow,
+      Alignment,
+      MarginL,
+      MarginR,
+      MarginV,
+      Encoding,
+      treat_fontname_as_pattern,
+      Blur,
+      Justify
     })
   }
   postMessage({ target: 'getStyles', time: Date.now(), styles })

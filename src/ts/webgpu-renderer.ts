@@ -121,28 +121,28 @@ export class WebGPURenderer {
 
   private uniformBuffer: GPUBuffer | null = null
   private imageDataBuffer: GPUBuffer | null = null
-  
+
   // Texture array for batched rendering
   private textureArray: GPUTexture | null = null
   private textureArrayView: GPUTextureView | null = null
   private textureArraySize = 0
   private textureArrayWidth = 0
   private textureArrayHeight = 0
-  
+
   private pendingDestroyTextures: GPUTexture[] = []
-  
+
   // Pre-allocated typed arrays (reused every frame - ZERO allocations in hot path)
   private readonly imageDataArray: Float32Array
   private readonly resolutionArray = new Float32Array(2)
-  
+
   // Reusable conversion buffer for RGBA->BGRA (grows as needed, never shrinks)
   private conversionBuffer: Uint8Array | null = null
   private conversionBufferSize = 0
-  
+
   // Bind group (recreated only when texture array changes)
   private bindGroup: GPUBindGroup | null = null
   private bindGroupDirty = true
-  
+
   // Track canvas size to avoid redundant updates
   private lastCanvasWidth = 0
   private lastCanvasHeight = 0
@@ -200,8 +200,16 @@ export class WebGPURenderer {
     this.bindGroupLayout = this.device.createBindGroupLayout({
       entries: [
         { binding: 0, visibility: GPUShaderStage.VERTEX, buffer: { type: 'uniform' } },
-        { binding: 1, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: 'read-only-storage' } },
-        { binding: 2, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'unfilterable-float', viewDimension: '2d-array' } }
+        {
+          binding: 1,
+          visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
+          buffer: { type: 'read-only-storage' }
+        },
+        {
+          binding: 2,
+          visibility: GPUShaderStage.FRAGMENT,
+          texture: { sampleType: 'unfilterable-float', viewDimension: '2d-array' }
+        }
       ]
     })
 
@@ -215,13 +223,15 @@ export class WebGPURenderer {
       fragment: {
         module: fragmentModule,
         entryPoint: 'fragmentMain',
-        targets: [{
-          format: this.format,
-          blend: {
-            color: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
-            alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' }
+        targets: [
+          {
+            format: this.format,
+            blend: {
+              color: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+              alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' }
+            }
           }
-        }]
+        ]
       },
       primitive: { topology: 'triangle-list' }
     })
@@ -263,17 +273,15 @@ export class WebGPURenderer {
   }
 
   private ensureTextureArray(maxWidth: number, maxHeight: number, count: number): boolean {
-    if (maxWidth <= this.textureArrayWidth && 
-        maxHeight <= this.textureArrayHeight && 
-        count <= this.textureArraySize) {
+    if (maxWidth <= this.textureArrayWidth && maxHeight <= this.textureArrayHeight && count <= this.textureArraySize) {
       return false
     }
-    
+
     // Grow with some headroom to avoid frequent resizes
     const newWidth = this.nextPowerOf2(Math.max(this.textureArrayWidth, maxWidth))
     const newHeight = this.nextPowerOf2(Math.max(this.textureArrayHeight, maxHeight))
     const newLayers = this.nextPowerOf2(Math.max(this.textureArraySize, count, count + 16))
-    
+
     this.createTextureArray(newWidth, newHeight, newLayers)
     return true
   }
@@ -325,7 +333,7 @@ export class WebGPURenderer {
     this.resolutionArray[0] = width
     this.resolutionArray[1] = height
     this.device.queue.writeBuffer(this.uniformBuffer!, 0, this.resolutionArray)
-    
+
     this.lastCanvasWidth = width
     this.lastCanvasHeight = height
   }
@@ -333,13 +341,13 @@ export class WebGPURenderer {
   updateSize(width: number, height: number): void {
     if (!this.device || !this._canvas || width <= 0 || height <= 0) return
     if (width === this.lastCanvasWidth && height === this.lastCanvasHeight) return
-    
+
     this._canvas.width = width
     this._canvas.height = height
     this.resolutionArray[0] = width
     this.resolutionArray[1] = height
     this.device.queue.writeBuffer(this.uniformBuffer!, 0, this.resolutionArray)
-    
+
     this.lastCanvasWidth = width
     this.lastCanvasHeight = height
   }
@@ -353,7 +361,7 @@ export class WebGPURenderer {
     _canvasHeight: number
   ): void {
     if (!this.device || !this.context || !this.pipeline) return
-    
+
     const len = images.length
     if (len === 0) {
       this.clear()
@@ -364,10 +372,13 @@ export class WebGPURenderer {
     if (currentTexture.width === 0 || currentTexture.height === 0) return
 
     // Single pass: find max dimensions and count valid images
-    let maxW = 0, maxH = 0, validCount = 0
+    let maxW = 0,
+      maxH = 0,
+      validCount = 0
     for (let i = 0; i < len; i++) {
       const { image } = images[i]
-      const w = image.width, h = image.height
+      const w = image.width,
+        h = image.height
       if (w > 0 && h > 0) {
         if (w > maxW) maxW = w
         if (h > maxH) maxH = h
@@ -394,7 +405,8 @@ export class WebGPURenderer {
     for (let i = 0; i < len; i++) {
       const img = images[i]
       const bitmap = img.image
-      const w = bitmap.width, h = bitmap.height
+      const w = bitmap.width,
+        h = bitmap.height
       if (w <= 0 || h <= 0) continue
 
       // Copy to texture array layer
@@ -423,12 +435,14 @@ export class WebGPURenderer {
 
     const commandEncoder = device.createCommandEncoder()
     const renderPass = commandEncoder.beginRenderPass({
-      colorAttachments: [{
-        view: currentTexture.createView(),
-        clearValue: { r: 0, g: 0, b: 0, a: 0 },
-        loadOp: 'clear',
-        storeOp: 'store'
-      }]
+      colorAttachments: [
+        {
+          view: currentTexture.createView(),
+          clearValue: { r: 0, g: 0, b: 0, a: 0 },
+          loadOp: 'clear',
+          storeOp: 'store'
+        }
+      ]
     })
 
     renderPass.setPipeline(this.pipeline)
@@ -450,7 +464,7 @@ export class WebGPURenderer {
     _getImageData?: (image: RenderImage) => Uint8ClampedArray | null
   ): void {
     if (!this.device || !this.context || !this.pipeline) return
-    
+
     const len = images.length
     if (len === 0) {
       this.clear()
@@ -461,7 +475,9 @@ export class WebGPURenderer {
     if (currentTexture.width === 0 || currentTexture.height === 0) return
 
     // Single pass: find max dimensions and count valid images
-    let maxW = 0, maxH = 0, validCount = 0
+    let maxW = 0,
+      maxH = 0,
+      validCount = 0
     for (let i = 0; i < len; i++) {
       const { w, h } = images[i]
       if (w > 0 && h > 0) {
@@ -488,7 +504,8 @@ export class WebGPURenderer {
     let texIndex = 0
     for (let i = 0; i < len; i++) {
       const img = images[i]
-      const w = img.w, h = img.h
+      const w = img.w,
+        h = img.h
       if (w <= 0 || h <= 0) continue
 
       // Upload texture data
@@ -520,12 +537,14 @@ export class WebGPURenderer {
 
     const commandEncoder = device.createCommandEncoder()
     const renderPass = commandEncoder.beginRenderPass({
-      colorAttachments: [{
-        view: currentTexture.createView(),
-        clearValue: { r: 0, g: 0, b: 0, a: 0 },
-        loadOp: 'clear',
-        storeOp: 'store'
-      }]
+      colorAttachments: [
+        {
+          view: currentTexture.createView(),
+          clearValue: { r: 0, g: 0, b: 0, a: 0 },
+          loadOp: 'clear',
+          storeOp: 'store'
+        }
+      ]
     })
 
     renderPass.setPipeline(this.pipeline)
@@ -537,22 +556,28 @@ export class WebGPURenderer {
     this.cleanupPendingTextures()
   }
 
-  private uploadTextureData(layerIndex: number, rgbaBuffer: ArrayBuffer, width: number, height: number, swapRB: boolean): void {
+  private uploadTextureData(
+    layerIndex: number,
+    rgbaBuffer: ArrayBuffer,
+    width: number,
+    height: number,
+    swapRB: boolean
+  ): void {
     const size = width * height * 4
-    
+
     if (swapRB) {
       // Use reusable conversion buffer
       const uploadData = this.ensureConversionBuffer(size)
       const src = new Uint8Array(rgbaBuffer)
-      
+
       // Unrolled loop for better performance
       for (let j = 0; j < size; j += 4) {
-        uploadData[j] = src[j + 2]     // B <- R
+        uploadData[j] = src[j + 2] // B <- R
         uploadData[j + 1] = src[j + 1] // G
-        uploadData[j + 2] = src[j]     // R <- B
+        uploadData[j + 2] = src[j] // R <- B
         uploadData[j + 3] = src[j + 3] // A
       }
-      
+
       this.device!.queue.writeTexture(
         { texture: this.textureArray!, origin: [0, 0, layerIndex] },
         uploadData.buffer,
@@ -573,7 +598,7 @@ export class WebGPURenderer {
     const pending = this.pendingDestroyTextures
     const len = pending.length
     if (len === 0) return
-    
+
     for (let i = 0; i < len; i++) {
       pending[i].destroy()
     }
@@ -589,12 +614,14 @@ export class WebGPURenderer {
 
       const commandEncoder = this.device.createCommandEncoder()
       const renderPass = commandEncoder.beginRenderPass({
-        colorAttachments: [{
-          view: currentTexture.createView(),
-          clearValue: { r: 0, g: 0, b: 0, a: 0 },
-          loadOp: 'clear',
-          storeOp: 'store'
-        }]
+        colorAttachments: [
+          {
+            view: currentTexture.createView(),
+            clearValue: { r: 0, g: 0, b: 0, a: 0 },
+            loadOp: 'clear',
+            storeOp: 'store'
+          }
+        ]
       })
       renderPass.end()
       this.device.queue.submit([commandEncoder.finish()])
