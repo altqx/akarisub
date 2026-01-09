@@ -7,7 +7,6 @@
 #include <string.h>
 #include <string>
 
-
 #include <emscripten.h>
 #include <emscripten/bind.h>
 
@@ -769,16 +768,8 @@ public:
       if (curw == 0 || curh == 0)
         continue; // skip empty images
 
-      // Calculate image bounds
-      int img_right = curx_abs + curw - 1;
-      int img_bottom = cury_abs + curh - 1;
-
-      // Skip images that don't intersect with the render region at all
-      if (curx_abs > rect.max_x || img_right < rect.min_x ||
-          cury_abs > rect.max_y || img_bottom < rect.min_y)
-        continue;
-
-      // Only render this image if its CENTER falls within this region
+      // Calculate image center - only render if center is in our region
+      // This ensures each image is rendered exactly once by one region
       int center_x = curx_abs + (curw >> 1);
       int center_y = cury_abs + (curh >> 1);
       if (center_x < rect.min_x || center_x > rect.max_x ||
@@ -791,7 +782,11 @@ public:
 
       int curs = (cur->stride >= curw) ? cur->stride : curw;
 
-      // Clip coordinates to region bounds
+      // Render full image, but clip to region bounds for buffer safety
+      // The image may extend beyond our region bounds
+      int img_right = curx_abs + curw - 1;
+      int img_bottom = cury_abs + curh - 1;
+
       int render_left = MAX(curx_abs, rect.min_x);
       int render_top = MAX(cury_abs, rect.min_y);
       int render_right = MIN(img_right, rect.max_x);
@@ -803,6 +798,9 @@ public:
       int dst_y = render_top - rect.min_y;
       int render_w = render_right - render_left + 1;
       int render_h = render_bottom - render_top + 1;
+
+      if (render_w <= 0 || render_h <= 0)
+        continue;
 
       unsigned char *bitmap = cur->bitmap;
 
