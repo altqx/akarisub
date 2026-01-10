@@ -731,7 +731,7 @@ class B extends EventTarget {
     this._bufferCanvas = document.createElement("canvas");
     const i = this._bufferCanvas.getContext("2d");
     if (!i) throw this.destroy(new Error("Canvas rendering not supported"));
-    this._bufferCtx = i, s ? this._initWebGPU() : this._offscreenRender || (this._ctx = this._canvas.getContext("2d")), this._canvasctrl = this._offscreenRender ? this._canvas.transferControlToOffscreen() : this._canvas, this._lastRenderTime = 0, this.debug = !!e.debug, this.prescaleFactor = e.prescaleFactor || 1, this.prescaleHeightLimit = e.prescaleHeightLimit || 1080, this.maxRenderHeight = e.maxRenderHeight || 0, this.renderAhead = e.renderAhead ?? 8e-3, this._boundResize = this.resize.bind(this), this._boundTimeUpdate = this._timeupdate.bind(this), this._boundSetRate = () => this.setRate(this._video.playbackRate), this._boundUpdateColorSpace = this._updateColorSpace.bind(this), this._video && this.setVideo(this._video), this._onDemandRender && (this.busy = !1, this._lastDemandTime = null), this._worker = new Worker(e.workerUrl || "jassub-worker.js"), this._worker.onmessage = (r) => this._onmessage(r), this._worker.onerror = (r) => this._error(r), t.then(() => {
+    this._bufferCtx = i, s ? this._initWebGPU() : this._offscreenRender || (this._ctx = this._canvas.getContext("2d")), this._canvasctrl = this._offscreenRender ? this._canvas.transferControlToOffscreen() : this._canvas, this._lastRenderTime = 0, this.debug = !!e.debug, this.prescaleFactor = e.prescaleFactor || 1, this.prescaleHeightLimit = e.prescaleHeightLimit || 1080, this.maxRenderHeight = e.maxRenderHeight || 0, this.renderAhead = e.renderAhead ?? 0, this._boundResize = this.resize.bind(this), this._boundTimeUpdate = this._timeupdate.bind(this), this._boundSetRate = () => this.setRate(this._video.playbackRate), this._boundUpdateColorSpace = this._updateColorSpace.bind(this), this._video && this.setVideo(this._video), this._onDemandRender && (this.busy = !1, this._lastDemandTime = null), this._worker = new Worker(e.workerUrl || "jassub-worker.js"), this._worker.onmessage = (r) => this._onmessage(r), this._worker.onerror = (r) => this._error(r), t.then(() => {
       this._worker.postMessage({
         target: "init",
         wasmUrl: e.wasmUrl ?? "jassub-worker.wasm",
@@ -1072,14 +1072,8 @@ class B extends EventTarget {
   }
   _handleRVFC(e, t) {
     if (this._destroyed) return;
-    const s = this._video?.playbackRate ?? 1;
-    let i = t.mediaTime + this.renderAhead * s;
-    if (t.expectedDisplayTime !== void 0 && t.expectedDisplayTime > e) {
-      const o = (t.expectedDisplayTime - e) / 1e3;
-      i += o * s;
-    }
-    const r = {
-      mediaTime: i,
+    const s = this._video?.playbackRate ?? 1, r = {
+      mediaTime: t.mediaTime + this.renderAhead * s,
       width: t.width,
       height: t.height
     };

@@ -712,17 +712,7 @@ export default class JASSUB extends EventTarget {
 
     // Get the video's playback rate to correctly scale time offsets
     const playbackRate = this._video?.playbackRate ?? 1
-
-    // Calculate time compensation for rendering pipeline latency
-    let renderTime = metadata.mediaTime + this.renderAhead * playbackRate
-
-    if (metadata.expectedDisplayTime !== undefined && metadata.expectedDisplayTime > now) {
-      // Calculate how far ahead the expected display is from now (in seconds)
-      const displayDelay = (metadata.expectedDisplayTime - now) / 1000
-
-      // Add display delay compensation
-      renderTime += displayDelay * playbackRate
-    }
+    const renderTime = metadata.mediaTime + this.renderAhead * playbackRate
 
     const demandData = {
       mediaTime: renderTime,
