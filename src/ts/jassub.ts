@@ -158,8 +158,8 @@ export default class JASSUB extends EventTarget {
 
     this._canvasctrl = this._offscreenRender
       ? (
-          this._canvas as HTMLCanvasElement & { transferControlToOffscreen(): OffscreenCanvas }
-        ).transferControlToOffscreen()
+        this._canvas as HTMLCanvasElement & { transferControlToOffscreen(): OffscreenCanvas }
+      ).transferControlToOffscreen()
       : this._canvas
 
     this._lastRenderTime = 0
@@ -427,7 +427,11 @@ export default class JASSUB extends EventTarget {
       this._video = video
 
       if (this._onDemandRender) {
-        ;(video as any).requestVideoFrameCallback(this._handleRVFC.bind(this))
+        this._loaded.then(() => {
+          if (!this._destroyed && this._video === video) {
+            ; (video as any).requestVideoFrameCallback(this._handleRVFC.bind(this))
+          }
+        })
       } else {
         this._playstate = video.paused
 
@@ -668,7 +672,7 @@ export default class JASSUB extends EventTarget {
 
   private _sendLocalFont(name: string): void {
     try {
-      ;(globalThis as any).queryLocalFonts().then((fontData: any[]) => {
+      ; (globalThis as any).queryLocalFonts().then((fontData: any[]) => {
         const font = fontData?.find((obj: any) => obj.fullName.toLowerCase() === name)
         if (font) {
           font.blob().then((blob: Blob) => {
@@ -686,7 +690,7 @@ export default class JASSUB extends EventTarget {
   private _getLocalFont(data: { font: string }): void {
     try {
       if (navigator?.permissions?.query) {
-        ;(navigator.permissions.query as any)({ name: 'local-fonts' }).then((permission: any) => {
+        ; (navigator.permissions.query as any)({ name: 'local-fonts' }).then((permission: any) => {
           if (permission.state === 'granted') {
             this._sendLocalFont(data.font)
           }
@@ -727,7 +731,7 @@ export default class JASSUB extends EventTarget {
       this._demandRender(demandData)
     }
 
-    ;(this._video as any).requestVideoFrameCallback(this._handleRVFC.bind(this))
+    ; (this._video as any).requestVideoFrameCallback(this._handleRVFC.bind(this))
   }
 
   private _demandRender(metadata: { mediaTime: number; width: number; height: number }): void {
@@ -766,7 +770,7 @@ export default class JASSUB extends EventTarget {
   }
 
   private _updateColorSpace(): void {
-    ;(this._video as any).requestVideoFrameCallback(() => {
+    ; (this._video as any).requestVideoFrameCallback(() => {
       try {
         const frame = new (globalThis as any).VideoFrame(this._video)
         this._videoColorSpace = webYCbCrMap[frame.colorSpace.matrix] ?? null
@@ -848,7 +852,7 @@ export default class JASSUB extends EventTarget {
         const image = images[i]
         if (image.image) {
           ctx.drawImage(image.image as ImageBitmap, image.x, image.y)
-          ;(image.image as ImageBitmap).close()
+            ; (image.image as ImageBitmap).close()
         }
       }
     } else {
@@ -988,7 +992,7 @@ export default class JASSUB extends EventTarget {
   }
 
   private _console(data: { content: string; command: string }): void {
-    ;(console as any)[data.command].apply(console, JSON.parse(data.content))
+    ; (console as any)[data.command].apply(console, JSON.parse(data.content))
   }
 
   private _onmessage(event: MessageEvent): void {
