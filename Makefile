@@ -4,29 +4,30 @@
 BASE_DIR:=$(dir $(realpath $(firstword $(MAKEFILE_LIST))))
 DIST_DIR:=$(BASE_DIR)dist/libraries
 
-SIMD_ARGS = \
+# WASM feature flags - targeting modern browsers (Chrome 114+, Firefox 120+, Safari 16.4+)
+WASM_FEATURES = \
 	-msimd128 \
-	-msse \
-	-msse2 \
-	-msse3 \
-	-mssse3 \
-	-msse4 \
-	-msse4.1 \
-	-msse4.2 \
-	-mavx \
-	-mavx2 \
-	-matomics \
-	-mnontrapping-fptoint
+	-mrelaxed-simd \
+	-mnontrapping-fptoint \
+	-mbulk-memory \
+	-msign-ext \
+	-mmutable-globals \
+	-mtail-call \
+	-mextended-const \
+	-mreference-types
 
-export CFLAGS = -O3 -flto -fno-rtti -fno-exceptions -s USE_PTHREADS=0 $(SIMD_ARGS)
+# Base compiler flags for all C/C++ compilation
+# -fno-unwind-tables/-fno-asynchronous-unwind-tables: no exceptions = no need for unwind info
+BASE_CFLAGS = -O3 -flto -fno-exceptions -fno-unwind-tables -fno-asynchronous-unwind-tables
+
+export CFLAGS = $(BASE_CFLAGS) -s USE_PTHREADS=0 $(WASM_FEATURES)
 export CXXFLAGS = $(CFLAGS)
 export PKG_CONFIG_PATH = $(DIST_DIR)/lib/pkgconfig
 export EM_PKG_CONFIG_PATH = $(PKG_CONFIG_PATH)
 
 WORKER_NAME = jassub-worker
 WORKER_ARGS = \
-	-s WASM=1 \
-	$(SIMD_ARGS)
+	$(WASM_FEATURES)
 
 all: jassub
 jassub: dist
@@ -128,8 +129,8 @@ $(DIST_DIR)/lib/libharfbuzz.a: build/lib/freetype/build_hb/dist_hb/lib/libfreety
 $(DIST_DIR)/lib/libfreetype.a: $(DIST_DIR)/lib/libharfbuzz.a $(DIST_DIR)/lib/libbrotlidec.a
 	cd build/lib/freetype && \
 	EM_PKG_CONFIG_PATH=$(PKG_CONFIG_PATH) \
-	CFLAGS="-O3 -flto -fno-rtti -fno-exceptions -s USE_PTHREADS=0 -I$(DIST_DIR)/include/harfbuzz" \
-	CXXFLAGS="-O3 -flto -fno-rtti -fno-exceptions -s USE_PTHREADS=0 -I$(DIST_DIR)/include/harfbuzz" \
+	CFLAGS="$(CFLAGS) -I$(DIST_DIR)/include/harfbuzz" \
+	CXXFLAGS="$(CXXFLAGS) -I$(DIST_DIR)/include/harfbuzz" \
 	LDFLAGS="-L$(DIST_DIR)/lib" \
 	HARFBUZZ_CFLAGS="-I$(DIST_DIR)/include/harfbuzz" \
 	HARFBUZZ_LIBS="-L$(DIST_DIR)/lib -lharfbuzz -L$(BASE_DIR)build/lib/freetype/build_hb/dist_hb/lib -lfreetype" \
@@ -196,21 +197,21 @@ LIBASS_DEPS = \
 	$(DIST_DIR)/lib/libass.a
 
 
-dist: $(LIBASS_DEPS) dist/js/$(WORKER_NAME).js dist/js/jassub.js
+dist: $(LIBASS_DEPS) dist/js/$(WORKER_NAME).js
 
 # Dist Files https://github.com/emscripten-core/emscripten/blob/3.1.38/src/settings.js
 
 # args for increasing performance
 # https://github.com/emscripten-core/emscripten/issues/13899
 PERFORMANCE_ARGS = \
-		-s BINARYEN_EXTRA_PASSES=--one-caller-inline-max-function-size=19306 \
+		-s BINARYEN_EXTRA_PASSES="--one-caller-inline-max-function-size=19306,--flatten,--rereloop,--coalesce-locals,--reorder-locals,--vacuum,--simplify-locals,--precompute-propagate,--dce,--remove-unused-names" \
 		-s INVOKE_RUN=0 \
 		-s DISABLE_EXCEPTION_CATCHING=1 \
-		-s TEXTDECODER=1 \
+		-s TEXTDECODER=2 \
 		-s MINIMAL_RUNTIME_STREAMING_WASM_INSTANTIATION=1 \
-		-flto \
-		-fno-exceptions \
-		-O3
+		-s SUPPORT_LONGJMP=1 \
+		-s MALLOC=emmalloc \
+		-ffast-math
 
 # args for reducing size
 SIZE_ARGS = \
@@ -221,20 +222,29 @@ SIZE_ARGS = \
 		-s HTML5_SUPPORT_DEFERRING_USER_SENSITIVE_REQUESTS=0 \
 		-s INCOMING_MODULE_JS_API="[]" \
 		-s USE_SDL=0 \
-		-s MINIMAL_RUNTIME=1 
+		-s MINIMAL_RUNTIME=1 \
+		-s SUPPORT_ERRNO=0 \
+		-s ASSERTIONS=0 \
+		-s STACK_OVERFLOW_CHECK=0 \
+		-s DYNAMIC_EXECUTION=0 \
+		-s EVAL_CTORS=1 \
+		-s IGNORE_MISSING_MAIN=1 \
+		-s STRICT=1
 
 # args that are required for this to even work at all
+# Modern browser targets: Chrome 114+, Safari 16.4+ (for all WASM features)
 COMPAT_ARGS = \
 		-s EXPORTED_FUNCTIONS="['_malloc']" \
 		-s EXPORTED_RUNTIME_METHODS="['getTempRet0', 'setTempRet0']" \
 		-s IMPORTED_MEMORY=1 \
-		-s MIN_CHROME_VERSION=74 \
-		-s MIN_SAFARI_VERSION=120200 \
-		-mbulk-memory
+		-s MIN_CHROME_VERSION=114 \
+		-s MIN_SAFARI_VERSION=160400
 
 dist/js/$(WORKER_NAME).js: src/JASSUB.cpp src/ts/worker.ts src/pre-worker.js src/post-worker.js
 	mkdir -p dist/js
 	emcc src/JASSUB.cpp $(LIBASS_DEPS) \
+		-O3 \
+		-fno-rtti -DEMSCRIPTEN_HAS_UNBOUND_TYPE_NAMES=0 \
 		$(WORKER_ARGS) \
 		$(PERFORMANCE_ARGS) \
 		$(SIZE_ARGS) \
@@ -244,11 +254,16 @@ dist/js/$(WORKER_NAME).js: src/JASSUB.cpp src/ts/worker.ts src/pre-worker.js src
 		--post-js src/post-worker.js \
 		-s ENVIRONMENT=worker \
 		-s EXIT_RUNTIME=0 \
-		-s WASM_BIGINT=0 \
+		-s WASM_BIGINT=1 \
 		-s ALLOW_MEMORY_GROWTH=1 \
+		-s MEMORY_GROWTH_GEOMETRIC_STEP=0.20 \
+		-s MEMORY_GROWTH_GEOMETRIC_CAP=96MB \
+		-s INITIAL_MEMORY=16MB \
 		-s MODULARIZE=1 \
 		-s EXPORT_ES6=1 \
-		-lembind \
+		--bind \
+		-lc++-noexcept \
+		-lc++abi-noexcept \
 		-o $@
 
 .PHONY: worker

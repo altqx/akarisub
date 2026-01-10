@@ -29,10 +29,6 @@ RECONF_AUTO := NOCONFIGURE=1 ./autogen.sh
 
 CONF_ARGS = --enable-optimize
 
-ifeq (${MODERN},1)
-  override CONF_ARGS += --enable-simd 
-endif
-
 # @arg1: path to source directory; defaults to current working directory
 define CONFIGURE_AUTO
 	CFLAGS="$(CFLAGS)" CXXFLAGS="$(CXXFLAGS)" \
