@@ -167,8 +167,7 @@ export default class JASSUB extends EventTarget {
     this.prescaleFactor = options.prescaleFactor || 1.0
     this.prescaleHeightLimit = options.prescaleHeightLimit || 1080
     this.maxRenderHeight = options.maxRenderHeight || 0
-    // Default 8ms lookahead to compensate for worker round-trip + render + draw pipeline
-    this.renderAhead = options.renderAhead ?? 0.008
+    this.renderAhead = options.renderAhead ?? 0
 
     // Bind methods
     this._boundResize = this.resize.bind(this)
