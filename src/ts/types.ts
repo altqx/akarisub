@@ -186,6 +186,8 @@ export interface JASSUBOptions {
   preferWebGPU?: boolean
   /** Callback when WebGPU is unavailable and falling back to Canvas2D */
   onWebGPUFallback?: () => void
+  /** Additional time in seconds to render subtitles ahead for pipeline latency compensation (default: 0.008) */
+  renderAhead?: number
 }
 
 // =============================================================================

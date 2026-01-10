@@ -712,6 +712,7 @@ class B extends EventTarget {
   prescaleHeightLimit;
   maxRenderHeight;
   busy = !1;
+  renderAhead;
   constructor(e) {
     if (super(), !globalThis.Worker)
       throw this.destroy(new Error("Worker not supported"));
@@ -730,7 +731,7 @@ class B extends EventTarget {
     this._bufferCanvas = document.createElement("canvas");
     const i = this._bufferCanvas.getContext("2d");
     if (!i) throw this.destroy(new Error("Canvas rendering not supported"));
-    this._bufferCtx = i, s ? this._initWebGPU() : this._offscreenRender || (this._ctx = this._canvas.getContext("2d")), this._canvasctrl = this._offscreenRender ? this._canvas.transferControlToOffscreen() : this._canvas, this._lastRenderTime = 0, this.debug = !!e.debug, this.prescaleFactor = e.prescaleFactor || 1, this.prescaleHeightLimit = e.prescaleHeightLimit || 1080, this.maxRenderHeight = e.maxRenderHeight || 0, this._boundResize = this.resize.bind(this), this._boundTimeUpdate = this._timeupdate.bind(this), this._boundSetRate = () => this.setRate(this._video.playbackRate), this._boundUpdateColorSpace = this._updateColorSpace.bind(this), this._video && this.setVideo(this._video), this._onDemandRender && (this.busy = !1, this._lastDemandTime = null), this._worker = new Worker(e.workerUrl || "jassub-worker.js"), this._worker.onmessage = (r) => this._onmessage(r), this._worker.onerror = (r) => this._error(r), t.then(() => {
+    this._bufferCtx = i, s ? this._initWebGPU() : this._offscreenRender || (this._ctx = this._canvas.getContext("2d")), this._canvasctrl = this._offscreenRender ? this._canvas.transferControlToOffscreen() : this._canvas, this._lastRenderTime = 0, this.debug = !!e.debug, this.prescaleFactor = e.prescaleFactor || 1, this.prescaleHeightLimit = e.prescaleHeightLimit || 1080, this.maxRenderHeight = e.maxRenderHeight || 0, this.renderAhead = e.renderAhead ?? 8e-3, this._boundResize = this.resize.bind(this), this._boundTimeUpdate = this._timeupdate.bind(this), this._boundSetRate = () => this.setRate(this._video.playbackRate), this._boundUpdateColorSpace = this._updateColorSpace.bind(this), this._video && this.setVideo(this._video), this._onDemandRender && (this.busy = !1, this._lastDemandTime = null), this._worker = new Worker(e.workerUrl || "jassub-worker.js"), this._worker.onmessage = (r) => this._onmessage(r), this._worker.onerror = (r) => this._error(r), t.then(() => {
       this._worker.postMessage({
         target: "init",
         wasmUrl: e.wasmUrl ?? "jassub-worker.wasm",
@@ -1071,17 +1072,18 @@ class B extends EventTarget {
   }
   _handleRVFC(e, t) {
     if (this._destroyed) return;
-    let s = t.mediaTime;
+    const s = this._video?.playbackRate ?? 1;
+    let i = t.mediaTime + this.renderAhead * s;
     if (t.expectedDisplayTime !== void 0 && t.expectedDisplayTime > e) {
-      const r = (t.expectedDisplayTime - e) / 1e3, o = this._video?.playbackRate ?? 1;
-      s = t.mediaTime + r * o;
+      const o = (t.expectedDisplayTime - e) / 1e3;
+      i += o * s;
     }
-    const i = {
-      mediaTime: s,
+    const r = {
+      mediaTime: i,
       width: t.width,
       height: t.height
     };
-    this.busy ? this._lastDemandTime = i : (this.busy = !0, this._demandRender(i)), this._video.requestVideoFrameCallback(this._handleRVFC.bind(this));
+    this.busy ? this._lastDemandTime = r : (this.busy = !0, this._demandRender(r)), this._video.requestVideoFrameCallback(this._handleRVFC.bind(this));
   }
   _demandRender(e) {
     this._lastDemandTime = null, (e.width !== this._videoWidth || e.height !== this._videoHeight) && (this._videoWidth = e.width, this._videoHeight = e.height, this.resize()), this.sendMessage("demand", { time: e.mediaTime + this.timeOffset });

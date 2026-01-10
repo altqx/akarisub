@@ -96,6 +96,7 @@ export default class JASSUB extends EventTarget {
   public prescaleHeightLimit: number
   public maxRenderHeight: number
   public busy: boolean = false
+  public renderAhead: number
 
   constructor(options: JASSUBOptions) {
     super()
@@ -166,6 +167,8 @@ export default class JASSUB extends EventTarget {
     this.prescaleFactor = options.prescaleFactor || 1.0
     this.prescaleHeightLimit = options.prescaleHeightLimit || 1080
     this.maxRenderHeight = options.maxRenderHeight || 0
+    // Default 8ms lookahead to compensate for worker round-trip + render + draw pipeline
+    this.renderAhead = options.renderAhead ?? 0.008
 
     // Bind methods
     this._boundResize = this.resize.bind(this)
@@ -708,19 +711,18 @@ export default class JASSUB extends EventTarget {
   private _handleRVFC(now: number, metadata: VideoFrameCallbackMetadata): void {
     if (this._destroyed) return
 
+    // Get the video's playback rate to correctly scale time offsets
+    const playbackRate = this._video?.playbackRate ?? 1
+
     // Calculate time compensation for rendering pipeline latency
-    let renderTime = metadata.mediaTime
+    let renderTime = metadata.mediaTime + this.renderAhead * playbackRate
 
     if (metadata.expectedDisplayTime !== undefined && metadata.expectedDisplayTime > now) {
       // Calculate how far ahead the expected display is from now (in seconds)
       const displayDelay = (metadata.expectedDisplayTime - now) / 1000
 
-      // Get the video's playback rate to correctly scale the time offset
-      const playbackRate = this._video?.playbackRate ?? 1
-
-      // Adjust the render time to account for display delay
-      // This ensures subtitles are rendered for when they'll actually appear
-      renderTime = metadata.mediaTime + displayDelay * playbackRate
+      // Add display delay compensation
+      renderTime += displayDelay * playbackRate
     }
 
     const demandData = {
