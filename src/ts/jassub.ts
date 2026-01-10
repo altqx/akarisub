@@ -705,14 +705,35 @@ export default class JASSUB extends EventTarget {
     }
   }
 
-  private _handleRVFC(_now: number, metadata: VideoFrameCallbackMetadata): void {
+  private _handleRVFC(now: number, metadata: VideoFrameCallbackMetadata): void {
     if (this._destroyed) return
 
+    // Calculate time compensation for rendering pipeline latency
+    let renderTime = metadata.mediaTime
+
+    if (metadata.expectedDisplayTime !== undefined && metadata.expectedDisplayTime > now) {
+      // Calculate how far ahead the expected display is from now (in seconds)
+      const displayDelay = (metadata.expectedDisplayTime - now) / 1000
+
+      // Get the video's playback rate to correctly scale the time offset
+      const playbackRate = this._video?.playbackRate ?? 1
+
+      // Adjust the render time to account for display delay
+      // This ensures subtitles are rendered for when they'll actually appear
+      renderTime = metadata.mediaTime + displayDelay * playbackRate
+    }
+
+    const demandData = {
+      mediaTime: renderTime,
+      width: metadata.width,
+      height: metadata.height
+    }
+
     if (this.busy) {
-      this._lastDemandTime = { mediaTime: metadata.mediaTime, width: metadata.width, height: metadata.height }
+      this._lastDemandTime = demandData
     } else {
       this.busy = true
-      this._demandRender({ mediaTime: metadata.mediaTime, width: metadata.width, height: metadata.height })
+      this._demandRender(demandData)
     }
 
     ;(this._video as any).requestVideoFrameCallback(this._handleRVFC.bind(this))

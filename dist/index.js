@@ -1070,7 +1070,18 @@ class B extends EventTarget {
     this._lastDemandTime ? this._demandRender(this._lastDemandTime) : this.busy = !1;
   }
   _handleRVFC(e, t) {
-    this._destroyed || (this.busy ? this._lastDemandTime = { mediaTime: t.mediaTime, width: t.width, height: t.height } : (this.busy = !0, this._demandRender({ mediaTime: t.mediaTime, width: t.width, height: t.height })), this._video.requestVideoFrameCallback(this._handleRVFC.bind(this)));
+    if (this._destroyed) return;
+    let s = t.mediaTime;
+    if (t.expectedDisplayTime !== void 0 && t.expectedDisplayTime > e) {
+      const r = (t.expectedDisplayTime - e) / 1e3, o = this._video?.playbackRate ?? 1;
+      s = t.mediaTime + r * o;
+    }
+    const i = {
+      mediaTime: s,
+      width: t.width,
+      height: t.height
+    };
+    this.busy ? this._lastDemandTime = i : (this.busy = !0, this._demandRender(i)), this._video.requestVideoFrameCallback(this._handleRVFC.bind(this));
   }
   _demandRender(e) {
     this._lastDemandTime = null, (e.width !== this._videoWidth || e.height !== this._videoHeight) && (this._videoWidth = e.width, this._videoHeight = e.height, this.resize()), this.sendMessage("demand", { time: e.mediaTime + this.timeOffset });

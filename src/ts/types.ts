@@ -304,11 +304,20 @@ export type WorkerInboundMessage =
 
 /** requestVideoFrameCallback metadata */
 export interface VideoFrameCallbackMetadata {
+  /** The current media time of the frame being displayed (seconds) */
   mediaTime: number
+  /** Video intrinsic width */
   width: number
+  /** Video intrinsic height */
   height: number
+  /** Number of frames presented so far */
   presentedFrames?: number
+  /** Time spent processing the frame (milliseconds) */
   processingDuration?: number
+  /** Expected time when this frame will be displayed (DOMHighResTimeStamp) */
+  expectedDisplayTime?: number
+  /** Time at which the frame was presented (DOMHighResTimeStamp) */
+  presentationTime?: number
 }
 
 // =============================================================================
