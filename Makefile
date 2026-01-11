@@ -49,21 +49,21 @@ $(DIST_DIR)/lib/libfribidi.a: build/lib/fribidi/configure
 	$(JSO_MAKE) install-pkgconfigDATA
 
 # Expat
-# build/lib/expat/configured: lib/expat
-# 	$(call PREPARE_SRC_VPATH,expat)
-# 	touch build/lib/expat/configured
+build/lib/expat/configured: lib/expat
+	$(call PREPARE_SRC_VPATH,expat)
+	touch build/lib/expat/configured
 
-# $(DIST_DIR)/lib/libexpat.a: build/lib/expat/configured
-# 	cd build/lib/expat && \
-# 	$(call CONFIGURE_CMAKE,$(BASE_DIR)lib/expat/expat) \
-# 		-DEXPAT_BUILD_DOCS=off \
-# 		-DEXPAT_SHARED_LIBS=off \
-# 		-DEXPAT_BUILD_EXAMPLES=off \
-# 		-DEXPAT_BUILD_FUZZERS=off \
-# 		-DEXPAT_BUILD_TESTS=off \
-# 		-DEXPAT_BUILD_TOOLS=off \
-# 	&& \
-# 	$(JSO_MAKE) install
+$(DIST_DIR)/lib/libexpat.a: build/lib/expat/configured
+	cd build/lib/expat && \
+	$(call CONFIGURE_CMAKE,$(BASE_DIR)lib/expat/expat) \
+		-DEXPAT_BUILD_DOCS=off \
+		-DEXPAT_SHARED_LIBS=off \
+		-DEXPAT_BUILD_EXAMPLES=off \
+		-DEXPAT_BUILD_FUZZERS=off \
+		-DEXPAT_BUILD_TESTS=off \
+		-DEXPAT_BUILD_TOOLS=off \
+	&& \
+	$(JSO_MAKE) install
 
 # Brotli
 build/lib/brotli/configured: lib/brotli $(wildcard $(BASE_DIR)build/patches/brotli/*.patch)
@@ -143,19 +143,44 @@ $(DIST_DIR)/lib/libfreetype.a: $(DIST_DIR)/lib/libharfbuzz.a $(DIST_DIR)/lib/lib
 	$(JSO_MAKE) install
 
 # Fontconfig
-# build/lib/fontconfig/configure: lib/fontconfig $(wildcard $(BASE_DIR)build/patches/fontconfig/*.patch)
-# 	$(call PREPARE_SRC_PATCHED,fontconfig)
-# 	cd build/lib/fontconfig && $(RECONF_AUTO)
+build/lib/fontconfig/configure: lib/fontconfig $(wildcard $(BASE_DIR)build/patches/fontconfig/*.patch)
+	$(call PREPARE_SRC_PATCHED,fontconfig)
+	cd build/lib/fontconfig && $(RECONF_AUTO)
 
-# $(DIST_DIR)/lib/libfontconfig.a: $(DIST_DIR)/lib/libharfbuzz.a $(DIST_DIR)/lib/libexpat.a $(DIST_DIR)/lib/libfribidi.a $(DIST_DIR)/lib/libfreetype.a build/lib/fontconfig/configure
-# 	cd build/lib/fontconfig && \
-# 	$(call CONFIGURE_AUTO) \
-# 		--disable-docs \
-# 		--with-default-fonts=/fonts \
-# 	&& \
-# 	$(JSO_MAKE) -C src/ install && \
-# 	$(JSO_MAKE) -C fontconfig/ install && \
-# 	$(JSO_MAKE) install-pkgconfigDATA
+$(DIST_DIR)/lib/libfontconfig.a: $(DIST_DIR)/lib/libfreetype.a $(DIST_DIR)/lib/libexpat.a build/lib/fontconfig/configure
+	cd build/lib/fontconfig && \
+	FREETYPE_CFLAGS="-I$(DIST_DIR)/include/freetype2" \
+	FREETYPE_LIBS="-L$(DIST_DIR)/lib -lfreetype" \
+	EXPAT_CFLAGS="-I$(DIST_DIR)/include" \
+	EXPAT_LIBS="-L$(DIST_DIR)/lib -lexpat" \
+	ac_cv_func_fstatfs=no \
+	ac_cv_func_fstatvfs=no \
+	ac_cv_func_getopt_long=yes \
+	ac_cv_func_link=no \
+	ac_cv_func_lrand48=yes \
+	ac_cv_func_lstat=no \
+	ac_cv_func_mkostemp=no \
+	ac_cv_func_mkstemp=yes \
+	ac_cv_func_mmap=no \
+	ac_cv_func_rand=yes \
+	ac_cv_func_random=yes \
+	ac_cv_func_random_r=no \
+	ac_cv_func_readlink=no \
+	ac_cv_func_vprintf=yes \
+	ac_cv_func_posix_fadvise=no \
+	ac_cv_func_scandir=no \
+	ac_cv_func_scandir_void_p=no \
+	ac_cv_va_copy=yes \
+	$(call CONFIGURE_AUTO) \
+		--disable-docs \
+		--disable-cache-build \
+		--with-default-fonts=/fonts \
+	&& \
+	$(JSO_MAKE) -C fc-const/ && \
+	$(JSO_MAKE) -C src/ && \
+	$(JSO_MAKE) -C src/ install && \
+	$(JSO_MAKE) -C fontconfig/ install && \
+	$(JSO_MAKE) install-pkgconfigDATA
 
 
 # libass
@@ -164,7 +189,7 @@ build/lib/libass/configured: lib/libass
 	$(call PREPARE_SRC_VPATH,libass)
 	touch build/lib/libass/configured
 
-$(DIST_DIR)/lib/libass.a: $(DIST_DIR)/lib/libharfbuzz.a $(DIST_DIR)/lib/libfribidi.a $(DIST_DIR)/lib/libfreetype.a $(DIST_DIR)/lib/libbrotlidec.a build/lib/libass/configured
+$(DIST_DIR)/lib/libass.a: $(DIST_DIR)/lib/libharfbuzz.a $(DIST_DIR)/lib/libfribidi.a $(DIST_DIR)/lib/libfreetype.a $(DIST_DIR)/lib/libbrotlidec.a $(DIST_DIR)/lib/libfontconfig.a $(DIST_DIR)/lib/libexpat.a build/lib/libass/configured
 	# Remove broken .la files that contain invalid paths from previous steps
 	rm -f $(DIST_DIR)/lib/*.la
 	cd build/lib/libass && \
@@ -175,6 +200,8 @@ $(DIST_DIR)/lib/libass.a: $(DIST_DIR)/lib/libharfbuzz.a $(DIST_DIR)/lib/libfribi
 	FRIBIDI_LIBS="-L$(DIST_DIR)/lib -lfribidi" \
 	HARFBUZZ_CFLAGS="-I$(DIST_DIR)/include/harfbuzz" \
 	HARFBUZZ_LIBS="-L$(DIST_DIR)/lib -lharfbuzz" \
+	FONTCONFIG_CFLAGS="-I$(DIST_DIR)/include" \
+	FONTCONFIG_LIBS="-L$(DIST_DIR)/lib -lfontconfig -lexpat" \
 	$(call CONFIGURE_AUTO,../../../lib/libass) \
 		--prefix="$(DIST_DIR)" \
 		--host=wasm32-unknown-emscripten \
@@ -183,7 +210,7 @@ $(DIST_DIR)/lib/libass.a: $(DIST_DIR)/lib/libharfbuzz.a $(DIST_DIR)/lib/libfribi
 		--disable-debug \
 		--enable-optimize \
 		--enable-large-tiles \
-		--disable-fontconfig \
+		--enable-fontconfig \
 		--disable-require-system-font-provider \
 	&& \
 	$(JSO_MAKE) install
@@ -194,6 +221,8 @@ LIBASS_DEPS = \
 	$(DIST_DIR)/lib/libbrotlidec.a \
 	$(DIST_DIR)/lib/libfreetype.a \
 	$(DIST_DIR)/lib/libharfbuzz.a \
+	$(DIST_DIR)/lib/libexpat.a \
+	$(DIST_DIR)/lib/libfontconfig.a \
 	$(DIST_DIR)/lib/libass.a
 
 
@@ -265,6 +294,8 @@ dist/js/$(WORKER_NAME).js: src/JASSUB.cpp src/ts/worker.ts src/pre-worker.js src
 		-lc++-noexcept \
 		-lc++abi-noexcept \
 		-o $@
+	# Patch SYSCALLS object to add missing methods for fontconfig compatibility
+	sed -i 's/get64:function(e,t){return e}}/get64:function(e,t){return e},calculateAt:function(e,t){return t},doAccess:function(e,t){return -2},doMkdir:function(e,t){return -30},doReadlink:function(e,t,r){return -2},doReadv:function(e,t,r,n){return 0},getStreamFromFD:function(e){return e===1||e===2?{fd:e}:null}}/g' $@
 
 .PHONY: worker
 
@@ -298,7 +329,7 @@ git-checkout:
 	git submodule sync --recursive && \
 	git submodule update --init --recursive
 
-SUBMODULES := brotli freetype fribidi harfbuzz libass
+SUBMODULES := brotli expat fontconfig freetype fribidi harfbuzz libass
 git-smreset: $(addprefix git-, $(SUBMODULES))
 
 $(foreach subm, $(SUBMODULES), $(eval $(call TR_GIT_SM_RESET,$(subm))))

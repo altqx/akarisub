@@ -340,6 +340,7 @@ private:
   int status;
 
   const char *defaultFont;
+  std::string fallbackFonts; // comma-separated list of fallback font families
 
   EventTimeEntry *event_index;
   int event_index_size;
@@ -640,8 +641,31 @@ public:
     reloadFonts();
   }
 
+  // Set multiple fallback fonts (comma-separated list)
+  // The first font is the primary, rest are fallbacks for fontconfig
+  void setFallbackFonts(const std::string &fonts) {
+    fallbackFonts = fonts;
+    reloadFonts();
+  }
+
+  // Add a fallback font to the list (appends to existing)
+  void addFallbackFont(const std::string &font) {
+    if (!fallbackFonts.empty()) {
+      fallbackFonts += ",";
+    }
+    fallbackFonts += font;
+    // Note: don't reload fonts here, call reloadFonts() manually after adding all
+  }
+
+  // Get the current fallback fonts string
+  std::string getFallbackFonts() const {
+    return fallbackFonts;
+  }
+
   void reloadFonts() {
-    ass_set_fonts(ass_renderer, NULL, defaultFont, ASS_FONTPROVIDER_NONE, NULL,
+    // Use fallbackFonts if set, otherwise use defaultFont
+    const char *fontFamily = fallbackFonts.empty() ? defaultFont : fallbackFonts.c_str();
+    ass_set_fonts(ass_renderer, NULL, fontFamily, ASS_FONTPROVIDER_FONTCONFIG, NULL,
                   1);
   }
 
@@ -1143,6 +1167,9 @@ EMSCRIPTEN_BINDINGS(JASSUB) {
                 emscripten::allow_raw_pointers())
       .function("disableStyleOverride", &JASSUB::disableStyleOverride)
       .function("setDefaultFont", &JASSUB::setDefaultFont)
+      .function("setFallbackFonts", &JASSUB::setFallbackFonts)
+      .function("addFallbackFont", &JASSUB::addFallbackFont)
+      .function("getFallbackFonts", &JASSUB::getFallbackFonts)
       .property("trackColorSpace", &JASSUB::trackColorSpace)
       .property("changed", &JASSUB::changed)
       .property("count", &JASSUB::count)

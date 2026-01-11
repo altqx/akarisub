@@ -174,8 +174,10 @@ export interface JASSUBOptions {
   fonts?: (string | Uint8Array)[]
   /** Available fonts map (lowercase name -> URL/data) */
   availableFonts?: Record<string, string | Uint8Array>
-  /** Fallback font family (default: 'liberation sans') */
+  /** Fallback font family (default: 'liberation sans') - primary fallback */
   fallbackFont?: string
+  /** Additional fallback fonts (after primary). Fontconfig uses these in order. */
+  fallbackFonts?: string[]
   /** Use Local Font Access API (default: true if available) */
   useLocalFonts?: boolean
   /** libass bitmap cache memory limit in MiB */
@@ -260,6 +262,7 @@ export interface WorkerInitMessage {
   fonts: (string | Uint8Array)[]
   availableFonts: Record<string, string | Uint8Array>
   fallbackFont: string
+  fallbackFonts: string[]
   debug: boolean
   targetFps: number
   dropAllAnimations?: boolean
@@ -341,6 +344,9 @@ export interface JASSUBWasmObject {
   reloadFonts(): void
   addFont(name: string, ptr: number, length: number): void
   setDefaultFont(font: string): void
+  setFallbackFonts(fonts: string): void
+  addFallbackFont(font: string): void
+  getFallbackFonts(): string
   setDropAnimations(drop: number): void
   setMemoryLimits(glyphLimit: number, memoryLimit: number): void
   styleOverride(style: JASSUBWasmStyle): void

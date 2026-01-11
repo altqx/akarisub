@@ -1,4 +1,4 @@
-const L = {
+const k = {
   bt709: "BT709",
   bt470bg: "BT601",
   // BT.601 PAL
@@ -45,7 +45,7 @@ function S(c, e, t, s, i) {
   let a = e * o;
   return n * a * r <= n * s ? a *= r : n * a < n * s && (a = s), i > 0 && a > i && (a = i), c *= a / e, e = a, { width: c, height: e };
 }
-function k(c, e = c.videoWidth, t = c.videoHeight) {
+function L(c, e = c.videoWidth, t = c.videoHeight) {
   const s = e / t, { offsetWidth: i, offsetHeight: r } = c, o = i / r;
   let n = i, a = r;
   o > s ? n = Math.floor(r * s) : a = Math.floor(i / s);
@@ -745,6 +745,7 @@ class B extends EventTarget {
         fonts: e.fonts || [],
         availableFonts: e.availableFonts || { "liberation sans": "./default.woff2" },
         fallbackFont: e.fallbackFont || "liberation sans",
+        fallbackFonts: e.fallbackFonts || [],
         debug: this.debug,
         targetFps: e.targetFps || 24,
         dropAllAnimations: e.dropAllAnimations,
@@ -821,7 +822,7 @@ class B extends EventTarget {
    */
   resize(e = 0, t = 0, s = 0, i = 0, r = this._video?.paused ?? !1) {
     if ((!e || !t) && this._video) {
-      const o = k(this._video);
+      const o = L(this._video);
       let n;
       if (this._videoWidth) {
         const a = this._video.videoWidth / this._videoWidth, h = this._video.videoHeight / this._videoHeight;
@@ -1094,7 +1095,7 @@ class B extends EventTarget {
     this._video.requestVideoFrameCallback(() => {
       try {
         const e = new globalThis.VideoFrame(this._video);
-        this._videoColorSpace = L[e.colorSpace.matrix] ?? null, e.close(), this.sendMessage("getColorSpace");
+        this._videoColorSpace = k[e.colorSpace.matrix] ?? null, e.close(), this.sendMessage("getColorSpace");
       } catch (e) {
         console.warn(e);
       }
@@ -1228,11 +1229,11 @@ export {
   te as getAlphaBug,
   se as getBitmapBug,
   Q as getColorSpaceFilterUrl,
-  k as getVideoPosition,
+  L as getVideoPosition,
   Y as isWebGPUSupported,
   j as libassYCbCrMap,
   J as parseAss,
   ee as runFeatureTests,
   $ as testImageBugs,
-  L as webYCbCrMap
+  k as webYCbCrMap
 };

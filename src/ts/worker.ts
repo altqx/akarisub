@@ -609,7 +609,28 @@ self.init = async (data: any): Promise<void> => {
     const fallbackFont = data.fallbackFont.toLowerCase()
     jassubObj = new Module.JASSUB(self.width, self.height, fallbackFont || null, debug)
 
-    if (fallbackFont) findAvailableFonts(fallbackFont)
+    // Set up fallback fonts list for fontconfig
+    // Build comma-separated list: primary font first, then additional fallbacks
+    const fallbackFonts: string[] = []
+    if (fallbackFont) fallbackFonts.push(fallbackFont)
+    if (data.fallbackFonts && data.fallbackFonts.length > 0) {
+      for (const font of data.fallbackFonts) {
+        const lowerFont = font.toLowerCase()
+        if (lowerFont && !fallbackFonts.includes(lowerFont)) {
+          fallbackFonts.push(lowerFont)
+        }
+      }
+    }
+
+    // Set the combined fallback fonts string for fontconfig
+    if (fallbackFonts.length > 0) {
+      jassubObj.setFallbackFonts(fallbackFonts.join(','))
+    }
+
+    // Find all fallback fonts in availableFonts
+    for (const font of fallbackFonts) {
+      findAvailableFonts(font)
+    }
 
     let subContent = data.subContent
     if (!subContent) subContent = read_(data.subUrl) as string

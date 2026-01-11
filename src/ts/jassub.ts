@@ -204,6 +204,7 @@ export default class JASSUB extends EventTarget {
         fonts: options.fonts || [],
         availableFonts: options.availableFonts || { 'liberation sans': './default.woff2' },
         fallbackFont: options.fallbackFont || 'liberation sans',
+        fallbackFonts: options.fallbackFonts || [],
         debug: this.debug,
         targetFps: options.targetFps || 24,
         dropAllAnimations: options.dropAllAnimations,
