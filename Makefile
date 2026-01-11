@@ -295,7 +295,7 @@ dist/js/$(WORKER_NAME).js: src/JASSUB.cpp src/ts/worker.ts src/pre-worker.js src
 		-lc++abi-noexcept \
 		-o $@
 	# Patch SYSCALLS object to add missing methods for fontconfig compatibility
-	sed -i 's/get64:function(e,t){return e}}/get64:function(e,t){return e},calculateAt:function(e,t){return t},doAccess:function(e,t){return -2},doMkdir:function(e,t){return -30},doReadlink:function(e,t,r){return -2},doReadv:function(e,t,r,n){return 0},getStreamFromFD:function(e){return e===1||e===2?{fd:e}:null}}/g' $@
+	sed -i -E 's/get64:function\(([^,]*),([^)]*)\)\{return \1\}\}/get64:function(\1,\2){return \1},calculateAt:function(e,t){return t},doAccess:function(e,t){return -2},doMkdir:function(e,t){return -30},doReadlink:function(e,t,r){return -2},doReadv:function(e,t,r,n){return 0},getStreamFromFD:function(e){return e===1||e===2?{fd:e}:null}}/g' $@
 
 .PHONY: worker
 
