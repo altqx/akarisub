@@ -665,7 +665,7 @@ public:
   void reloadFonts() {
     // Use fallbackFonts if set, otherwise use defaultFont
     const char *fontFamily = fallbackFonts.empty() ? defaultFont : fallbackFonts.c_str();
-    ass_set_fonts(ass_renderer, NULL, fontFamily, ASS_FONTPROVIDER_FONTCONFIG, NULL,
+    ass_set_fonts(ass_renderer, NULL, fontFamily, ASS_FONTPROVIDER_NONE, NULL,
                   1);
   }
 
