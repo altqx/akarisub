@@ -164,6 +164,18 @@ const asyncWrite = (font: string | Uint8Array): void => {
   }
 }
 
+// Synchronous font loading for critical fonts (fallback fonts)
+const syncWrite = (font: string | Uint8Array): void => {
+  if (typeof font === 'string') {
+    const fontData = read_(font, true) as ArrayBuffer
+    if (fontData) {
+      allocFontImmediate(new Uint8Array(fontData))
+    }
+  } else {
+    allocFontImmediate(font)
+  }
+}
+
 // Debounced font reload
 let pendingFontReload: ReturnType<typeof setTimeout> | null = null
 const scheduleReloadFonts = (): void => {
@@ -179,6 +191,13 @@ const allocFont = (uint8: Uint8Array): void => {
   self.HEAPU8.set(uint8, ptr)
   jassubObj!.addFont('font-' + fontId++, ptr, uint8.byteLength)
   scheduleReloadFonts()
+}
+
+// Immediate font allocation without debounced reload (for synchronous loading)
+const allocFontImmediate = (uint8: Uint8Array): void => {
+  const ptr = _malloc(uint8.byteLength)
+  self.HEAPU8.set(uint8, ptr)
+  jassubObj!.addFont('font-' + fontId++, ptr, uint8.byteLength)
 }
 
 const processAvailableFonts = (content: string): void => {
@@ -627,10 +646,31 @@ self.init = async (data: any): Promise<void> => {
       jassubObj.setFallbackFonts(fallbackFonts.join(','))
     }
 
-    // Find all fallback fonts in availableFonts
+    // Load fallback fonts SYNCHRONOUSLY so they're available before first render
+    // This is critical for font fallback to work correctly
     for (const font of fallbackFonts) {
-      findAvailableFonts(font)
+      const fontLower = font.trim().toLowerCase()
+      const fontKey = fontLower.startsWith('@') ? fontLower.substring(1) : fontLower
+      if (availableFonts && availableFonts[fontKey]) {
+        const fontUrl = availableFonts[fontKey]
+        if (typeof fontUrl === 'string') {
+          try {
+            syncWrite(fontUrl)
+            fontMap_[fontKey] = true
+          } catch (e) {
+            console.error('Failed to load fallback font:', fontKey, e)
+          }
+        } else {
+          // Font data directly provided
+          syncWrite(fontUrl)
+          fontMap_[fontKey] = true
+        }
+      }
     }
+
+    // Call reloadFonts immediately after loading fallback fonts
+    // so libass indexes them before rendering starts
+    jassubObj.reloadFonts()
 
     let subContent = data.subContent
     if (!subContent) subContent = read_(data.subUrl) as string
