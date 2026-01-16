@@ -711,17 +711,6 @@ self.init = async (data: any): Promise<void> => {
       }
     }
 
-    // First font in the list is the primary fallback for WASM constructor
-    const primaryFallback = fallbackFonts.length > 0 ? fallbackFonts[0] : null
-    jassubObj = new Module.JASSUB(self.width, self.height, primaryFallback, debug)
-
-    // Set the combined fallback fonts string for fontconfig
-    if (fallbackFonts.length > 0) {
-      jassubObj.setFallbackFonts(fallbackFonts.join(','))
-    }
-
-    // Load fallback fonts SYNCHRONOUSLY so they're available before first render
-    // This is critical for font fallback to work correctly
     for (const font of fallbackFonts) {
       const fontLower = font.trim().toLowerCase()
       const fontKey = fontLower.startsWith('@') ? fontLower.substring(1) : fontLower
@@ -742,9 +731,12 @@ self.init = async (data: any): Promise<void> => {
       }
     }
 
-    // Call reloadFonts immediately after loading fallback fonts
-    // so libass indexes them before rendering starts
-    jassubObj.reloadFonts()
+    const primaryFallback = fallbackFonts.length > 0 ? fallbackFonts[0] : null
+    jassubObj = new Module.JASSUB(self.width, self.height, primaryFallback, debug)
+
+    if (fallbackFonts.length > 0) {
+      jassubObj.setFallbackFonts(fallbackFonts.join(','))
+    }
 
     let subContent = data.subContent
     if (!subContent) subContent = read_(data.subUrl) as string
