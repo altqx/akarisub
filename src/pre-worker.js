@@ -33,12 +33,18 @@ err = (text) => {
 
 var updateMemoryViews = typeof updateMemoryViews === 'function' ? updateMemoryViews : function () {}
 
-// Patch Emscripten function to include Uint8Clamped views
+// Patch Emscripten function to include Uint8Clamped views and BigInt64 views
 updateMemoryViews = ((_super) => {
   return () => {
     if (typeof _super === 'function') _super()
     self.wasmMemory = wasmMemory
     self.HEAPU8C = new Uint8ClampedArray(wasmMemory.buffer)
     self.HEAPU8 = new Uint8Array(wasmMemory.buffer)
+    // BigInt64 views required for filesystem operations (stat, readdir, seek)
+    if (typeof BigInt64Array !== 'undefined') {
+      self.HEAP64 = new BigInt64Array(wasmMemory.buffer)
+      self.HEAPU64 = new BigUint64Array(wasmMemory.buffer)
+    }
   }
 })(updateMemoryViews)
+

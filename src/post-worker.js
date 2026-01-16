@@ -8,9 +8,21 @@ const __jassub_sync_heap = () => {
     if (typeof wasmMemory !== 'undefined') {
       self.wasmMemory = wasmMemory
       self.HEAPU8C = new Uint8ClampedArray(wasmMemory.buffer)
+      // BigInt64 views required for filesystem operations (stat, readdir, seek)
+      if (typeof BigInt64Array !== 'undefined') {
+        self.HEAP64 = new BigInt64Array(wasmMemory.buffer)
+        self.HEAPU64 = new BigUint64Array(wasmMemory.buffer)
+      }
     }
     if (typeof HEAPU8 !== 'undefined') {
       self.HEAPU8 = HEAPU8
+    }
+    // Sync HEAP64 from Emscripten's local variable if available
+    if (typeof HEAP64 !== 'undefined') {
+      self.HEAP64 = HEAP64
+    }
+    if (typeof HEAPU64 !== 'undefined') {
+      self.HEAPU64 = HEAPU64
     }
   } catch (_) {
     // older engines or differing builds may not have all symbols.
