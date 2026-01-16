@@ -193,7 +193,7 @@ const scheduleReloadFonts = (): void => {
  */
 const writeFontToFS = (uint8: Uint8Array): void => {
   const fontFileName = 'font-' + fontId++
-  
+
   // Write font to /fonts/ directory so fontconfig can scan and index it
   // This is the same approach as JavascriptSubtitlesOctopus
   if (_Module) {
@@ -211,7 +211,7 @@ const writeFontToFS = (uint8: Uint8Array): void => {
  */
 const writeFontToFSImmediate = (uint8: Uint8Array): void => {
   const fontFileName = 'font-' + fontId++
-  
+
   if (_Module) {
     try {
       _Module.FS_createDataFile('/fonts', fontFileName, uint8, true, true, true)
@@ -522,7 +522,7 @@ const paintImages = ({
         const img = images[i]
         if (img.image) {
           offCanvasCtx!.drawImage(img.image as ImageBitmap, img.x, img.y)
-          ;(img.image as ImageBitmap).close()
+            ; (img.image as ImageBitmap).close()
         }
       }
     } else {
@@ -629,16 +629,57 @@ self.init = async (data: any): Promise<void> => {
 
   const onWasmLoaded = (Module: JASSUBModule): void => {
     _Module = Module // Store module reference for FS access
-    
+
     // Create /fonts and /fontconfig directories for fontconfig to use
     // This is required for fontconfig to properly index fonts and provide cascade fallback
     try {
       Module.FS_createPath('/', 'fonts', true, true)
       Module.FS_createPath('/', 'fontconfig', true, true)
+      Module.FS_createPath('/', 'assets', true, true)
+
+      const fontsConf = `<?xml version="1.0"?>
+<!DOCTYPE fontconfig SYSTEM "fonts.dtd">
+<fontconfig>
+        <dir>/fonts</dir>
+        <match target="pattern">
+                <test qual="any" name="family">
+                        <string>mono</string>
+                </test>
+                <edit name="family" mode="assign" binding="same">
+                        <string>monospace</string>
+                </edit>
+        </match>
+        <match target="pattern">
+                <test qual="any" name="family">
+                        <string>sans serif</string>
+                </test>
+                <edit name="family" mode="assign" binding="same">
+                        <string>sans-serif</string>
+                </edit>
+        </match>
+        <match target="pattern">
+                <test qual="any" name="family">
+                        <string>sans</string>
+                </test>
+                <edit name="family" mode="assign" binding="same">
+                        <string>sans-serif</string>
+                </edit>
+        </match>
+        <cachedir>/fontconfig</cachedir>
+        <config>
+                <rescan>
+                        <int>30</int>
+                </rescan>
+        </config>
+</fontconfig>
+`
+      const encoder = new TextEncoder()
+      const fontsConfData = encoder.encode(fontsConf)
+      Module.FS_createDataFile('/assets', 'fonts.conf', fontsConfData, true, false, false)
     } catch (e) {
-      console.warn('Failed to create font directories:', e)
+      console.warn('Failed to create font directories or fonts.conf:', e)
     }
-    
+
     self.width = data.width
     self.height = data.height
     blendMode = data.blendMode
@@ -791,7 +832,7 @@ self.destroy = (): void => {
 
 const _applyKeys = <T extends object>(input: Partial<T>, output: T): void => {
   for (const v of Object.keys(input) as (keyof T)[]) {
-    ;(output as any)[v] = input[v]
+    ; (output as any)[v] = input[v]
   }
 }
 
