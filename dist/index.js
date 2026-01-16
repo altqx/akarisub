@@ -197,10 +197,10 @@ function Z(h) {
     d = d.replace(l, (f, y) => `\\${g}${b(parseFloat(y) * R, y)}`);
   }), d = d.replace(/(\\i?clip\s*\([^,)]+m[^)]+\)|\\p[1-9][^}]*?)(?=[\\}]|$)/g, (g) => g.replace(/(-?[\d.]+)\s+(-?[\d.]+)/g, (l, f, y) => `${b(parseFloat(f) * u, f)} ${b(parseFloat(y) * m, y)}`)), P.substring(0, p.index) + d;
 }
-let S = null, M = null;
+let S = null, F = null;
 async function $() {
-  if (S !== null && M !== null)
-    return { hasAlphaBug: S, hasBitmapBug: M };
+  if (S !== null && F !== null)
+    return { hasAlphaBug: S, hasBitmapBug: F };
   const h = document.createElement("canvas"), e = h.getContext("2d", { willReadFrequently: !0 });
   if (!e) throw new Error("Canvas rendering not supported");
   if (typeof ImageData.prototype.constructor == "function")
@@ -219,15 +219,15 @@ async function $() {
     const c = new Uint8ClampedArray([255, 0, 255, 0, 255]).subarray(1, 5);
     s.drawImage(await createImageBitmap(new ImageData(c, 1)), 0, 0);
     const { data: n } = s.getImageData(0, 0, 1, 1);
-    M = !1;
+    F = !1;
     for (let r = 0; r < n.length; r++)
       if (Math.abs(c[r] - n[r]) > 15) {
-        M = !0, console.log("Detected a browser having issue with partial bitmaps, applying workaround");
+        F = !0, console.log("Detected a browser having issue with partial bitmaps, applying workaround");
         break;
       }
   } else
-    M = !1;
-  return h.remove(), t.remove(), { hasAlphaBug: S, hasBitmapBug: M };
+    F = !1;
+  return h.remove(), t.remove(), { hasAlphaBug: S, hasBitmapBug: F };
 }
 async function ee() {
   return $();
@@ -236,9 +236,9 @@ function te() {
   return S;
 }
 function se() {
-  return M;
+  return F;
 }
-const G = 256, F = 256, q = (
+const G = 256, M = 256, q = (
   /* wgsl */
   `
 struct VertexOutput {
@@ -436,7 +436,7 @@ class X {
   }
   createTextureArray(e, t, s) {
     this.textureArray && this.pendingDestroyTextures.push(this.textureArray);
-    const i = this.nextPowerOf2(Math.max(e, 64)), a = this.nextPowerOf2(Math.max(t, 64)), c = Math.min(this.nextPowerOf2(Math.max(s, 16)), F);
+    const i = this.nextPowerOf2(Math.max(e, 64)), a = this.nextPowerOf2(Math.max(t, 64)), c = Math.min(this.nextPowerOf2(Math.max(s, 16)), M);
     this.textureArray = this.device.createTexture({
       size: [i, a, c],
       format: this.format,
@@ -463,12 +463,12 @@ class X {
     this.device.queue.submit([n.finish()]);
   }
   ensureTextureArray(e, t, s) {
-    const i = Math.min(s, F);
+    const i = Math.min(s, M);
     if (e <= this.textureArrayWidth && t <= this.textureArrayHeight && i <= this.textureArraySize)
       return !1;
     const a = this.nextPowerOf2(Math.max(this.textureArrayWidth, e)), c = this.nextPowerOf2(Math.max(this.textureArrayHeight, t)), n = Math.min(
       this.nextPowerOf2(Math.max(this.textureArraySize, i, i + 16)),
-      F
+      M
     );
     return this.createTextureArray(a, c, n), !0;
   }
@@ -524,13 +524,13 @@ class X {
       this.clear();
       return;
     }
-    const o = Math.min(r, F);
+    const o = Math.min(r, M);
     this.ensureTextureArray(c, n, o), this.updateBindGroup();
     const v = this.device, w = v.queue, x = this.textureArray, u = this.imageDataArray, m = a.createView();
     let R = 0, A = !0;
     for (; R < i; ) {
       let _ = 0;
-      for (; R < i && _ < F; ) {
+      for (; R < i && _ < M; ) {
         const d = e[R++], C = d.image, g = C.width, l = C.height;
         if (g <= 0 || l <= 0) continue;
         w.copyExternalImageToTexture(
@@ -579,13 +579,13 @@ class X {
       this.clear();
       return;
     }
-    const v = Math.min(o, F);
+    const v = Math.min(o, M);
     this.ensureTextureArray(n, r, v), this.updateBindGroup();
     const w = this.device, x = w.queue, u = this.textureArray, m = this.imageDataArray, R = this.format === "bgra8unorm", A = c.createView();
     let _ = 0, P = !0;
     for (; _ < a; ) {
       let p = 0;
-      for (; _ < a && p < F; ) {
+      for (; _ < a && p < M; ) {
         const g = e[_++], l = g.w, f = g.h;
         if (l <= 0 || f <= 0) continue;
         const y = g.image;
@@ -744,8 +744,7 @@ class B extends EventTarget {
         subContent: e.subContent || null,
         fonts: e.fonts || [],
         availableFonts: e.availableFonts || { "liberation sans": "./default.woff2" },
-        fallbackFont: e.fallbackFont || "liberation sans",
-        fallbackFonts: e.fallbackFonts || [],
+        fallbackFonts: e.fallbackFonts || ["liberation sans"],
         debug: this.debug,
         targetFps: e.targetFps || 24,
         dropAllAnimations: e.dropAllAnimations,

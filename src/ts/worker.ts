@@ -636,6 +636,8 @@ self.init = async (data: any): Promise<void> => {
       Module.FS_createPath('/', 'fonts', true, true)
       Module.FS_createPath('/', 'fontconfig', true, true)
       Module.FS_createPath('/', 'assets', true, true)
+      Module.FS_createPath('/', 'etc', true, true)
+      Module.FS_createPath('/etc', 'fonts', true, true)
 
       const fontsConf = `<?xml version="1.0"?>
 <!DOCTYPE fontconfig SYSTEM "fonts.dtd">
@@ -676,6 +678,7 @@ self.init = async (data: any): Promise<void> => {
       const encoder = new TextEncoder()
       const fontsConfData = encoder.encode(fontsConf)
       Module.FS_createDataFile('/assets', 'fonts.conf', fontsConfData, true, false, false)
+      Module.FS_createDataFile('/etc/fonts', 'fonts.conf', fontsConfData, true, false, false)
     } catch (e) {
       console.warn('Failed to create font directories or fonts.conf:', e)
     }
@@ -697,13 +700,8 @@ self.init = async (data: any): Promise<void> => {
     dropAllBlur = data.dropAllBlur
     clampPos = data.clampPos
 
-    const fallbackFont = data.fallbackFont.toLowerCase()
-    jassubObj = new Module.JASSUB(self.width, self.height, fallbackFont || null, debug)
-
-    // Set up fallback fonts list for fontconfig
-    // Build comma-separated list: primary font first, then additional fallbacks
+    // Normalize fallback fonts to lowercase and deduplicate
     const fallbackFonts: string[] = []
-    if (fallbackFont) fallbackFonts.push(fallbackFont)
     if (data.fallbackFonts && data.fallbackFonts.length > 0) {
       for (const font of data.fallbackFonts) {
         const lowerFont = font.toLowerCase()
@@ -712,6 +710,10 @@ self.init = async (data: any): Promise<void> => {
         }
       }
     }
+
+    // First font in the list is the primary fallback for WASM constructor
+    const primaryFallback = fallbackFonts.length > 0 ? fallbackFonts[0] : null
+    jassubObj = new Module.JASSUB(self.width, self.height, primaryFallback, debug)
 
     // Set the combined fallback fonts string for fontconfig
     if (fallbackFonts.length > 0) {
