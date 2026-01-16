@@ -115,14 +115,9 @@ renderer.destroy()
 Get real-time performance metrics for debugging and monitoring:
 
 ```typescript
-// Get performance statistics
-const stats = renderer.getStats((error, stats) => {
-  if (error) {
-    console.error('Failed to get stats:', error)
-    return
-  }
-  console.log(stats)
-})
+// Get performance statistics (Promise-based)
+const stats = await renderer.getStats()
+console.log(stats)
 // Output:
 // {
 //   framesRendered: 120,
@@ -142,9 +137,13 @@ const stats = renderer.getStats((error, stats) => {
 // }
 
 // Reset statistics counters
-renderer.resetStats((error) => {
-  if (!error) console.log('Stats reset!')
-})
+await renderer.resetStats()
+console.log('Stats reset!')
+
+// Get lightweight counts (doesn't fetch full event/style data)
+const eventCount = await renderer.getEventCount()
+const styleCount = await renderer.getStyleCount()
+console.log(`Events: ${eventCount}, Styles: ${styleCount}`)
 ```
 
 **Stats Reference:**
@@ -249,23 +248,25 @@ The default options are best, and automatically fallback to the next fastest opt
 
 ### Event Management
 
-| Method | Parameters | Description |
-|--------|------------|-------------|
-| `createEvent(event)` | `event: Partial<ASSEvent>` | Create a new ASS event |
-| `setEvent(event, index)` | `event: Partial<ASSEvent>, index: number` | Overwrite event at index |
-| `removeEvent(index)` | `index: number` | Remove event at index |
-| `getEvents(callback)` | `callback: (error: Error \| null, events: ASSEvent[]) => void` | Get all ASS events |
+| Method | Parameters | Returns | Description |
+|--------|------------|---------|-------------|
+| `createEvent(event)` | `event: Partial<ASSEvent>` | `void` | Create a new ASS event |
+| `setEvent(event, index)` | `event: Partial<ASSEvent>, index: number` | `void` | Overwrite event at index |
+| `removeEvent(index)` | `index: number` | `void` | Remove event at index |
+| `getEvents()` | - | `Promise<ASSEvent[]>` | Get all ASS events |
+| `getEventCount()` | - | `Promise<number>` | Get event count (lightweight) |
 
 ### Style Management
 
-| Method | Parameters | Description |
-|--------|------------|-------------|
-| `createStyle(style)` | `style: Partial<ASSStyle>` | Create a new ASS style |
-| `setStyle(style, index)` | `style: Partial<ASSStyle>, index: number` | Overwrite style at index |
-| `removeStyle(index)` | `index: number` | Remove style at index |
-| `getStyles(callback)` | `callback: (error: Error \| null, styles: ASSStyle[]) => void` | Get all ASS styles |
-| `styleOverride(style)` | `style: Partial<ASSStyle>` | Set a style override |
-| `disableStyleOverride()` | - | Disable style override |
+| Method | Parameters | Returns | Description |
+|--------|------------|---------|-------------|
+| `createStyle(style)` | `style: Partial<ASSStyle>` | `void` | Create a new ASS style |
+| `setStyle(style, index)` | `style: Partial<ASSStyle>, index: number` | `void` | Overwrite style at index |
+| `removeStyle(index)` | `index: number` | `void` | Remove style at index |
+| `getStyles()` | - | `Promise<ASSStyle[]>` | Get all ASS styles |
+| `getStyleCount()` | - | `Promise<number>` | Get style count (lightweight) |
+| `styleOverride(style)` | `style: Partial<ASSStyle>` | `void` | Set a style override |
+| `disableStyleOverride()` | - | `void` | Disable style override |
 
 ### Font Management
 
@@ -276,11 +277,13 @@ The default options are best, and automatically fallback to the next fastest opt
 
 ### Statistics & Debugging
 
-| Method | Parameters | Description |
-|--------|------------|-------------|
-| `getStats(callback)` | `callback: (error: Error \| null, stats: PerformanceStats \| null) => void` | Get performance statistics |
-| `resetStats(callback?)` | `callback?: (error: Error \| null) => void` | Reset statistics counters |
-| `runBenchmark()` | - | Run a benchmark on the worker |
+| Method | Parameters | Returns | Description |
+|--------|------------|---------|-------------|
+| `getStats()` | - | `Promise<PerformanceStats>` | Get performance statistics |
+| `resetStats()` | - | `Promise<void>` | Reset statistics counters |
+| `getEventCount()` | - | `Promise<number>` | Get event count (lightweight) |
+| `getStyleCount()` | - | `Promise<number>` | Get style count (lightweight) |
+| `runBenchmark()` | - | `void` | Run a benchmark on the worker |
 
 ### Lifecycle
 

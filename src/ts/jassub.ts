@@ -7,10 +7,6 @@ import type {
   JASSUBOptions,
   ASSEvent,
   ASSStyle,
-  ASSEventCallback,
-  ASSStyleCallback,
-  PerformanceStatsCallback,
-  ResetStatsCallback,
   PerformanceStats,
   RenderImage,
   RenderTimes,
@@ -555,10 +551,9 @@ export default class JASSUB extends EventTarget {
   /**
    * Get all ASS events.
    */
-  getEvents(callback: ASSEventCallback): void {
-    this._fetchFromWorker({ target: 'getEvents' }, (err, data) => {
-      callback(err, (data as any)?.events ?? [])
-    })
+  async getEvents(): Promise<ASSEvent[]> {
+    const data = await this._fetchFromWorker<{ events: ASSEvent[] }>({ target: 'getEvents' })
+    return data.events ?? []
   }
 
   // ==========================================================================
@@ -603,10 +598,9 @@ export default class JASSUB extends EventTarget {
   /**
    * Get all ASS styles.
    */
-  getStyles(callback: ASSStyleCallback): void {
-    this._fetchFromWorker({ target: 'getStyles' }, (err, data) => {
-      callback(err, (data as any)?.styles ?? [])
-    })
+  async getStyles(): Promise<ASSStyle[]> {
+    const data = await this._fetchFromWorker<{ styles: ASSStyle[] }>({ target: 'getStyles' })
+    return data.styles ?? []
   }
 
   // ==========================================================================
@@ -634,37 +628,48 @@ export default class JASSUB extends EventTarget {
   /**
    * Get real-time performance statistics.
    */
-  getStats(callback: PerformanceStatsCallback): void {
-    this._fetchFromWorker({ target: 'getStats' }, (err, data) => {
-      if (err) return callback(err, null)
-      const stats = (data as any)?.stats as Partial<PerformanceStats>
-      const augmented: PerformanceStats = {
-        framesRendered: stats.framesRendered ?? 0,
-        framesDropped: stats.framesDropped ?? 0,
-        avgRenderTime: stats.avgRenderTime ?? 0,
-        maxRenderTime: stats.maxRenderTime ?? 0,
-        minRenderTime: stats.minRenderTime ?? 0,
-        lastRenderTime: stats.lastRenderTime ?? 0,
-        pendingRenders: stats.pendingRenders ?? 0,
-        totalEvents: stats.totalEvents ?? 0,
-        cacheHits: stats.cacheHits ?? 0,
-        cacheMisses: stats.cacheMisses ?? 0,
-        renderFps: stats.avgRenderTime && stats.avgRenderTime > 0 ? Math.round(1000 / stats.avgRenderTime) : 0,
-        usingWorker: true,
-        offscreenRender: this._offscreenRender,
-        onDemandRender: this._onDemandRender
-      }
-      callback(null, augmented)
-    })
+  async getStats(): Promise<PerformanceStats> {
+    const data = await this._fetchFromWorker<{ stats: Partial<PerformanceStats> }>({ target: 'getStats' })
+    const stats = data.stats
+    return {
+      framesRendered: stats.framesRendered ?? 0,
+      framesDropped: stats.framesDropped ?? 0,
+      avgRenderTime: stats.avgRenderTime ?? 0,
+      maxRenderTime: stats.maxRenderTime ?? 0,
+      minRenderTime: stats.minRenderTime ?? 0,
+      lastRenderTime: stats.lastRenderTime ?? 0,
+      pendingRenders: stats.pendingRenders ?? 0,
+      totalEvents: stats.totalEvents ?? 0,
+      cacheHits: stats.cacheHits ?? 0,
+      cacheMisses: stats.cacheMisses ?? 0,
+      renderFps: stats.avgRenderTime && stats.avgRenderTime > 0 ? Math.round(1000 / stats.avgRenderTime) : 0,
+      usingWorker: true,
+      offscreenRender: this._offscreenRender,
+      onDemandRender: this._onDemandRender
+    }
   }
 
   /**
    * Reset performance statistics counters.
    */
-  resetStats(callback?: ResetStatsCallback): void {
-    this._fetchFromWorker({ target: 'resetStats' }, (err) => {
-      if (callback) callback(err)
-    })
+  async resetStats(): Promise<void> {
+    await this._fetchFromWorker({ target: 'resetStats' })
+  }
+
+  /**
+   * Get event count
+   */
+  async getEventCount(): Promise<number> {
+    const data = await this._fetchFromWorker<{ count: number }>({ target: 'getEventCount' })
+    return data.count
+  }
+
+  /**
+   * Get style count
+   */
+  async getStyleCount(): Promise<number> {
+    const data = await this._fetchFromWorker<{ count: number }>({ target: 'getStyleCount' })
+    return data.count
   }
 
   // ==========================================================================
@@ -959,37 +964,42 @@ export default class JASSUB extends EventTarget {
     }
   }
 
-  private _fetchFromWorker(workerOptions: { target: string }, callback: (err: Error | null, data?: any) => void): void {
-    try {
-      const target = workerOptions.target
+  private _fetchFromWorker<T = any>(workerOptions: { target: string }): Promise<T> {
+    return new Promise((resolve, reject) => {
+      try {
+        const target = workerOptions.target
 
-      const timeout = setTimeout(() => {
-        reject(new Error('Error: Timeout while trying to fetch ' + target))
-      }, 5000)
+        const timeout = setTimeout(() => {
+          cleanup()
+          reject(new Error('Error: Timeout while trying to fetch ' + target))
+        }, 5000)
 
-      const resolve = (event: MessageEvent) => {
-        if (event.data.target === target) {
-          callback(null, event.data)
-          this._worker.removeEventListener('message', resolve)
-          this._worker.removeEventListener('error', reject)
+        const handleMessage = (event: MessageEvent) => {
+          if (event.data.target === target) {
+            cleanup()
+            resolve(event.data as T)
+          }
+        }
+
+        const handleError = (event: ErrorEvent | Error) => {
+          cleanup()
+          reject(event instanceof Error ? event : event.error || new Error('Worker error'))
+        }
+
+        const cleanup = () => {
+          this._worker.removeEventListener('message', handleMessage)
+          this._worker.removeEventListener('error', handleError as any)
           clearTimeout(timeout)
         }
+
+        this._worker.addEventListener('message', handleMessage)
+        this._worker.addEventListener('error', handleError as any)
+
+        this._worker.postMessage(workerOptions)
+      } catch (error) {
+        reject(error)
       }
-
-      const reject = (event: ErrorEvent | Error) => {
-        callback(event instanceof Error ? event : event.error || new Error('Worker error'))
-        this._worker.removeEventListener('message', resolve)
-        this._worker.removeEventListener('error', reject as any)
-        clearTimeout(timeout)
-      }
-
-      this._worker.addEventListener('message', resolve)
-      this._worker.addEventListener('error', reject as any)
-
-      this._worker.postMessage(workerOptions)
-    } catch (error) {
-      this._error(error as Error)
-    }
+    })
   }
 
   private _console(data: { content: string; command: string }): void {

@@ -32,88 +32,88 @@ const k = {
   "FCC",
   "FCC"
 ];
-function Q(c, e) {
-  if (!c || !e || c === e) return null;
-  const t = W[c]?.[e];
+function Q(h, e) {
+  if (!h || !e || h === e) return null;
+  const t = W[h]?.[e];
   return t ? `url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg'><filter id='f'><feColorMatrix type='matrix' values='${t} 0 0 0 0 0 1 0'/></filter></svg>#f")` : null;
 }
-function S(c, e, t, s, i) {
-  const r = t <= 0 ? 1 : t, o = globalThis.devicePixelRatio || 1;
-  if (e <= 0 || c <= 0)
+function I(h, e, t, s, i) {
+  const a = t <= 0 ? 1 : t, c = globalThis.devicePixelRatio || 1;
+  if (e <= 0 || h <= 0)
     return { width: 0, height: 0 };
-  const n = r < 1 ? -1 : 1;
-  let a = e * o;
-  return n * a * r <= n * s ? a *= r : n * a < n * s && (a = s), i > 0 && a > i && (a = i), c *= a / e, e = a, { width: c, height: e };
+  const n = a < 1 ? -1 : 1;
+  let r = e * c;
+  return n * r * a <= n * s ? r *= a : n * r < n * s && (r = s), i > 0 && r > i && (r = i), h *= r / e, e = r, { width: h, height: e };
 }
-function L(c, e = c.videoWidth, t = c.videoHeight) {
-  const s = e / t, { offsetWidth: i, offsetHeight: r } = c, o = i / r;
-  let n = i, a = r;
-  o > s ? n = Math.floor(r * s) : a = Math.floor(i / s);
-  const h = (i - n) / 2, v = (r - a) / 2;
-  return { width: n, height: a, x: h, y: v };
+function L(h, e = h.videoWidth, t = h.videoHeight) {
+  const s = e / t, { offsetWidth: i, offsetHeight: a } = h, c = i / a;
+  let n = i, r = a;
+  c > s ? n = Math.floor(a * s) : r = Math.floor(i / s);
+  const o = (i - n) / 2, v = (a - r) / 2;
+  return { width: n, height: r, x: o, y: v };
 }
-function z(c, e) {
-  if (!e) return c;
-  const t = c.length, s = t - t % 16;
+function z(h, e) {
+  if (!e) return h;
+  const t = h.length, s = t - t % 16;
   let i = 3;
   for (; i < s; i += 16)
-    c[i] < 2 && (c[i] = 1), c[i + 4] < 2 && (c[i + 4] = 1), c[i + 8] < 2 && (c[i + 8] = 1), c[i + 12] < 2 && (c[i + 12] = 1);
+    h[i] < 2 && (h[i] = 1), h[i + 4] < 2 && (h[i + 4] = 1), h[i + 8] < 2 && (h[i + 8] = 1), h[i + 12] < 2 && (h[i + 12] = 1);
   for (; i < t; i += 4)
-    c[i] < 2 && (c[i] = 1);
-  return c;
+    h[i] < 2 && (h[i] = 1);
+  return h;
 }
-function J(c, e = !1) {
-  const t = [], s = c.split(/[\r\n]+/g), i = s.length;
-  let r = null, o = null;
+function J(h, e = !1) {
+  const t = [], s = h.split(/[\r\n]+/g), i = s.length;
+  let a = null, c = null;
   for (let n = 0; n < i; n++) {
-    const a = s[n];
-    if (!a || /^\s*$/.test(a)) continue;
-    const h = a[0];
-    if (h === "[") {
-      const v = a.match(/^\[(.*)\]$/);
+    const r = s[n];
+    if (!r || /^\s*$/.test(r)) continue;
+    const o = r[0];
+    if (o === "[") {
+      const v = r.match(/^\[(.*)\]$/);
       if (v) {
         if (e && v[1].toLowerCase() === "events")
           break;
-        r = null, o = { name: v[1], body: [] }, t.push(o);
+        a = null, c = { name: v[1], body: [] }, t.push(c);
         continue;
       }
     }
-    if (o)
-      if (h === ";")
-        o.body.push({
+    if (c)
+      if (o === ";")
+        c.body.push({
           type: "comment",
-          value: a.substring(1)
+          value: r.substring(1)
         });
       else {
-        const v = a.indexOf(":");
+        const v = r.indexOf(":");
         if (v === -1) continue;
-        const w = a.substring(0, v);
-        let x = a.substring(v + 1).trim();
-        if (r || w === "Format") {
+        const w = r.substring(0, v);
+        let x = r.substring(v + 1).trim();
+        if (a || w === "Format") {
           let u = x.split(",");
-          if (r && u.length > r.length) {
-            const R = u.slice(r.length - 1).join(",");
-            u = u.slice(0, r.length - 1), u.push(R);
+          if (a && u.length > a.length) {
+            const R = u.slice(a.length - 1).join(",");
+            u = u.slice(0, a.length - 1), u.push(R);
           }
           const m = u.length;
           for (let R = 0; R < m; R++)
             u[R] = u[R].trim();
-          if (r) {
-            const R = {}, A = Math.min(r.length, m);
+          if (a) {
+            const R = {}, A = Math.min(a.length, m);
             for (let _ = 0; _ < A; _++)
-              R[r[_]] = u[_];
+              R[a[_]] = u[_];
             x = R;
           } else
             x = u;
         }
-        w === "Format" && (r = x), o.body.push({ key: w, value: x });
+        w === "Format" && (a = x), c.body.push({ key: w, value: x });
       }
   }
   return t;
 }
 const O = /\\blur(?:[0-9]+\.)?[0-9]+/gm;
-function K(c) {
-  return c.replace(O, "");
+function K(h) {
+  return h.replace(O, "");
 }
 const H = [
   { w: 7680, h: 4320 },
@@ -127,27 +127,27 @@ const H = [
   { w: 1280, h: 720 }
   // 720p
 ];
-function V(c, e) {
+function V(h, e) {
   const t = [...H].sort((s, i) => s.w - i.w);
   for (const s of t)
-    if (c <= s.w && e <= s.h)
+    if (h <= s.w && e <= s.h)
       return s;
-  return { w: Math.ceil(c / 100) * 100, h: Math.ceil(e / 100) * 100 };
+  return { w: Math.ceil(h / 100) * 100, h: Math.ceil(e / 100) * 100 };
 }
-function b(c, e) {
-  return e && e.includes(".") ? c.toFixed(2).replace(/\.?0+$/, "") : Math.round(c);
+function b(h, e) {
+  return e && e.includes(".") ? h.toFixed(2).replace(/\.?0+$/, "") : Math.round(h);
 }
-function Z(c) {
-  const e = c.match(/PlayResX:\s*(\d+)/i), t = c.match(/PlayResY:\s*(\d+)/i), s = e ? parseInt(e[1], 10) : 1920, i = t ? parseInt(t[1], 10) : 1080, r = /\\pos\s*\(\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*\)/g, o = /\\move\s*\(\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)/g, n = /\\org\s*\(\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*\)/g, a = /\\i?clip\s*\(\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*\)/g;
-  let h = 0, v = 0;
+function Z(h) {
+  const e = h.match(/PlayResX:\s*(\d+)/i), t = h.match(/PlayResY:\s*(\d+)/i), s = e ? parseInt(e[1], 10) : 1920, i = t ? parseInt(t[1], 10) : 1080, a = /\\pos\s*\(\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*\)/g, c = /\\move\s*\(\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)/g, n = /\\org\s*\(\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*\)/g, r = /\\i?clip\s*\(\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*\)/g;
+  let o = 0, v = 0;
   const w = (g, l, f) => {
     let y;
     const T = new RegExp(g.source, "g");
-    for (; (y = T.exec(c)) !== null; ) {
+    for (; (y = T.exec(h)) !== null; ) {
       for (const E of l)
         if (y[E]) {
           const D = Math.abs(parseFloat(y[E]));
-          D > h && (h = D);
+          D > o && (o = D);
         }
       for (const E of f)
         if (y[E]) {
@@ -156,20 +156,20 @@ function Z(c) {
         }
     }
   };
-  if (w(r, [1], [2]), w(o, [1, 3], [2, 4]), w(n, [1], [2]), w(a, [1, 3], [2, 4]), h <= s && v <= i) return c;
-  const x = V(h, v), u = s / x.w, m = i / x.h, R = Math.min(u, m), A = Math.max(u, m), _ = 1;
-  let P = c;
+  if (w(a, [1], [2]), w(c, [1, 3], [2, 4]), w(n, [1], [2]), w(r, [1, 3], [2, 4]), o <= s && v <= i) return h;
+  const x = V(o, v), u = s / x.w, m = i / x.h, R = Math.min(u, m), A = Math.max(u, m), _ = 1;
+  let P = h;
   const p = P.match(/(\[Events\][\s\S]*)/i);
   if (!p) return P;
   let d = p[1];
   return d = d.replace(
-    r,
+    a,
     (g, l, f) => `\\pos(${b(parseFloat(l) * u, l)},${b(parseFloat(f) * m, f)})`
   ), d = d.replace(
     /\\move\s*\(\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)(?:\s*,\s*(-?[\d.]+)\s*,\s*(-?[\d.]+))?\s*\)/g,
     (g, l, f, y, T, E, D) => {
-      const I = `\\move(${b(parseFloat(l) * u, l)},${b(parseFloat(f) * m, f)},${b(parseFloat(y) * u, y)},${b(parseFloat(T) * m, T)}`;
-      return E ? `${I},${E},${D})` : `${I})`;
+      const U = `\\move(${b(parseFloat(l) * u, l)},${b(parseFloat(f) * m, f)},${b(parseFloat(y) * u, y)},${b(parseFloat(T) * m, T)}`;
+      return E ? `${U},${E},${D})` : `${U})`;
     }
   ), d = d.replace(
     n,
@@ -197,11 +197,11 @@ function Z(c) {
     d = d.replace(l, (f, y) => `\\${g}${b(parseFloat(y) * R, y)}`);
   }), d = d.replace(/(\\i?clip\s*\([^,)]+m[^)]+\)|\\p[1-9][^}]*?)(?=[\\}]|$)/g, (g) => g.replace(/(-?[\d.]+)\s+(-?[\d.]+)/g, (l, f, y) => `${b(parseFloat(f) * u, f)} ${b(parseFloat(y) * m, y)}`)), P.substring(0, p.index) + d;
 }
-let U = null, F = null;
+let S = null, M = null;
 async function $() {
-  if (U !== null && F !== null)
-    return { hasAlphaBug: U, hasBitmapBug: F };
-  const c = document.createElement("canvas"), e = c.getContext("2d", { willReadFrequently: !0 });
+  if (S !== null && M !== null)
+    return { hasAlphaBug: S, hasBitmapBug: M };
+  const h = document.createElement("canvas"), e = h.getContext("2d", { willReadFrequently: !0 });
   if (!e) throw new Error("Canvas rendering not supported");
   if (typeof ImageData.prototype.constructor == "function")
     try {
@@ -211,34 +211,34 @@ async function $() {
     }
   const t = document.createElement("canvas"), s = t.getContext("2d", { willReadFrequently: !0 });
   if (!s) throw new Error("Canvas rendering not supported");
-  c.width = t.width = 1, c.height = t.height = 1, e.clearRect(0, 0, 1, 1), s.clearRect(0, 0, 1, 1);
+  h.width = t.width = 1, h.height = t.height = 1, e.clearRect(0, 0, 1, 1), s.clearRect(0, 0, 1, 1);
   const i = s.getImageData(0, 0, 1, 1).data;
-  e.putImageData(new ImageData(new Uint8ClampedArray([0, 255, 0, 0]), 1, 1), 0, 0), s.drawImage(c, 0, 0);
-  const r = s.getImageData(0, 0, 1, 1).data;
-  if (U = i[1] !== r[1], U && console.log("Detected a browser having issue with transparent pixels, applying workaround"), typeof createImageBitmap < "u") {
-    const o = new Uint8ClampedArray([255, 0, 255, 0, 255]).subarray(1, 5);
-    s.drawImage(await createImageBitmap(new ImageData(o, 1)), 0, 0);
+  e.putImageData(new ImageData(new Uint8ClampedArray([0, 255, 0, 0]), 1, 1), 0, 0), s.drawImage(h, 0, 0);
+  const a = s.getImageData(0, 0, 1, 1).data;
+  if (S = i[1] !== a[1], S && console.log("Detected a browser having issue with transparent pixels, applying workaround"), typeof createImageBitmap < "u") {
+    const c = new Uint8ClampedArray([255, 0, 255, 0, 255]).subarray(1, 5);
+    s.drawImage(await createImageBitmap(new ImageData(c, 1)), 0, 0);
     const { data: n } = s.getImageData(0, 0, 1, 1);
-    F = !1;
-    for (let a = 0; a < n.length; a++)
-      if (Math.abs(o[a] - n[a]) > 15) {
-        F = !0, console.log("Detected a browser having issue with partial bitmaps, applying workaround");
+    M = !1;
+    for (let r = 0; r < n.length; r++)
+      if (Math.abs(c[r] - n[r]) > 15) {
+        M = !0, console.log("Detected a browser having issue with partial bitmaps, applying workaround");
         break;
       }
   } else
-    F = !1;
-  return c.remove(), t.remove(), { hasAlphaBug: U, hasBitmapBug: F };
+    M = !1;
+  return h.remove(), t.remove(), { hasAlphaBug: S, hasBitmapBug: M };
 }
 async function ee() {
   return $();
 }
 function te() {
-  return U;
+  return S;
 }
 function se() {
-  return F;
+  return M;
 }
-const G = 256, M = 256, q = (
+const G = 256, F = 256, q = (
   /* wgsl */
   `
 struct VertexOutput {
@@ -436,23 +436,23 @@ class X {
   }
   createTextureArray(e, t, s) {
     this.textureArray && this.pendingDestroyTextures.push(this.textureArray);
-    const i = this.nextPowerOf2(Math.max(e, 64)), r = this.nextPowerOf2(Math.max(t, 64)), o = Math.min(this.nextPowerOf2(Math.max(s, 16)), M);
+    const i = this.nextPowerOf2(Math.max(e, 64)), a = this.nextPowerOf2(Math.max(t, 64)), c = Math.min(this.nextPowerOf2(Math.max(s, 16)), F);
     this.textureArray = this.device.createTexture({
-      size: [i, r, o],
+      size: [i, a, c],
       format: this.format,
       usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT
-    }), this.textureArrayView = this.textureArray.createView({ dimension: "2d-array" }), this.textureArrayWidth = i, this.textureArrayHeight = r, this.textureArraySize = o, this.bindGroupDirty = !0;
+    }), this.textureArrayView = this.textureArray.createView({ dimension: "2d-array" }), this.textureArrayWidth = i, this.textureArrayHeight = a, this.textureArraySize = c, this.bindGroupDirty = !0;
     const n = this.device.createCommandEncoder();
-    for (let a = 0; a < o; a++) {
-      const h = this.textureArray.createView({
+    for (let r = 0; r < c; r++) {
+      const o = this.textureArray.createView({
         dimension: "2d",
-        baseArrayLayer: a,
+        baseArrayLayer: r,
         arrayLayerCount: 1
       });
       n.beginRenderPass({
         colorAttachments: [
           {
-            view: h,
+            view: o,
             clearValue: { r: 0, g: 0, b: 0, a: 0 },
             loadOp: "clear",
             storeOp: "store"
@@ -463,14 +463,14 @@ class X {
     this.device.queue.submit([n.finish()]);
   }
   ensureTextureArray(e, t, s) {
-    const i = Math.min(s, M);
+    const i = Math.min(s, F);
     if (e <= this.textureArrayWidth && t <= this.textureArrayHeight && i <= this.textureArraySize)
       return !1;
-    const r = this.nextPowerOf2(Math.max(this.textureArrayWidth, e)), o = this.nextPowerOf2(Math.max(this.textureArrayHeight, t)), n = Math.min(
+    const a = this.nextPowerOf2(Math.max(this.textureArrayWidth, e)), c = this.nextPowerOf2(Math.max(this.textureArrayHeight, t)), n = Math.min(
       this.nextPowerOf2(Math.max(this.textureArraySize, i, i + 16)),
-      M
+      F
     );
-    return this.createTextureArray(r, o, n), !0;
+    return this.createTextureArray(a, c, n), !0;
   }
   updateBindGroup() {
     !this.bindGroupDirty || !this.device || !this.bindGroupLayout || (this.bindGroup = this.device.createBindGroup({
@@ -513,24 +513,24 @@ class X {
       this.clear();
       return;
     }
-    const r = this.context.getCurrentTexture();
-    if (r.width === 0 || r.height === 0) return;
-    let o = 0, n = 0, a = 0;
+    const a = this.context.getCurrentTexture();
+    if (a.width === 0 || a.height === 0) return;
+    let c = 0, n = 0, r = 0;
     for (let _ = 0; _ < i; _++) {
       const { image: P } = e[_], p = P.width, d = P.height;
-      p > 0 && d > 0 && (p > o && (o = p), d > n && (n = d), a++);
+      p > 0 && d > 0 && (p > c && (c = p), d > n && (n = d), r++);
     }
-    if (a === 0) {
+    if (r === 0) {
       this.clear();
       return;
     }
-    const h = Math.min(a, M);
-    this.ensureTextureArray(o, n, h), this.updateBindGroup();
-    const v = this.device, w = v.queue, x = this.textureArray, u = this.imageDataArray, m = r.createView();
+    const o = Math.min(r, F);
+    this.ensureTextureArray(c, n, o), this.updateBindGroup();
+    const v = this.device, w = v.queue, x = this.textureArray, u = this.imageDataArray, m = a.createView();
     let R = 0, A = !0;
     for (; R < i; ) {
       let _ = 0;
-      for (; R < i && _ < M; ) {
+      for (; R < i && _ < F; ) {
         const d = e[R++], C = d.image, g = C.width, l = C.height;
         if (g <= 0 || l <= 0) continue;
         w.copyExternalImageToTexture(
@@ -563,29 +563,29 @@ class X {
    */
   render(e, t, s, i) {
     if (!this.device || !this.context || !this.pipeline) return;
-    const r = e.length;
-    if (r === 0) {
+    const a = e.length;
+    if (a === 0) {
       this.clear();
       return;
     }
-    const o = this.context.getCurrentTexture();
-    if (o.width === 0 || o.height === 0) return;
-    let n = 0, a = 0, h = 0;
-    for (let p = 0; p < r; p++) {
+    const c = this.context.getCurrentTexture();
+    if (c.width === 0 || c.height === 0) return;
+    let n = 0, r = 0, o = 0;
+    for (let p = 0; p < a; p++) {
       const { w: d, h: C } = e[p];
-      d > 0 && C > 0 && (d > n && (n = d), C > a && (a = C), h++);
+      d > 0 && C > 0 && (d > n && (n = d), C > r && (r = C), o++);
     }
-    if (h === 0) {
+    if (o === 0) {
       this.clear();
       return;
     }
-    const v = Math.min(h, M);
-    this.ensureTextureArray(n, a, v), this.updateBindGroup();
-    const w = this.device, x = w.queue, u = this.textureArray, m = this.imageDataArray, R = this.format === "bgra8unorm", A = o.createView();
+    const v = Math.min(o, F);
+    this.ensureTextureArray(n, r, v), this.updateBindGroup();
+    const w = this.device, x = w.queue, u = this.textureArray, m = this.imageDataArray, R = this.format === "bgra8unorm", A = c.createView();
     let _ = 0, P = !0;
-    for (; _ < r; ) {
+    for (; _ < a; ) {
       let p = 0;
-      for (; _ < r && p < M; ) {
+      for (; _ < a && p < F; ) {
         const g = e[_++], l = g.w, f = g.h;
         if (l <= 0 || f <= 0) continue;
         const y = g.image;
@@ -613,12 +613,12 @@ class X {
     }
     this.cleanupPendingTextures();
   }
-  uploadTextureData(e, t, s, i, r) {
-    const o = s * i * 4;
-    if (r) {
-      const n = this.ensureConversionBuffer(o), a = new Uint8Array(t);
-      for (let h = 0; h < o; h += 4)
-        n[h] = a[h + 2], n[h + 1] = a[h + 1], n[h + 2] = a[h], n[h + 3] = a[h + 3];
+  uploadTextureData(e, t, s, i, a) {
+    const c = s * i * 4;
+    if (a) {
+      const n = this.ensureConversionBuffer(c), r = new Uint8Array(t);
+      for (let o = 0; o < c; o += 4)
+        n[o] = r[o + 2], n[o + 1] = r[o + 1], n[o + 2] = r[o], n[o + 3] = r[o + 3];
       this.device.queue.writeTexture(
         { texture: this.textureArray, origin: [0, 0, e] },
         n.buffer,
@@ -718,8 +718,8 @@ class B extends EventTarget {
       throw this.destroy(new Error("Worker not supported"));
     if (!e)
       throw this.destroy(new Error("No options provided"));
-    this._loaded = new Promise((r) => {
-      this._init = r;
+    this._loaded = new Promise((a) => {
+      this._init = a;
     });
     const t = B._test();
     this._onDemandRender = "requestVideoFrameCallback" in HTMLVideoElement.prototype && (e.onDemandRender ?? !0), this._preferWebGPU = e.preferWebGPU !== !1, this._onWebGPUFallback = e.onWebGPUFallback;
@@ -731,7 +731,7 @@ class B extends EventTarget {
     this._bufferCanvas = document.createElement("canvas");
     const i = this._bufferCanvas.getContext("2d");
     if (!i) throw this.destroy(new Error("Canvas rendering not supported"));
-    this._bufferCtx = i, s ? this._initWebGPU() : this._offscreenRender || (this._ctx = this._canvas.getContext("2d")), this._canvasctrl = this._offscreenRender ? this._canvas.transferControlToOffscreen() : this._canvas, this._lastRenderTime = 0, this.debug = !!e.debug, this.prescaleFactor = e.prescaleFactor || 1, this.prescaleHeightLimit = e.prescaleHeightLimit || 1080, this.maxRenderHeight = e.maxRenderHeight || 0, this.renderAhead = e.renderAhead ?? 0, this._boundResize = this.resize.bind(this), this._boundTimeUpdate = this._timeupdate.bind(this), this._boundSetRate = () => this.setRate(this._video.playbackRate), this._boundUpdateColorSpace = this._updateColorSpace.bind(this), this._video && this.setVideo(this._video), this._onDemandRender && (this.busy = !1, this._lastDemandTime = null), this._worker = new Worker(e.workerUrl || "jassub-worker.js"), this._worker.onmessage = (r) => this._onmessage(r), this._worker.onerror = (r) => this._error(r), t.then(() => {
+    this._bufferCtx = i, s ? this._initWebGPU() : this._offscreenRender || (this._ctx = this._canvas.getContext("2d")), this._canvasctrl = this._offscreenRender ? this._canvas.transferControlToOffscreen() : this._canvas, this._lastRenderTime = 0, this.debug = !!e.debug, this.prescaleFactor = e.prescaleFactor || 1, this.prescaleHeightLimit = e.prescaleHeightLimit || 1080, this.maxRenderHeight = e.maxRenderHeight || 0, this.renderAhead = e.renderAhead ?? 0, this._boundResize = this.resize.bind(this), this._boundTimeUpdate = this._timeupdate.bind(this), this._boundSetRate = () => this.setRate(this._video.playbackRate), this._boundUpdateColorSpace = this._updateColorSpace.bind(this), this._video && this.setVideo(this._video), this._onDemandRender && (this.busy = !1, this._lastDemandTime = null), this._worker = new Worker(e.workerUrl || "jassub-worker.js"), this._worker.onmessage = (a) => this._onmessage(a), this._worker.onerror = (a) => this._error(a), t.then(() => {
       this._worker.postMessage({
         target: "init",
         wasmUrl: e.wasmUrl ?? "jassub-worker.wasm",
@@ -774,16 +774,16 @@ class B extends EventTarget {
     const s = document.createElement("canvas"), i = s.getContext("2d", { willReadFrequently: !0 });
     if (!i) throw new Error("Canvas rendering not supported");
     e.width = s.width = 1, e.height = s.height = 1, t.clearRect(0, 0, 1, 1), i.clearRect(0, 0, 1, 1);
-    const r = i.getImageData(0, 0, 1, 1).data;
+    const a = i.getImageData(0, 0, 1, 1).data;
     t.putImageData(new ImageData(new Uint8ClampedArray([0, 255, 0, 0]), 1, 1), 0, 0), i.drawImage(e, 0, 0);
-    const o = i.getImageData(0, 0, 1, 1).data;
-    if (B._hasAlphaBug = r[1] !== o[1], B._hasAlphaBug && console.log("Detected a browser having issue with transparent pixels, applying workaround"), typeof createImageBitmap < "u") {
+    const c = i.getImageData(0, 0, 1, 1).data;
+    if (B._hasAlphaBug = a[1] !== c[1], B._hasAlphaBug && console.log("Detected a browser having issue with transparent pixels, applying workaround"), typeof createImageBitmap < "u") {
       const n = new Uint8ClampedArray([255, 0, 255, 0, 255]).subarray(1, 5);
       i.drawImage(await createImageBitmap(new ImageData(n, 1)), 0, 0);
-      const { data: a } = i.getImageData(0, 0, 1, 1);
+      const { data: r } = i.getImageData(0, 0, 1, 1);
       B._hasBitmapBug = !1;
-      for (let h = 0; h < a.length; h++)
-        if (Math.abs(n[h] - a[h]) > 15) {
+      for (let o = 0; o < r.length; o++)
+        if (Math.abs(n[o] - r[o]) > 15) {
           B._hasBitmapBug = !0, console.log("Detected a browser having issue with partial bitmaps, applying workaround");
           break;
         }
@@ -820,35 +820,35 @@ class B extends EventTarget {
   /**
    * Resize the canvas to given parameters. Auto-generated if values are omitted.
    */
-  resize(e = 0, t = 0, s = 0, i = 0, r = this._video?.paused ?? !1) {
+  resize(e = 0, t = 0, s = 0, i = 0, a = this._video?.paused ?? !1) {
     if ((!e || !t) && this._video) {
-      const o = L(this._video);
+      const c = L(this._video);
       let n;
       if (this._videoWidth) {
-        const a = this._video.videoWidth / this._videoWidth, h = this._video.videoHeight / this._videoHeight;
-        n = S(
-          (o.width || 0) / a,
-          (o.height || 0) / h,
+        const r = this._video.videoWidth / this._videoWidth, o = this._video.videoHeight / this._videoHeight;
+        n = I(
+          (c.width || 0) / r,
+          (c.height || 0) / o,
           this.prescaleFactor,
           this.prescaleHeightLimit,
           this.maxRenderHeight
         );
       } else
-        n = S(
-          o.width || 0,
-          o.height || 0,
+        n = I(
+          c.width || 0,
+          c.height || 0,
           this.prescaleFactor,
           this.prescaleHeightLimit,
           this.maxRenderHeight
         );
-      e = n.width, t = n.height, this._canvasParent && (s = o.y - (this._canvasParent.getBoundingClientRect().top - this._video.getBoundingClientRect().top), i = o.x), this._canvas.style.width = o.width + "px", this._canvas.style.height = o.height + "px";
+      e = n.width, t = n.height, this._canvasParent && (s = c.y - (this._canvasParent.getBoundingClientRect().top - this._video.getBoundingClientRect().top), i = c.x), this._canvas.style.width = c.width + "px", this._canvas.style.height = c.height + "px";
     }
-    this._canvas.style.top = s + "px", this._canvas.style.left = i + "px", this._useWebGPU && this._webgpuRenderer && e > 0 && t > 0 && this._webgpuRenderer.updateSize(e, t), r && this.busy === !1 ? this.busy = !0 : r = !1, this.sendMessage("canvas", {
+    this._canvas.style.top = s + "px", this._canvas.style.left = i + "px", this._useWebGPU && this._webgpuRenderer && e > 0 && t > 0 && this._webgpuRenderer.updateSize(e, t), a && this.busy === !1 ? this.busy = !0 : a = !1, this.sendMessage("canvas", {
       width: e,
       height: t,
       videoWidth: this._videoWidth || this._video?.videoWidth || 0,
       videoHeight: this._videoHeight || this._video?.videoHeight || 0,
-      force: r
+      force: a
     });
   }
   // ==========================================================================
@@ -947,10 +947,8 @@ class B extends EventTarget {
   /**
    * Get all ASS events.
    */
-  getEvents(e) {
-    this._fetchFromWorker({ target: "getEvents" }, (t, s) => {
-      e(t, s?.events ?? []);
-    });
+  async getEvents() {
+    return (await this._fetchFromWorker({ target: "getEvents" })).events ?? [];
   }
   // ==========================================================================
   // Style Management
@@ -988,10 +986,8 @@ class B extends EventTarget {
   /**
    * Get all ASS styles.
    */
-  getStyles(e) {
-    this._fetchFromWorker({ target: "getStyles" }, (t, s) => {
-      e(t, s?.styles ?? []);
-    });
+  async getStyles() {
+    return (await this._fetchFromWorker({ target: "getStyles" })).styles ?? [];
   }
   // ==========================================================================
   // Font Management
@@ -1014,35 +1010,42 @@ class B extends EventTarget {
   /**
    * Get real-time performance statistics.
    */
-  getStats(e) {
-    this._fetchFromWorker({ target: "getStats" }, (t, s) => {
-      if (t) return e(t, null);
-      const i = s?.stats, r = {
-        framesRendered: i.framesRendered ?? 0,
-        framesDropped: i.framesDropped ?? 0,
-        avgRenderTime: i.avgRenderTime ?? 0,
-        maxRenderTime: i.maxRenderTime ?? 0,
-        minRenderTime: i.minRenderTime ?? 0,
-        lastRenderTime: i.lastRenderTime ?? 0,
-        pendingRenders: i.pendingRenders ?? 0,
-        totalEvents: i.totalEvents ?? 0,
-        cacheHits: i.cacheHits ?? 0,
-        cacheMisses: i.cacheMisses ?? 0,
-        renderFps: i.avgRenderTime && i.avgRenderTime > 0 ? Math.round(1e3 / i.avgRenderTime) : 0,
-        usingWorker: !0,
-        offscreenRender: this._offscreenRender,
-        onDemandRender: this._onDemandRender
-      };
-      e(null, r);
-    });
+  async getStats() {
+    const t = (await this._fetchFromWorker({ target: "getStats" })).stats;
+    return {
+      framesRendered: t.framesRendered ?? 0,
+      framesDropped: t.framesDropped ?? 0,
+      avgRenderTime: t.avgRenderTime ?? 0,
+      maxRenderTime: t.maxRenderTime ?? 0,
+      minRenderTime: t.minRenderTime ?? 0,
+      lastRenderTime: t.lastRenderTime ?? 0,
+      pendingRenders: t.pendingRenders ?? 0,
+      totalEvents: t.totalEvents ?? 0,
+      cacheHits: t.cacheHits ?? 0,
+      cacheMisses: t.cacheMisses ?? 0,
+      renderFps: t.avgRenderTime && t.avgRenderTime > 0 ? Math.round(1e3 / t.avgRenderTime) : 0,
+      usingWorker: !0,
+      offscreenRender: this._offscreenRender,
+      onDemandRender: this._onDemandRender
+    };
   }
   /**
    * Reset performance statistics counters.
    */
-  resetStats(e) {
-    this._fetchFromWorker({ target: "resetStats" }, (t) => {
-      e && e(t);
-    });
+  async resetStats() {
+    await this._fetchFromWorker({ target: "resetStats" });
+  }
+  /**
+   * Get event count
+   */
+  async getEventCount() {
+    return (await this._fetchFromWorker({ target: "getEventCount" })).count;
+  }
+  /**
+   * Get style count
+   */
+  async getStyleCount() {
+    return (await this._fetchFromWorker({ target: "getStyleCount" })).count;
   }
   // ==========================================================================
   // Private Methods
@@ -1052,8 +1055,8 @@ class B extends EventTarget {
       globalThis.queryLocalFonts().then((t) => {
         const s = t?.find((i) => i.fullName.toLowerCase() === e);
         s && s.blob().then((i) => {
-          i.arrayBuffer().then((r) => {
-            this.addFont(new Uint8Array(r));
+          i.arrayBuffer().then((a) => {
+            this.addFont(new Uint8Array(a));
           });
         });
       });
@@ -1075,12 +1078,12 @@ class B extends EventTarget {
   }
   _handleRVFC(e, t) {
     if (this._destroyed) return;
-    const s = this._video?.playbackRate ?? 1, r = {
+    const s = this._video?.playbackRate ?? 1, a = {
       mediaTime: t.mediaTime + this.renderAhead * s,
       width: t.width,
       height: t.height
     };
-    this.busy ? this._lastDemandTime = r : (this.busy = !0, this._demandRender(r)), this._video.requestVideoFrameCallback(this._handleRVFC.bind(this));
+    this.busy ? this._lastDemandTime = a : (this.busy = !0, this._demandRender(a)), this._video.requestVideoFrameCallback(this._handleRVFC.bind(this));
   }
   _demandRender(e) {
     this._lastDemandTime = null, (e.width !== this._videoWidth || e.height !== this._videoHeight) && (this._videoWidth = e.width, this._videoHeight = e.height, this.resize()), this.sendMessage("demand", { time: e.mediaTime + this.timeOffset });
@@ -1116,32 +1119,32 @@ class B extends EventTarget {
       return;
     }
     if (!this._ctx) return;
-    const r = this._ctx, o = e.images, n = o.length;
-    if (r.clearRect(0, 0, t, s), e.asyncRender)
-      for (let a = 0; a < n; a++) {
-        const h = o[a];
-        h.image && (r.drawImage(h.image, h.x, h.y), h.image.close());
+    const a = this._ctx, c = e.images, n = c.length;
+    if (a.clearRect(0, 0, t, s), e.asyncRender)
+      for (let r = 0; r < n; r++) {
+        const o = c[r];
+        o.image && (a.drawImage(o.image, o.x, o.y), o.image.close());
       }
     else {
-      const a = this._bufferCanvas, h = this._bufferCtx, v = B._hasAlphaBug ?? !1;
+      const r = this._bufferCanvas, o = this._bufferCtx, v = B._hasAlphaBug ?? !1;
       for (let w = 0; w < n; w++) {
-        const x = o[w];
+        const x = c[w];
         if (x.image) {
           const u = x.w, m = x.h;
-          (a.width !== u || a.height !== m) && (a.width = u, a.height = m);
+          (r.width !== u || r.height !== m) && (r.width = u, r.height = m);
           const R = new Uint8ClampedArray(x.image), A = z(R, v);
-          h.putImageData(new ImageData(A, u, m), 0, 0), r.drawImage(a, x.x, x.y);
+          o.putImageData(new ImageData(A, u, m), 0, 0), a.drawImage(r, x.x, x.y);
         }
       }
     }
     if (this.debug) {
       e.times.JSRenderTime = Date.now() - (e.times.JSRenderTime || 0) - (e.times.IPCTime || 0);
-      let a = 0;
-      const h = e.times.bitmaps || n;
+      let r = 0;
+      const o = e.times.bitmaps || n;
       delete e.times.bitmaps;
       for (const v in e.times)
-        a += e.times[v] || 0;
-      console.log("Bitmaps: " + h + " Total: " + (a | 0) + "ms", e.times);
+        r += e.times[v] || 0;
+      console.log("Bitmaps: " + o + " Total: " + (r | 0) + "ms", e.times);
     }
   }
   _renderWebGPU(e) {
@@ -1181,19 +1184,23 @@ class B extends EventTarget {
   async sendMessage(e, t = {}, s) {
     await this._loaded, s ? this._worker.postMessage({ target: e, transferable: s, ...t }, [...s]) : this._worker.postMessage({ target: e, ...t });
   }
-  _fetchFromWorker(e, t) {
-    try {
-      const s = e.target, i = setTimeout(() => {
-        o(new Error("Error: Timeout while trying to fetch " + s));
-      }, 5e3), r = (n) => {
-        n.data.target === s && (t(null, n.data), this._worker.removeEventListener("message", r), this._worker.removeEventListener("error", o), clearTimeout(i));
-      }, o = (n) => {
-        t(n instanceof Error ? n : n.error || new Error("Worker error")), this._worker.removeEventListener("message", r), this._worker.removeEventListener("error", o), clearTimeout(i);
-      };
-      this._worker.addEventListener("message", r), this._worker.addEventListener("error", o), this._worker.postMessage(e);
-    } catch (s) {
-      this._error(s);
-    }
+  _fetchFromWorker(e) {
+    return new Promise((t, s) => {
+      try {
+        const i = e.target, a = setTimeout(() => {
+          r(), s(new Error("Error: Timeout while trying to fetch " + i));
+        }, 5e3), c = (o) => {
+          o.data.target === i && (r(), t(o.data));
+        }, n = (o) => {
+          r(), s(o instanceof Error ? o : o.error || new Error("Worker error"));
+        }, r = () => {
+          this._worker.removeEventListener("message", c), this._worker.removeEventListener("error", n), clearTimeout(a);
+        };
+        this._worker.addEventListener("message", c), this._worker.addEventListener("error", n), this._worker.postMessage(e);
+      } catch (i) {
+        s(i);
+      }
+    });
   }
   _console(e) {
     console[e.command].apply(console, JSON.parse(e.content));
@@ -1221,7 +1228,7 @@ export {
   B as JASSUB,
   X as WebGPURenderer,
   W as colorMatrixConversionMap,
-  S as computeCanvasSize,
+  I as computeCanvasSize,
   B as default,
   K as dropBlur,
   z as fixAlpha,

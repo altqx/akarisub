@@ -921,6 +921,16 @@ self.resetStats = (): void => {
   postMessage({ target: 'resetStats', success: true })
 }
 
+self.getEventCount = (): void => {
+  const count = jassubObj ? jassubObj.getEventCount() : 0
+  postMessage({ target: 'getEventCount', count })
+}
+
+self.getStyleCount = (): void => {
+  const count = jassubObj ? jassubObj.getStyleCount() : 0
+  postMessage({ target: 'getStyleCount', count })
+}
+
 // =============================================================================
 // Message Handler
 // =============================================================================

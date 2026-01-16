@@ -193,12 +193,16 @@ export interface JASSUBOptions {
 }
 
 // =============================================================================
-// Callback Types
+// Callback Types (deprecated - use Promise-based API instead)
 // =============================================================================
 
+/** @deprecated Use Promise-based getEvents() instead */
 export type ASSEventCallback = (error: Error | null, events: ASSEvent[]) => void
+/** @deprecated Use Promise-based getStyles() instead */
 export type ASSStyleCallback = (error: Error | null, styles: ASSStyle[]) => void
+/** @deprecated Use Promise-based getStats() instead */
 export type PerformanceStatsCallback = (error: Error | null, stats: PerformanceStats | null) => void
+/** @deprecated Use Promise-based resetStats() instead */
 export type ResetStatsCallback = (error: Error | null) => void
 
 // =============================================================================
@@ -246,6 +250,8 @@ export type WorkerOutboundMessage =
   | { target: 'getStyles'; styles: ASSStyle[]; time: number }
   | { target: 'getStats'; stats: Partial<PerformanceStats> }
   | { target: 'resetStats'; success: boolean }
+  | { target: 'getEventCount'; count: number }
+  | { target: 'getStyleCount'; count: number }
   | RenderMessage
 
 /** Main thread -> Worker init message */
@@ -300,6 +306,8 @@ export type WorkerInboundMessage =
   | { target: 'disableStyleOverride' }
   | { target: 'getStats' }
   | { target: 'resetStats' }
+  | { target: 'getEventCount' }
+  | { target: 'getStyleCount' }
   | { target: 'runBenchmark' }
   | { target: 'getColorSpace' }
 
