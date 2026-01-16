@@ -33,7 +33,7 @@ CONF_ARGS = --enable-optimize
 define CONFIGURE_AUTO
 	CFLAGS="$(CFLAGS)" CXXFLAGS="$(CXXFLAGS)" \
 	CC=emcc CXX=em++ \
-	emconfigure $(or $(1),.)/configure \
+	emconfigure sh $(or $(1),.)/configure \
 		--prefix="$(DIST_DIR)" \
 		--host=wasm32-unknown-emscripten \
 		--enable-static \
