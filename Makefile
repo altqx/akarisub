@@ -245,7 +245,8 @@ PERFORMANCE_ARGS = \
 # args for reducing size
 SIZE_ARGS = \
 		-s POLYFILL=0 \
-		-s FILESYSTEM=0 \
+		-s NO_FILESYSTEM=0 \
+		--embed-file assets/fonts.conf \
 		-s AUTO_JS_LIBRARIES=0 \
 		-s AUTO_NATIVE_LIBRARIES=0 \
 		-s HTML5_SUPPORT_DEFERRING_USER_SENSITIVE_REQUESTS=0 \
@@ -263,8 +264,8 @@ SIZE_ARGS = \
 # args that are required for this to even work at all
 # Modern browser targets: Chrome 114+, Safari 16.4+ (for all WASM features)
 COMPAT_ARGS = \
-		-s EXPORTED_FUNCTIONS="['_malloc']" \
-		-s EXPORTED_RUNTIME_METHODS="['getTempRet0', 'setTempRet0']" \
+		-s EXPORTED_FUNCTIONS="['_malloc', '_free']" \
+		-s EXPORTED_RUNTIME_METHODS="['getTempRet0', 'setTempRet0', 'FS_createPath', 'FS_createDataFile']" \
 		-s IMPORTED_MEMORY=1 \
 		-s MIN_CHROME_VERSION=114 \
 		-s MIN_SAFARI_VERSION=160400
@@ -294,8 +295,6 @@ dist/js/$(WORKER_NAME).js: src/JASSUB.cpp src/ts/worker.ts src/pre-worker.js src
 		-lc++-noexcept \
 		-lc++abi-noexcept \
 		-o $@
-	# Patch SYSCALLS object to add missing methods for fontconfig compatibility
-	sed -i -E 's/get64:function\(([^,]*),([^)]*)\)\{return \1\}\}/get64:function(\1,\2){return \1},calculateAt:function(e,t){return t},doAccess:function(e,t){return -2},doMkdir:function(e,t){return -30},doReadlink:function(e,t,r){return -2},doReadv:function(e,t,r,n){return 0},getStreamFromFD:function(e){return e===1||e===2?{fd:e}:null}}/g' $@
 
 .PHONY: worker
 

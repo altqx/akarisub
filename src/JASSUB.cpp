@@ -665,8 +665,7 @@ public:
   void reloadFonts() {
     // Use fallbackFonts if set, otherwise use defaultFont
     const char *fontFamily = fallbackFonts.empty() ? defaultFont : fallbackFonts.c_str();
-    ass_set_fonts(ass_renderer, NULL, fontFamily, ASS_FONTPROVIDER_FONTCONFIG, NULL,
-                  1);
+    ass_set_fonts(ass_renderer, NULL, fontFamily, ASS_FONTPROVIDER_FONTCONFIG, "/assets/fonts.conf", 1);
   }
 
   void addFont(const std::string &name, int data, unsigned long data_size) {

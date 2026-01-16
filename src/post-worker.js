@@ -27,13 +27,17 @@ if (typeof updateGlobalBufferAndViews === 'function') {
   }
 }
 
-// Expose `_malloc`/`_free` and initial heap views when the module becomes ready.
+// Expose `_malloc`/`_free`, FS functions, and initial heap views when the module becomes ready.
 const __jassub_ready = typeof ready === 'function' ? ready : null
 if (__jassub_ready) {
   // eslint-disable-next-line no-global-assign
   ready = () => {
     Module._malloc = _malloc
     Module._free = _free
+    if (typeof FS !== 'undefined') {
+      Module.FS_createPath = FS.createPath
+      Module.FS_createDataFile = FS.createDataFile
+    }
     __jassub_sync_heap()
     return __jassub_ready()
   }

@@ -99,8 +99,8 @@ let bufferCtx: OffscreenCanvasRenderingContext2D | null = null
 let jassubObj: JASSUBWasmObject | null = null
 let subtitleColorSpace: SubtitleColorSpace = null
 let dropAllBlur = false
-let _malloc: (size: number) => number
 let hasBitmapBug = false
+let _Module: JASSUBModule | null = null
 
 // Pre-allocated object pool for render results
 const MAX_POOLED_IMAGES = 128
@@ -155,12 +155,12 @@ const asyncWrite = (font: string | Uint8Array): void => {
     readAsync(
       font,
       (fontData) => {
-        allocFont(new Uint8Array(fontData))
+        writeFontToFS(new Uint8Array(fontData))
       },
       console.error
     )
   } else {
-    allocFont(font)
+    writeFontToFS(font)
   }
 }
 
@@ -169,10 +169,10 @@ const syncWrite = (font: string | Uint8Array): void => {
   if (typeof font === 'string') {
     const fontData = read_(font, true) as ArrayBuffer
     if (fontData) {
-      allocFontImmediate(new Uint8Array(fontData))
+      writeFontToFSImmediate(new Uint8Array(fontData))
     }
   } else {
-    allocFontImmediate(font)
+    writeFontToFSImmediate(font)
   }
 }
 
@@ -186,18 +186,39 @@ const scheduleReloadFonts = (): void => {
   }, 16)
 }
 
-const allocFont = (uint8: Uint8Array): void => {
-  const ptr = _malloc(uint8.byteLength)
-  self.HEAPU8.set(uint8, ptr)
-  jassubObj!.addFont('font-' + fontId++, ptr, uint8.byteLength)
+/**
+ * Write a font to the virtual filesystem at /fonts/ so fontconfig can index it.
+ * This matches JSO's approach - fonts are written to filesystem only,
+ * and fontconfig scans /fonts/ directory for cascade fallback.
+ */
+const writeFontToFS = (uint8: Uint8Array): void => {
+  const fontFileName = 'font-' + fontId++
+  
+  // Write font to /fonts/ directory so fontconfig can scan and index it
+  // This is the same approach as JavascriptSubtitlesOctopus
+  if (_Module) {
+    try {
+      _Module.FS_createDataFile('/fonts', fontFileName, uint8, true, true, true)
+    } catch (e) {
+      console.warn('Failed to write font to filesystem:', fontFileName, e)
+    }
+  }
   scheduleReloadFonts()
 }
 
-// Immediate font allocation without debounced reload (for synchronous loading)
-const allocFontImmediate = (uint8: Uint8Array): void => {
-  const ptr = _malloc(uint8.byteLength)
-  self.HEAPU8.set(uint8, ptr)
-  jassubObj!.addFont('font-' + fontId++, ptr, uint8.byteLength)
+/**
+ * Immediate font write without debounced reload (for synchronous loading).
+ */
+const writeFontToFSImmediate = (uint8: Uint8Array): void => {
+  const fontFileName = 'font-' + fontId++
+  
+  if (_Module) {
+    try {
+      _Module.FS_createDataFile('/fonts', fontFileName, uint8, true, true, true)
+    } catch (e) {
+      console.warn('Failed to write font to filesystem:', fontFileName, e)
+    }
+  }
 }
 
 const processAvailableFonts = (content: string): void => {
@@ -607,7 +628,17 @@ self.init = async (data: any): Promise<void> => {
   }
 
   const onWasmLoaded = (Module: JASSUBModule): void => {
-    _malloc = Module._malloc
+    _Module = Module // Store module reference for FS access
+    
+    // Create /fonts and /fontconfig directories for fontconfig to use
+    // This is required for fontconfig to properly index fonts and provide cascade fallback
+    try {
+      Module.FS_createPath('/', 'fonts', true, true)
+      Module.FS_createPath('/', 'fontconfig', true, true)
+    } catch (e) {
+      console.warn('Failed to create font directories:', e)
+    }
+    
     self.width = data.width
     self.height = data.height
     blendMode = data.blendMode

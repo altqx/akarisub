@@ -409,4 +409,6 @@ export interface JASSUBModule extends EmscriptenModule {
   JASSUB: new (width: number, height: number, fallbackFont: string | null, debug: boolean) => JASSUBWasmObject
   _malloc: (size: number) => number
   _free: (ptr: number) => void
+  FS_createPath: (parent: string, path: string, canRead: boolean, canWrite: boolean) => void
+  FS_createDataFile: (parent: string, name: string | null, data: Uint8Array, canRead: boolean, canWrite: boolean, canOwn?: boolean) => void
 }
