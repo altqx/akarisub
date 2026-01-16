@@ -175,6 +175,7 @@ $(DIST_DIR)/lib/libfontconfig.a: $(DIST_DIR)/lib/libfreetype.a $(DIST_DIR)/lib/l
 		--disable-docs \
 		--disable-cache-build \
 		--with-default-fonts=/fonts \
+		--with-baseconfigdir=/etc/fonts \
 	&& \
 	$(JSO_MAKE) -C fc-const/ && \
 	$(JSO_MAKE) -C src/ && \
