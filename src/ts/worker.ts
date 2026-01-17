@@ -215,6 +215,7 @@ const writeFontToFSImmediate = (uint8: Uint8Array): void => {
   if (_Module) {
     try {
       _Module.FS_createDataFile('/fonts', fontFileName, uint8, true, true, true)
+      if (debug) console.log('[JASSUB] Wrote font to FS:', fontFileName, 'size:', uint8.length)
     } catch (e) {
       console.warn('Failed to write font to filesystem:', fontFileName, e)
     }
@@ -745,20 +746,25 @@ self.init = async (data: any): Promise<void> => {
     if (clampPos) subContent = fixPlayRes(subContent)
     if (dropAllBlur) subContent = dropBlur(subContent)
 
-    // Write fonts to filesystem
-    let hasPreloadedFonts = false
+    // Check if we have preloaded fonts (Uint8Array)
+    const hasPreloadedFonts = (data.fonts || []).some((font: string | Uint8Array) => typeof font !== 'string')
+
+    // Write fonts to filesystem first
     for (const font of data.fonts || []) {
       if (typeof font === 'string') {
         asyncWrite(font)
       } else {
         writeFontToFSImmediate(font)
-        hasPreloadedFonts = true
       }
     }
 
     if (hasPreloadedFonts) {
+      if (debug) console.log('[JASSUB] Reloading fonts after writing', 'preloaded', 'fonts to FS')
       jassubObj.reloadFonts()
+      if (debug) console.log('[JASSUB] Font reload complete')
     }
+
+    processAvailableFonts(subContent)
 
     jassubObj.createTrackMem(subContent)
     subtitleColorSpace = libassYCbCrMap[jassubObj.trackColorSpace]
