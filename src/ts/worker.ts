@@ -745,7 +745,20 @@ self.init = async (data: any): Promise<void> => {
     if (clampPos) subContent = fixPlayRes(subContent)
     if (dropAllBlur) subContent = dropBlur(subContent)
 
-    for (const font of data.fonts || []) asyncWrite(font)
+    // Write fonts to filesystem
+    let hasPreloadedFonts = false
+    for (const font of data.fonts || []) {
+      if (typeof font === 'string') {
+        asyncWrite(font)
+      } else {
+        writeFontToFSImmediate(font)
+        hasPreloadedFonts = true
+      }
+    }
+
+    if (hasPreloadedFonts) {
+      jassubObj.reloadFonts()
+    }
 
     jassubObj.createTrackMem(subContent)
     subtitleColorSpace = libassYCbCrMap[jassubObj.trackColorSpace]
