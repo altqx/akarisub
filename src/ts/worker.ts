@@ -56,7 +56,8 @@ let useLocalFonts = false
 let blendMode: 'js' | 'wasm' = 'wasm'
 let availableFonts: Record<string, string | Uint8Array> = {}
 const fontMap_: Record<string, boolean> = {}
-let fontId = 0
+let attachedFontId = 0  // For attached/preloaded fonts (higher priority)
+let fallbackFontId = 0  // For fallback fonts (lower priority)
 let debug = false
 let clampPos = false
 
@@ -134,7 +135,8 @@ const getPooledItem = (index: number): RenderResultItem => {
 // Font Management
 // =============================================================================
 
-self.addFont = ({ font }: { font: string | Uint8Array }) => asyncWrite(font)
+// Fonts added via addFont are explicitly requested, so they should be attached (high priority)
+self.addFont = ({ font }: { font: string | Uint8Array }) => asyncWrite(font, false)
 
 const findAvailableFonts = (font: string): void => {
   font = font.trim().toLowerCase()
@@ -150,29 +152,29 @@ const findAvailableFonts = (font: string): void => {
   }
 }
 
-const asyncWrite = (font: string | Uint8Array): void => {
+const asyncWrite = (font: string | Uint8Array, isFallback: boolean = true): void => {
   if (typeof font === 'string') {
     readAsync(
       font,
       (fontData) => {
-        writeFontToFS(new Uint8Array(fontData))
+        writeFontToFS(new Uint8Array(fontData), isFallback)
       },
       console.error
     )
   } else {
-    writeFontToFS(font)
+    writeFontToFS(font, isFallback)
   }
 }
 
 // Synchronous font loading for critical fonts (fallback fonts)
-const syncWrite = (font: string | Uint8Array): void => {
+const syncWrite = (font: string | Uint8Array, isFallback: boolean = true): void => {
   if (typeof font === 'string') {
     const fontData = read_(font, true) as ArrayBuffer
     if (fontData) {
-      writeFontToFSImmediate(new Uint8Array(fontData))
+      writeFontToFSImmediate(new Uint8Array(fontData), isFallback)
     }
   } else {
-    writeFontToFSImmediate(font)
+    writeFontToFSImmediate(font, isFallback)
   }
 }
 
@@ -187,20 +189,20 @@ const scheduleReloadFonts = (): void => {
 }
 
 /**
- * Write a font to the virtual filesystem at /fonts/ so fontconfig can index it.
- * This matches JSO's approach - fonts are written to filesystem only,
- * and fontconfig scans /fonts/ directory for cascade fallback.
+ * Write a font to the virtual filesystem so fontconfig can index it.
+ * Fonts are written to separate directories based on priority:
+ * - /fonts/attached: For attached/preloaded fonts (highest priority)
+ * - /fonts/fallback: For fallback fonts
  */
-const writeFontToFS = (uint8: Uint8Array): void => {
-  const fontFileName = 'font-' + fontId++
+const writeFontToFS = (uint8: Uint8Array, isFallback: boolean = true): void => {
+  const fontDir = isFallback ? '/fonts/fallback' : '/fonts/attached'
+  const fontFileName = isFallback ? 'fallback-' + fallbackFontId++ : 'attached-' + attachedFontId++
 
-  // Write font to /fonts/ directory so fontconfig can scan and index it
-  // This is the same approach as JavascriptSubtitlesOctopus
   if (_Module) {
     try {
-      _Module.FS_createDataFile('/fonts', fontFileName, uint8, true, true, true)
+      _Module.FS_createDataFile(fontDir, fontFileName, uint8, true, true, true)
     } catch (e) {
-      console.warn('Failed to write font to filesystem:', fontFileName, e)
+      console.warn('Failed to write font to filesystem:', fontDir + '/' + fontFileName, e)
     }
   }
   scheduleReloadFonts()
@@ -209,15 +211,16 @@ const writeFontToFS = (uint8: Uint8Array): void => {
 /**
  * Immediate font write without debounced reload (for synchronous loading).
  */
-const writeFontToFSImmediate = (uint8: Uint8Array): void => {
-  const fontFileName = 'font-' + fontId++
+const writeFontToFSImmediate = (uint8: Uint8Array, isFallback: boolean = true): void => {
+  const fontDir = isFallback ? '/fonts/fallback' : '/fonts/attached'
+  const fontFileName = isFallback ? 'fallback-' + fallbackFontId++ : 'attached-' + attachedFontId++
 
   if (_Module) {
     try {
-      _Module.FS_createDataFile('/fonts', fontFileName, uint8, true, true, true)
-      if (debug) console.log('[JASSUB] Wrote font to FS:', fontFileName, 'size:', uint8.length)
+      _Module.FS_createDataFile(fontDir, fontFileName, uint8, true, true, true)
+      if (debug) console.log('[JASSUB] Wrote font to FS:', fontDir + '/' + fontFileName, 'size:', uint8.length)
     } catch (e) {
-      console.warn('Failed to write font to filesystem:', fontFileName, e)
+      console.warn('Failed to write font to filesystem:', fontDir + '/' + fontFileName, e)
     }
   }
 }
@@ -631,10 +634,10 @@ self.init = async (data: any): Promise<void> => {
   const onWasmLoaded = (Module: JASSUBModule): void => {
     _Module = Module // Store module reference for FS access
 
-    // Create /fonts and /fontconfig directories for fontconfig to use
-    // This is required for fontconfig to properly index fonts and provide cascade fallback
     try {
       Module.FS_createPath('/', 'fonts', true, true)
+      Module.FS_createPath('/fonts', 'attached', true, true)
+      Module.FS_createPath('/fonts', 'fallback', true, true)
       Module.FS_createPath('/', 'fontconfig', true, true)
       Module.FS_createPath('/', 'assets', true, true)
       Module.FS_createPath('/', 'etc', true, true)
@@ -643,7 +646,10 @@ self.init = async (data: any): Promise<void> => {
       const fontsConf = `<?xml version="1.0"?>
 <!DOCTYPE fontconfig SYSTEM "fonts.dtd">
 <fontconfig>
+        <!-- Font directories listed in priority order -->
+        <dir>/fonts/attached</dir>
         <dir>/fonts</dir>
+        <dir>/fonts/fallback</dir>
         <match target="pattern">
                 <test qual="any" name="family">
                         <string>mono</string>
@@ -719,14 +725,14 @@ self.init = async (data: any): Promise<void> => {
         const fontUrl = availableFonts[fontKey]
         if (typeof fontUrl === 'string') {
           try {
-            syncWrite(fontUrl)
+            syncWrite(fontUrl, true)
             fontMap_[fontKey] = true
           } catch (e) {
             console.error('Failed to load fallback font:', fontKey, e)
           }
         } else {
           // Font data directly provided
-          syncWrite(fontUrl)
+          syncWrite(fontUrl, true)
           fontMap_[fontKey] = true
         }
       }
@@ -749,12 +755,12 @@ self.init = async (data: any): Promise<void> => {
     // Check if we have preloaded fonts (Uint8Array)
     const hasPreloadedFonts = (data.fonts || []).some((font: string | Uint8Array) => typeof font !== 'string')
 
-    // Write fonts to filesystem first
+    // Write attached/preloaded fonts to filesystem
     for (const font of data.fonts || []) {
       if (typeof font === 'string') {
-        asyncWrite(font)
+        asyncWrite(font, false)
       } else {
-        writeFontToFSImmediate(font)
+        writeFontToFSImmediate(font, false)
       }
     }
 
