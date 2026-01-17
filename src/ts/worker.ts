@@ -189,6 +189,36 @@ const scheduleReloadFonts = (): void => {
 }
 
 /**
+ * Add a font as an embedded font via ass_add_font.
+ * Embedded fonts have higher priority than fontconfig fonts in libass.
+ */
+const addFontAsEmbedded = (uint8: Uint8Array, name: string): void => {
+  if (!_Module || !jassubObj) {
+    if (debug) console.warn('[JASSUB] Cannot add embedded font, module or jassubObj not ready:', name)
+    return
+  }
+
+  try {
+    // Allocate memory in WASM heap and copy font data
+    const ptr = _Module._malloc(uint8.length)
+    if (!ptr) {
+      console.warn('[JASSUB] Failed to allocate memory for embedded font:', name)
+      return
+    }
+
+    // Copy font data to WASM heap
+    self.HEAPU8.set(uint8, ptr)
+
+    // Call jassubObj.addFont which calls ass_add_font and frees the memory
+    jassubObj.addFont(name, ptr, uint8.length)
+
+    if (debug) console.log('[JASSUB] Added embedded font:', name, 'size:', uint8.length)
+  } catch (e) {
+    console.warn('[JASSUB] Failed to add embedded font:', name, e)
+  }
+}
+
+/**
  * Write a font to the virtual filesystem so fontconfig can index it.
  * Fonts are written to separate directories based on priority:
  * - /fonts/attached: For attached/preloaded fonts (highest priority)
@@ -203,6 +233,10 @@ const writeFontToFS = (uint8: Uint8Array, isFallback: boolean = true): void => {
       _Module.FS_createDataFile(fontDir, fontFileName, uint8, true, true, true)
     } catch (e) {
       console.warn('Failed to write font to filesystem:', fontDir + '/' + fontFileName, e)
+    }
+
+    if (!isFallback) {
+      addFontAsEmbedded(uint8, fontFileName)
     }
   }
   scheduleReloadFonts()
@@ -221,6 +255,10 @@ const writeFontToFSImmediate = (uint8: Uint8Array, isFallback: boolean = true): 
       if (debug) console.log('[JASSUB] Wrote font to FS:', fontDir + '/' + fontFileName, 'size:', uint8.length)
     } catch (e) {
       console.warn('Failed to write font to filesystem:', fontDir + '/' + fontFileName, e)
+    }
+
+    if (!isFallback) {
+      addFontAsEmbedded(uint8, fontFileName)
     }
   }
 }
@@ -677,7 +715,7 @@ self.init = async (data: any): Promise<void> => {
         <cachedir>/fontconfig</cachedir>
         <config>
                 <rescan>
-                        <int>30</int>
+                        <int>0</int>
                 </rescan>
         </config>
 </fontconfig>
