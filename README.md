@@ -31,6 +31,7 @@ JASSUB is a JS wrapper for <a href="https://github.com/libass/libass">libass</a>
 
 - **WebGPU Support** - Hardware-accelerated rendering using the modern WebGPU API [(on browsers which support it)](https://caniuse.com/webgpu)
 - **Hyper Optimizations** - Performance improvements and intelligent caching for smoother playback
+- **Proper Fontconfig Implementation** - add Fontconfig support with multiple fallback fonts supported
 - **Statistics Reporting** - Built-in statistics and performance metrics for debugging and monitoring
 - **TypeScript Support** - Full TypeScript definitions and type safety
 - **Updated Dependencies** - All dependencies updated to their latest versions, including libass
