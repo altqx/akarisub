@@ -265,24 +265,52 @@ const writeFontToFSImmediate = (uint8: Uint8Array, isFallback: boolean = true): 
 
 const processAvailableFonts = (content: string): void => {
   if (!availableFonts) return
-  const sections = parseAss(content, true)
+  const isLargeFile = content.length > 500000
 
-  for (let i = 0; i < sections.length; i++) {
-    for (let j = 0; j < sections[i].body.length; j++) {
-      const entry = sections[i].body[j]
-      if (entry.key === 'Style' && typeof entry.value === 'object' && !Array.isArray(entry.value)) {
-        findAvailableFonts((entry.value as Record<string, string>).Fontname)
+  if (isLargeFile) {
+    // Extract only the styles section for large files
+    const stylesMatch = content.match(/\[V4\+?\s*Styles?\][^\[]*(?=\[|$)/i)
+    if (stylesMatch) {
+      const stylesSection = stylesMatch[0]
+      // Parse only the styles section
+      const styleFontMatches = stylesSection.matchAll(/^Style:[^,]*,([^,]+)/gm)
+      for (const match of styleFontMatches) {
+        findAvailableFonts(match[1].trim())
       }
     }
-  }
 
-  // Use matchAll for Events section
-  const eventsMatch = content.match(/\[Events\][\s\S]*/i)
-  if (eventsMatch) {
-    const eventsContent = eventsMatch[0]
-    const fnMatches = eventsContent.matchAll(/\\fn([^\\}]*?)[\\}]/g)
-    for (const match of fnMatches) {
-      findAvailableFonts(match[1])
+    // For Events section in large files, limit to first 1000 \fn tags
+    const eventsMatch = content.match(/\[Events\][\s\S]*/i)
+    if (eventsMatch) {
+      const eventsContent = eventsMatch[0]
+      const fnMatches = eventsContent.matchAll(/\\fn([^\\}]*?)[\\}]/g)
+      let count = 0
+      for (const match of fnMatches) {
+        findAvailableFonts(match[1])
+        if (++count >= 1000) break
+      }
+    }
+  } else {
+    // Original behavior for small files
+    const sections = parseAss(content, true)
+
+    for (let i = 0; i < sections.length; i++) {
+      for (let j = 0; j < sections[i].body.length; j++) {
+        const entry = sections[i].body[j]
+        if (entry.key === 'Style' && typeof entry.value === 'object' && !Array.isArray(entry.value)) {
+          findAvailableFonts((entry.value as Record<string, string>).Fontname)
+        }
+      }
+    }
+
+    // Use matchAll for Events section
+    const eventsMatch = content.match(/\[Events\][\s\S]*/i)
+    if (eventsMatch) {
+      const eventsContent = eventsMatch[0]
+      const fnMatches = eventsContent.matchAll(/\\fn([^\\}]*?)[\\}]/g)
+      for (const match of fnMatches) {
+        findAvailableFonts(match[1])
+      }
     }
   }
 }
@@ -669,7 +697,7 @@ self.init = async (data: any): Promise<void> => {
     })
   }
 
-  const onWasmLoaded = (Module: JASSUBModule): void => {
+  const onWasmLoaded = async (Module: JASSUBModule): Promise<void> => {
     _Module = Module // Store module reference for FS access
 
     try {
@@ -756,25 +784,55 @@ self.init = async (data: any): Promise<void> => {
       }
     }
 
-    for (const font of fallbackFonts) {
-      const fontLower = font.trim().toLowerCase()
-      const fontKey = fontLower.startsWith('@') ? fontLower.substring(1) : fontLower
-      if (availableFonts && availableFonts[fontKey]) {
-        const fontUrl = availableFonts[fontKey]
-        if (typeof fontUrl === 'string') {
-          try {
-            syncWrite(fontUrl, true)
+    // Load fallback fonts asynchronously to avoid blocking worker thread
+    // This is critical for mobile devices where sync XHR can cause timeouts
+    const loadFallbackFontsAsync = async (): Promise<void> => {
+      const fontPromises: Promise<void>[] = []
+
+      for (const font of fallbackFonts) {
+        const fontLower = font.trim().toLowerCase()
+        const fontKey = fontLower.startsWith('@') ? fontLower.substring(1) : fontLower
+        if (availableFonts && availableFonts[fontKey]) {
+          const fontUrl = availableFonts[fontKey]
+          if (typeof fontUrl === 'string') {
+            // Async fetch for URL-based fonts
+            const promise = new Promise<void>((resolve) => {
+              readAsync(
+                fontUrl,
+                (fontData: ArrayBuffer) => {
+                  writeFontToFSImmediate(new Uint8Array(fontData), true)
+                  fontMap_[fontKey] = true
+                  if (debug) console.log('[JASSUB] Loaded fallback font async:', fontKey)
+                  resolve()
+                },
+                (e) => {
+                  console.error('Failed to load fallback font:', fontKey, e)
+                  resolve() // Don't fail initialization if a single font fails
+                }
+              )
+            })
+            fontPromises.push(promise)
+          } else {
+            // Font data directly provided - synchronous write is OK here
+            writeFontToFSImmediate(fontUrl, true)
             fontMap_[fontKey] = true
-          } catch (e) {
-            console.error('Failed to load fallback font:', fontKey, e)
           }
-        } else {
-          // Font data directly provided
-          syncWrite(fontUrl, true)
-          fontMap_[fontKey] = true
         }
       }
+
+      // Wait for all fonts to load (with 10s timeout to prevent blocking forever)
+      if (fontPromises.length > 0) {
+        const timeoutPromise = new Promise<void>((resolve) => {
+          setTimeout(() => {
+            console.warn('[JASSUB] Fallback font loading timeout, continuing with available fonts')
+            resolve()
+          }, 10000)
+        })
+        await Promise.race([Promise.all(fontPromises), timeoutPromise])
+      }
     }
+
+    await loadFallbackFontsAsync()
 
     const primaryFallback = fallbackFonts.length > 0 ? fallbackFonts[0] : null
     jassubObj = new Module.JASSUB(self.width, self.height, primaryFallback, debug)
@@ -785,6 +843,14 @@ self.init = async (data: any): Promise<void> => {
 
     let subContent = data.subContent
     if (!subContent) subContent = read_(data.subUrl) as string
+
+    // For large files, emit partial_ready early to allow playback to start
+    // while font loading and track parsing continues in the background
+    const isLargeSubtitle = subContent.length > 500000
+    if (isLargeSubtitle) {
+      postMessage({ target: 'partial_ready' })
+      if (debug) console.log('[JASSUB] Large subtitle detected, emitting partial_ready early')
+    }
 
     processAvailableFonts(subContent)
     if (clampPos) subContent = fixPlayRes(subContent)

@@ -951,6 +951,15 @@ export default class JASSUB extends EventTarget {
   }
 
   /**
+   * Handler for partial_ready message from worker.
+   * Emitted early for large subtitle files to allow playback to start
+   * while font loading and track parsing continues.
+   */
+  private _partial_ready(): void {
+    this.dispatchEvent(new CustomEvent('partial_ready'))
+  }
+
+  /**
    * Send data and execute function in the worker.
    */
   async sendMessage(target: string, data: Record<string, any> = {}, transferable?: Transferable[]): Promise<void> {

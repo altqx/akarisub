@@ -1178,6 +1178,14 @@ class B extends EventTarget {
     this._init(), this.dispatchEvent(new CustomEvent("ready"));
   }
   /**
+   * Handler for partial_ready message from worker.
+   * Emitted early for large subtitle files to allow playback to start
+   * while font loading and track parsing continues.
+   */
+  _partial_ready() {
+    this.dispatchEvent(new CustomEvent("partial_ready"));
+  }
+  /**
    * Send data and execute function in the worker.
    */
   async sendMessage(e, t = {}, s) {
