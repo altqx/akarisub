@@ -820,13 +820,13 @@ self.init = async (data: any): Promise<void> => {
         }
       }
 
-      // Wait for all fonts to load (with 10s timeout to prevent blocking forever)
+      // Wait for all fonts to load (with 30s timeout to prevent blocking forever)
       if (fontPromises.length > 0) {
         const timeoutPromise = new Promise<void>((resolve) => {
           setTimeout(() => {
             console.warn('[JASSUB] Fallback font loading timeout, continuing with available fonts')
             resolve()
-          }, 10000)
+          }, 30000)
         })
         await Promise.race([Promise.all(fontPromises), timeoutPromise])
       }
