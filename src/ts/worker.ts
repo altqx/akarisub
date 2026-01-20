@@ -504,7 +504,8 @@ const render = (time: number, force?: boolean | number): void => {
             ) as Uint8ClampedArray<ArrayBuffer>,
             item.w,
             item.h
-          )
+          ),
+          { premultiplyAlpha: 'none' }
         )
         images[i] = item
       }

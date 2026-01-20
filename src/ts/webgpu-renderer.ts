@@ -458,7 +458,7 @@ export class WebGPURenderer {
         // Copy to texture array layer
         queue.copyExternalImageToTexture(
           { source: bitmap, flipY: false },
-          { texture: textureArray, origin: [0, 0, texIndex], premultipliedAlpha: true },
+          { texture: textureArray, origin: [0, 0, texIndex], premultipliedAlpha: false },
           { width: w, height: h }
         )
 
@@ -574,7 +574,7 @@ export class WebGPURenderer {
         if (imgData instanceof ImageBitmap) {
           queue.copyExternalImageToTexture(
             { source: imgData, flipY: false },
-            { texture: textureArray, origin: [0, 0, texIndex], premultipliedAlpha: true },
+            { texture: textureArray, origin: [0, 0, texIndex], premultipliedAlpha: false },
             { width: w, height: h }
           )
         } else if (imgData instanceof ArrayBuffer) {
