@@ -1,0 +1,51 @@
+[tools]
+bun = "latest"
+emsdk = "4.0.23"
+cmake = "latest"
+
+[env]
+# Env...
+
+[tasks.install]
+description = "Install dependencies"
+run = "bun install"
+
+[tasks.make]
+description = "Make dependencies"
+run = "make"
+
+[tasks.build]
+description = "Build everything (WASM + TypeScript + bundle)"
+run = "bun run build"
+
+[tasks."build:wasm"]
+description = "Build WASM worker only"
+run = "make worker"
+
+[tasks."build:ts"]
+description = "Build TypeScript only"
+run = "bun run build:ts"
+
+[tasks."build:bundle"]
+description = "Bundle the library"
+run = "bun build.ts"
+
+[tasks.typecheck]
+description = "Run TypeScript type checking"
+run = "bun run typecheck"
+
+[tasks.format]
+description = "Format code with Prettier"
+run = "bun run format"
+
+[tasks.clean]
+description = "Clean all build artifacts"
+run = "make clean"
+
+[tasks."clean:libs"]
+description = "Clean only library build artifacts"
+run = "make clean-libs"
+
+[tasks.submodules]
+description = "Initialize git submodules"
+run = "git submodule sync --recursive && git submodule update --init --recursive"

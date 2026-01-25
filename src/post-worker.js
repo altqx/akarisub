@@ -39,6 +39,16 @@ if (typeof updateGlobalBufferAndViews === 'function') {
   }
 }
 
+// Emscripten 4.x uses updateMemoryViews instead of updateGlobalBufferAndViews
+if (typeof updateMemoryViews === 'function') {
+  const __jassub_updateMemoryViews = updateMemoryViews
+  // eslint-disable-next-line no-global-assign
+  updateMemoryViews = () => {
+    __jassub_updateMemoryViews()
+    __jassub_sync_heap()
+  }
+}
+
 // Expose `_malloc`/`_free`, FS functions, and initial heap views when the module becomes ready.
 const __jassub_ready = typeof ready === 'function' ? ready : null
 if (__jassub_ready) {

@@ -229,14 +229,13 @@ LIBASS_DEPS = \
 
 dist: $(LIBASS_DEPS) dist/js/$(WORKER_NAME).js
 
-# Dist Files https://github.com/emscripten-core/emscripten/blob/3.1.38/src/settings.js
+# Dist Files https://github.com/emscripten-core/emscripten/blob/main/src/settings.js
 
 # args for increasing performance
 # https://github.com/emscripten-core/emscripten/issues/13899
 PERFORMANCE_ARGS = \
 		-s BINARYEN_EXTRA_PASSES="--one-caller-inline-max-function-size=19306,--flatten,--rereloop,--coalesce-locals,--reorder-locals,--vacuum,--simplify-locals,--precompute-propagate,--dce,--remove-unused-names" \
 		-s INVOKE_RUN=0 \
-		-s DISABLE_EXCEPTION_CATCHING=1 \
 		-s TEXTDECODER=2 \
 		-s MINIMAL_RUNTIME_STREAMING_WASM_INSTANTIATION=1 \
 		-s SUPPORT_LONGJMP=1 \
@@ -247,13 +246,10 @@ PERFORMANCE_ARGS = \
 SIZE_ARGS = \
 		-s POLYFILL=0 \
 		-s NO_FILESYSTEM=0 \
-		-s AUTO_JS_LIBRARIES=0 \
-		-s AUTO_NATIVE_LIBRARIES=0 \
 		-s HTML5_SUPPORT_DEFERRING_USER_SENSITIVE_REQUESTS=0 \
 		-s INCOMING_MODULE_JS_API="[]" \
 		-s USE_SDL=0 \
 		-s MINIMAL_RUNTIME=1 \
-		-s SUPPORT_ERRNO=0 \
 		-s ASSERTIONS=0 \
 		-s STACK_OVERFLOW_CHECK=0 \
 		-s DYNAMIC_EXECUTION=0 \
@@ -274,7 +270,8 @@ dist/js/$(WORKER_NAME).js: src/JASSUB.cpp src/ts/worker.ts src/pre-worker.js src
 	mkdir -p dist/js
 	emcc src/JASSUB.cpp $(LIBASS_DEPS) \
 		-O3 \
-		-fno-rtti -DEMSCRIPTEN_HAS_UNBOUND_TYPE_NAMES=0 \
+		-std=c++17 \
+		-fno-rtti -fno-exceptions -DEMSCRIPTEN_HAS_UNBOUND_TYPE_NAMES=0 \
 		$(WORKER_ARGS) \
 		$(PERFORMANCE_ARGS) \
 		$(SIZE_ARGS) \
@@ -292,6 +289,7 @@ dist/js/$(WORKER_NAME).js: src/JASSUB.cpp src/ts/worker.ts src/pre-worker.js src
 		-s MODULARIZE=1 \
 		-s EXPORT_ES6=1 \
 		--bind \
+		-lembind \
 		-lc++-noexcept \
 		-lc++abi-noexcept \
 		-o $@
