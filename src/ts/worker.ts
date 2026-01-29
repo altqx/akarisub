@@ -505,7 +505,7 @@ const render = (time: number, force?: boolean | number): void => {
             item.w,
             item.h
           ),
-          { premultiplyAlpha: 'none' }
+          { premultiplyAlpha: 'premultiply' }
         )
         images[i] = item
       }
