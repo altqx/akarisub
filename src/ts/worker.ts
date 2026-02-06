@@ -961,6 +961,10 @@ self.destroy = (): void => {
   jassubObj!.quitLibrary()
 }
 
+self.setAsyncRender = ({ value }: { value: boolean }): void => {
+  asyncRender = value && typeof createImageBitmap !== 'undefined'
+}
+
 // =============================================================================
 // Event Management
 // =============================================================================

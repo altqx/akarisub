@@ -308,6 +308,7 @@ export default class JASSUB extends EventTarget {
       if (!this._offscreenRender && !this._ctx) {
         this._ctx = this._canvas.getContext('2d')
       }
+      this.sendMessage('setAsyncRender', { value: false })
       this._onWebGPUFallback?.()
     }
   }
@@ -852,18 +853,14 @@ export default class JASSUB extends EventTarget {
     ctx.clearRect(0, 0, dataWidth, dataHeight)
 
     if (data.asyncRender) {
-      // Fast path for ImageBitmap - batch drawImage calls
       for (let i = 0; i < imageCount; i++) {
         const image = images[i]
         if (image.image) {
           ctx.drawImage(image.image as ImageBitmap, image.x, image.y)
-            ; (image.image as ImageBitmap).close()
+          ;(image.image as ImageBitmap).close()
         }
       }
     } else {
-      // Non-async path with buffer canvas
-      const bufferCanvas = this._bufferCanvas
-      const bufferCtx = this._bufferCtx
       const hasAlphaBug = JASSUB._hasAlphaBug ?? false
 
       for (let i = 0; i < imageCount; i++) {
@@ -872,16 +869,9 @@ export default class JASSUB extends EventTarget {
           const imgW = image.w
           const imgH = image.h
 
-          // Only resize when necessary
-          if (bufferCanvas.width !== imgW || bufferCanvas.height !== imgH) {
-            bufferCanvas.width = imgW
-            bufferCanvas.height = imgH
-          }
-
           const rawData = new Uint8ClampedArray(image.image as ArrayBuffer)
           const fixedData = fixAlpha(rawData, hasAlphaBug)
-          bufferCtx.putImageData(new ImageData(fixedData as Uint8ClampedArray<ArrayBuffer>, imgW, imgH), 0, 0)
-          ctx.drawImage(bufferCanvas, image.x, image.y)
+          ctx.putImageData(new ImageData(fixedData as Uint8ClampedArray<ArrayBuffer>, imgW, imgH), image.x, image.y)
         }
       }
     }
