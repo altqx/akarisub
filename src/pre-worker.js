@@ -7,6 +7,30 @@ function assert(c, m) {
 
 let asm = null
 
+// Safari compatibility
+;(function () {
+  var _origStreaming = typeof WebAssembly !== 'undefined' && WebAssembly.instantiateStreaming
+  if (!_origStreaming) return
+
+  WebAssembly.instantiateStreaming = function (source, importObject) {
+    var clonedForFallback = null
+    var responsePromise = Promise.resolve(source).then(function (response) {
+      clonedForFallback = response.clone()
+      return response
+    })
+
+    return _origStreaming.call(WebAssembly, responsePromise, importObject).catch(function (e) {
+      console.warn('[JASSUB] instantiateStreaming failed, using ArrayBuffer fallback:', e && e.message || e)
+      if (!clonedForFallback) {
+        throw e
+      }
+      return clonedForFallback.arrayBuffer().then(function (bytes) {
+        return WebAssembly.instantiate(bytes, importObject)
+      })
+    })
+  }
+})()
+
 // Suppress expected fontconfig warnings/errors in console
 out = (text) => {
   if (text === 'JASSUB: No usable fontconfig configuration file found, using fallback.' ||

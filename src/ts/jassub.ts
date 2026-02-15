@@ -1005,7 +1005,12 @@ export default class JASSUB extends EventTarget {
   }
 
   private _onmessage(event: MessageEvent): void {
-    const handler = (this as any)['_' + event.data.target]
+    const target = event.data.target
+    if (target === 'error') {
+      this._error(event.data.error || 'Unknown worker error')
+      return
+    }
+    const handler = (this as any)['_' + target]
     if (handler) {
       handler.call(this, event.data)
     }

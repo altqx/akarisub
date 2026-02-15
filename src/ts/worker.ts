@@ -92,6 +92,7 @@ const resetMetrics = (): void => {
 }
 
 let asyncRender = false
+let asyncRenderOptions = true
 let offCanvas: OffscreenCanvas | null = null
 let offCanvasCtx: OffscreenCanvasRenderingContext2D | null = null
 let offscreenRender: boolean | 'hybrid' = false
@@ -495,18 +496,19 @@ const render = (time: number, force?: boolean | number): void => {
           ? self.HEAPU8C.slice(pointer, pointer + byteLength)
           : self.HEAPU8C.subarray(pointer, pointer + byteLength)
 
-        promises[i] = createImageBitmap(
-          new ImageData(
-            new Uint8ClampedArray(
-              rawData.buffer,
-              rawData.byteOffset,
-              rawData.byteLength
-            ) as Uint8ClampedArray<ArrayBuffer>,
-            item.w,
-            item.h
-          ),
-          { premultiplyAlpha: 'none', colorSpaceConversion: 'none' }
+        const imageData = new ImageData(
+          new Uint8ClampedArray(
+            rawData.buffer,
+            rawData.byteOffset,
+            rawData.byteLength
+          ) as Uint8ClampedArray<ArrayBuffer>,
+          item.w,
+          item.h
         )
+
+        promises[i] = asyncRenderOptions
+          ? createImageBitmap(imageData, { premultiplyAlpha: 'none', colorSpaceConversion: 'none' })
+          : createImageBitmap(imageData)
         images[i] = item
       }
 
@@ -516,6 +518,14 @@ const render = (time: number, force?: boolean | number): void => {
         }
         if (debug) times.JSBitmapGenerationTime = Date.now() - (times.JSRenderTime || 0)
         paintImages({ images, buffers: bitmaps, times })
+      }).catch(() => {
+        if (asyncRenderOptions) {
+          asyncRenderOptions = false
+          console.warn('[JASSUB] createImageBitmap options not supported, disabling')
+          render(time, force)
+        } else {
+          postMessage({ target: 'unbusy' })
+        }
       })
     } else {
       let result = renderResult
@@ -691,11 +701,15 @@ self.init = async (data: any): Promise<void> => {
     }
   }
 
+  const restoreFetch = (): void => {
+    self.fetch = _fetch
+  }
+
   const loadWasm = (wasmUrl: string): Promise<JASSUBModule> => {
     setWasmUrl(wasmUrl)
     return WASM({
       wasm: !(WebAssembly as any).instantiateStreaming ? (read_(wasmUrl, true) as ArrayBuffer) : undefined
-    })
+    }).finally(restoreFetch)
   }
 
   const onWasmLoaded = async (Module: JASSUBModule): Promise<void> => {
@@ -765,6 +779,23 @@ self.init = async (data: any): Promise<void> => {
     if (asyncRender && typeof createImageBitmap === 'undefined') {
       asyncRender = false
       console.error("'createImageBitmap' needed for 'asyncRender' unsupported!")
+    }
+
+    if (asyncRender) {
+      try {
+        const testCanvas = new OffscreenCanvas(1, 1)
+        const testCtx = testCanvas.getContext('2d')
+        if (testCtx) {
+          const testData = testCtx.getImageData(0, 0, 1, 1)
+          await createImageBitmap(testData, { premultiplyAlpha: 'none', colorSpaceConversion: 'none' })
+            .catch(() => {
+              asyncRenderOptions = false
+              console.warn('[JASSUB] createImageBitmap options not supported (Safari?), rendering without options')
+            })
+        }
+      } catch {
+        asyncRenderOptions = false
+      }
     }
 
     availableFonts = data.availableFonts
@@ -900,7 +931,10 @@ self.init = async (data: any): Promise<void> => {
     postMessage({ target: 'verifyColorSpace', subtitleColorSpace })
   }
 
-  loadWasm(data.wasmUrl).then(onWasmLoaded)
+  loadWasm(data.wasmUrl).then(onWasmLoaded).catch((e) => {
+    console.error('[JASSUB] WASM loading failed:', e)
+    postMessage({ target: 'error', error: 'WASM loading failed: ' + (e && e.message ? e.message : String(e)) })
+  })
 }
 
 // =============================================================================
