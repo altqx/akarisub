@@ -7,7 +7,6 @@ DIST_DIR:=$(BASE_DIR)dist/libraries
 # WASM feature flags - targeting modern browsers (Chrome 114+, Firefox 120+, Safari 16.4+)
 WASM_FEATURES = \
 	-msimd128 \
-	-mrelaxed-simd \
 	-mnontrapping-fptoint \
 	-mbulk-memory \
 	-msign-ext \
