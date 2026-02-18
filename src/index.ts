@@ -47,3 +47,6 @@ export {
 
 // WebGPU renderer exports
 export { WebGPURenderer, isWebGPUSupported } from './ts/webgpu-renderer'
+
+// WebGL2 renderer exports
+export { WebGL2Renderer, isWebGL2Supported } from './ts/webgl2-renderer'

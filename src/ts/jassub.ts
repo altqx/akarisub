@@ -24,6 +24,9 @@ import {
   getBitmapBug
 } from './utils'
 import { WebGPURenderer, isWebGPUSupported } from './webgpu-renderer'
+import { WebGL2Renderer, isWebGL2Supported } from './webgl2-renderer'
+
+type AnyGPURenderer = WebGPURenderer | WebGL2Renderer
 
 /**
  * JASSUB - JavaScript ASS/SSA Subtitle Renderer
@@ -75,11 +78,10 @@ export default class JASSUB extends EventTarget {
   private _boundSetRate: () => void
   private _boundUpdateColorSpace: () => void
 
-  // WebGPU renderer
-  private _webgpuRenderer: WebGPURenderer | null = null
-  private _useWebGPU: boolean = false
-  private _preferWebGPU: boolean = true
-  private _onWebGPUFallback?: () => void
+  // GPU renderer (WebGPU or WebGL2 – whichever initialises first in the fallback chain)
+  private _gpuRenderer: AnyGPURenderer | null = null
+  private _rendererType: 'webgpu' | 'webgl2' | 'canvas2d' = 'canvas2d'
+  private _onCanvasFallback?: () => void
 
   // Cached render data to reduce allocations
   private _lastRenderWidth: number = 0
@@ -113,17 +115,15 @@ export default class JASSUB extends EventTarget {
 
     this._onDemandRender = 'requestVideoFrameCallback' in HTMLVideoElement.prototype && (options.onDemandRender ?? true)
 
-    this._preferWebGPU = options.preferWebGPU !== false // Default to true
-    this._onWebGPUFallback = options.onWebGPUFallback
+    this._onCanvasFallback = options.onCanvasFallback
 
-    // When preferWebGPU is enabled and WebGPU is supported, disable offscreenRender
-    const canUseWebGPU = this._preferWebGPU && !options.canvas && isWebGPUSupported()
+    const canUseGPURenderer = !options.canvas && (isWebGPUSupported() || isWebGL2Supported())
 
     // Don't support offscreen rendering on custom canvases
     this._offscreenRender =
       'transferControlToOffscreen' in HTMLCanvasElement.prototype &&
       !options.canvas &&
-      !canUseWebGPU &&
+      !canUseGPURenderer &&
       (options.offscreenRender ?? true)
 
     this.timeOffset = options.timeOffset || 0
@@ -145,9 +145,9 @@ export default class JASSUB extends EventTarget {
     if (!bufferCtx) throw this.destroy(new Error('Canvas rendering not supported'))
     this._bufferCtx = bufferCtx
 
-    // Try WebGPU first if preferred (like libbitsub pattern)
-    if (canUseWebGPU) {
-      this._initWebGPU()
+    // Try GPU renderers first (WebGPU → WebGL2 → Canvas2D)
+    if (canUseGPURenderer) {
+      this._initGPURenderer()
     } else if (!this._offscreenRender) {
       this._ctx = this._canvas.getContext('2d')
     }
@@ -282,40 +282,64 @@ export default class JASSUB extends EventTarget {
   }
 
   // ==========================================================================
-  // WebGPU Management
+  // GPU Renderer Management (WebGPU → WebGL2 → Canvas2D fallback)
   // ==========================================================================
 
-  /** Initialize WebGPU renderer. */
-  private async _initWebGPU(): Promise<void> {
-    try {
-      this._webgpuRenderer = new WebGPURenderer()
-      await this._webgpuRenderer.init()
-
-      if (!this._canvas) return
-
-      const width = Math.max(1, this._canvas.width || 1)
-      const height = Math.max(1, this._canvas.height || 1)
-
-      await this._webgpuRenderer.setCanvas(this._canvas, width, height)
-      this._useWebGPU = true
-      console.log('[JASSUB] Using WebGPU renderer')
-    } catch (error) {
-      console.warn('[JASSUB] WebGPU init failed, falling back to Canvas2D:', error)
-      this._webgpuRenderer?.destroy()
-      this._webgpuRenderer = null
-      this._useWebGPU = false
-      // Fall back to Canvas2D
-      if (!this._offscreenRender && !this._ctx) {
-        this._ctx = this._canvas.getContext('2d')
+  /**
+   * Attempt to initialise the best available GPU renderer.
+   */
+  private async _initGPURenderer(): Promise<void> {
+    if (isWebGPUSupported()) {
+      try {
+        const renderer = new WebGPURenderer()
+        await renderer.init()
+        if (!this._canvas) return
+        await renderer.setCanvas(this._canvas, Math.max(1, this._canvas.width || 1), Math.max(1, this._canvas.height || 1))
+        this._gpuRenderer = renderer
+        this._rendererType = 'webgpu'
+        console.log('[JASSUB] Using WebGPU renderer')
+        return
+      } catch (error) {
+        console.warn('[JASSUB] WebGPU init failed, trying WebGL2:', error)
       }
-      this.sendMessage('setAsyncRender', { value: false })
-      this._onWebGPUFallback?.()
     }
+
+    if (isWebGL2Supported()) {
+      try {
+        const renderer = new WebGL2Renderer()
+        await renderer.init()
+        if (!this._canvas) return
+        await renderer.setCanvas(this._canvas, Math.max(1, this._canvas.width || 1), Math.max(1, this._canvas.height || 1))
+        this._gpuRenderer = renderer
+        this._rendererType = 'webgl2'
+        console.log('[JASSUB] Using WebGL2 renderer')
+        return
+      } catch (error) {
+        console.warn('[JASSUB] WebGL2 init failed, falling back to Canvas2D:', error)
+      }
+    }
+
+    this._rendererType = 'canvas2d'
+    if (!this._offscreenRender && !this._ctx) {
+      this._ctx = this._canvas.getContext('2d')
+    }
+    this.sendMessage('setAsyncRender', { value: false })
+    this._onCanvasFallback?.()
   }
 
-  /** Check if WebGPU is being used */
+  /** Returns which renderer backend is currently active. */
+  get rendererType(): 'webgpu' | 'webgl2' | 'canvas2d' {
+    return this._rendererType
+  }
+
+  /** @deprecated Use rendererType === 'webgpu' */
   get isUsingWebGPU(): boolean {
-    return this._useWebGPU
+    return this._rendererType === 'webgpu'
+  }
+
+  /** Returns true when a hardware-accelerated GPU renderer is active. */
+  get isUsingGPURenderer(): boolean {
+    return this._gpuRenderer !== null
   }
 
   // ==========================================================================
@@ -380,9 +404,9 @@ export default class JASSUB extends EventTarget {
     this._canvas.style.top = top + 'px'
     this._canvas.style.left = left + 'px'
 
-    // Update WebGPU renderer size if using WebGPU
-    if (this._useWebGPU && this._webgpuRenderer && width > 0 && height > 0) {
-      this._webgpuRenderer.updateSize(width, height)
+    // Update GPU renderer size if using a GPU renderer
+    if (this._gpuRenderer && width > 0 && height > 0) {
+      this._gpuRenderer.updateSize(width, height)
     }
 
     if (force && this.busy === false) {
@@ -830,17 +854,17 @@ export default class JASSUB extends EventTarget {
       this._lastRenderWidth = dataWidth
       this._lastRenderHeight = dataHeight
 
-      // Update WebGPU renderer size if using WebGPU
-      if (this._useWebGPU && this._webgpuRenderer) {
-        this._webgpuRenderer.updateSize(dataWidth, dataHeight)
+      // Update GPU renderer size if canvas size changed
+      if (this._gpuRenderer) {
+        this._gpuRenderer.updateSize(dataWidth, dataHeight)
       }
 
       this._verifyColorSpace({ subtitleColorSpace: data.colorSpace })
     }
 
-    // Use WebGPU renderer if available
-    if (this._useWebGPU && this._webgpuRenderer) {
-      this._renderWebGPU(data)
+    // Use GPU renderer (WebGPU or WebGL2) if available
+    if (this._gpuRenderer) {
+      this._renderGPU(data)
       return
     }
 
@@ -890,11 +914,12 @@ export default class JASSUB extends EventTarget {
     }
   }
 
-  private _renderWebGPU(data: { images: RenderImage[]; asyncRender: boolean; times: RenderTimes }): void {
-    if (!this._webgpuRenderer) return
+  private _renderGPU(data: { images: RenderImage[]; asyncRender: boolean; times: RenderTimes }): void {
+    const renderer = this._gpuRenderer
+    if (!renderer) return
 
     if (data.images.length === 0) {
-      this._webgpuRenderer.clear()
+      renderer.clear()
       return
     }
 
@@ -908,7 +933,7 @@ export default class JASSUB extends EventTarget {
           y: img.y
         }))
 
-      this._webgpuRenderer.renderBitmaps(bitmapImages, this._canvasctrl.width, this._canvasctrl.height)
+      renderer.renderBitmaps(bitmapImages, this._canvasctrl.width, this._canvasctrl.height)
 
       // Close ImageBitmaps after rendering
       for (const img of data.images) {
@@ -918,7 +943,7 @@ export default class JASSUB extends EventTarget {
       }
     } else {
       // For non-async render mode with ArrayBuffer data
-      this._webgpuRenderer.render(data.images, this._canvasctrl.width, this._canvasctrl.height)
+      renderer.render(data.images, this._canvasctrl.width, this._canvasctrl.height)
     }
 
     if (this.debug) {
@@ -931,7 +956,7 @@ export default class JASSUB extends EventTarget {
         total += (data.times as any)[key] || 0
       }
 
-      console.log('[WebGPU] Bitmaps: ' + count + ' Total: ' + (total | 0) + 'ms', data.times)
+      console.log(`[${this._rendererType.toUpperCase()}] Bitmaps: ` + count + ' Total: ' + (total | 0) + 'ms', data.times)
     }
   }
 
@@ -1058,11 +1083,11 @@ export default class JASSUB extends EventTarget {
       this._video.parentNode?.removeChild(this._canvasParent)
     }
 
-    // Clean up WebGPU renderer
-    if (this._webgpuRenderer) {
-      this._webgpuRenderer.destroy()
-      this._webgpuRenderer = null
-      this._useWebGPU = false
+    // Clean up GPU renderer
+    if (this._gpuRenderer) {
+      this._gpuRenderer.destroy()
+      this._gpuRenderer = null
+      this._rendererType = 'canvas2d'
     }
 
     this._destroyed = true

@@ -471,6 +471,7 @@ export class WebGPURenderer {
         imageDataArray[offset + 4] = w
         imageDataArray[offset + 5] = h
         imageDataArray[offset + 6] = texIndex
+        imageDataArray[offset + 7] = 0
 
         texIndex++
       }
@@ -511,8 +512,7 @@ export class WebGPURenderer {
   render(
     images: RenderImage[],
     _canvasWidth: number,
-    _canvasHeight: number,
-    _getImageData?: (image: RenderImage) => Uint8ClampedArray | null
+    _canvasHeight: number
   ): void {
     if (!this.device || !this.context || !this.pipeline) return
 
@@ -590,6 +590,7 @@ export class WebGPURenderer {
         imageDataArray[offset + 4] = w
         imageDataArray[offset + 5] = h
         imageDataArray[offset + 6] = texIndex
+        imageDataArray[offset + 7] = 0
 
         texIndex++
       }
@@ -709,7 +710,9 @@ export class WebGPURenderer {
     this.textureArrayView = null
 
     this.uniformBuffer?.destroy()
+    this.uniformBuffer = null
     this.imageDataBuffer?.destroy()
+    this.imageDataBuffer = null
 
     this.bindGroup = null
     this.conversionBuffer = null

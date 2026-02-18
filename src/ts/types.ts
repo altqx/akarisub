@@ -182,10 +182,8 @@ export interface JASSUBOptions {
   libassMemoryLimit?: number
   /** libass glyph cache limit */
   libassGlyphLimit?: number
-  /** Prefer WebGPU renderer if available (default: true) */
-  preferWebGPU?: boolean
-  /** Callback when WebGPU is unavailable and falling back to Canvas2D */
-  onWebGPUFallback?: () => void
+  /** Callback invoked when all GPU renderers (WebGPU, WebGL2) are unavailable and the renderer falls back to Canvas2D */
+  onCanvasFallback?: () => void
   /** Additional time in seconds to render subtitles ahead for pipeline latency compensation (default: 0.008) */
   renderAhead?: number
 }
