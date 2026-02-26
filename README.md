@@ -9,10 +9,6 @@
 
 AkariSub is a JS wrapper for <a href="https://github.com/libass/libass">libass</a>, which renders <a href="https://en.wikipedia.org/wiki/SubStation_Alpha">SSA/ASS subtitles</a> directly in your browser. It uses Emscripten to compile libass' C++ code to WASM.
 
-<p align="center">
-  <a href="https://thaunknown.github.io/jassub/">Online Demos</a>
-</p>
-
 ## Features
 
 - Supports most SSA/ASS features (everything libass supports)
@@ -36,10 +32,6 @@ AkariSub is a JS wrapper for <a href="https://github.com/libass/libass">libass</
 - **TypeScript Support** - Full TypeScript definitions and type safety
 - **Updated Dependencies** - All dependencies updated to their latest versions, including libass
 
-## Isn't this just the same thing as JavascriptSubtitlesOctopus?
-
-No. See <a href="https://thaunknown.github.io/akarisub/explainer.html">this</a> comparison.
-
 ## Usage
 
 By default all you need to do is copy the files from the `dist/` folder of the repository into the same folder as where your JS runs, then do:
@@ -56,10 +48,6 @@ const renderer = new AkariSub({
 `Note:` while the `dist/` folder includes a UMD dist it still uses modern syntax. If you want backwards compatibility with older browsers I recommend you run it tru babel.
 
 If you use a bundler like Vite, you can instead do:
-
-```shell
-npm i akarisub
-```
 
 ```js
 import AkariSub from 'akarisub'
