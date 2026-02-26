@@ -66,6 +66,9 @@ const workerBuildResult = await Bun.build({
   format: 'iife',
   minify: true,
   naming: 'akarisub-worker.js',
+  define: {
+    'import.meta.url': 'self.location.href'
+  },
   plugins: [
     {
       name: 'wasm-alias',
