@@ -1,5 +1,5 @@
 {
-  "name": "jassub",
+  "name": "akarisub",
   "version": "1.9.0",
   "description": "libass Subtitle Renderer and Parser library for browsers",
   "main": "dist/index.js",
@@ -13,13 +13,13 @@
       "types": "./dist/ts/index.d.ts"
     },
     "./worker": {
-      "import": "./dist/jassub-worker.js"
+      "import": "./dist/akarisub-worker.js"
     }
   },
   "files": [
     "dist/COPYRIGHT",
     "dist/default.woff2",
-    "dist/jassub*",
+    "dist/akarisub*",
     "dist/ts",
     "dist/index.js",
     "src/ts"
@@ -34,7 +34,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/ThaUnknown/jassub.git"
+    "url": "git+https://github.com/altqx/akarisub.git"
   },
   "keywords": [
     "libass",
@@ -42,15 +42,16 @@
     "wasm",
     "emscripten"
   ],
-  "author": "ThaUnknown",
+  "author": "altqx",
   "contributors": [
+    "ThaUnknown",
     "SubtitlesOctopus Contributors"
   ],
   "license": "LGPL-2.1-or-later AND (FTL OR GPL-2.0-or-later) AND MIT AND MIT-Modern-Variant AND ISC AND NTP AND Zlib AND BSL-1.0",
   "bugs": {
-    "url": "https://github.com/ThaUnknown/jassub/issues"
+    "url": "https://github.com/altqx/akarisub/issues"
   },
-  "homepage": "https://github.com/ThaUnknown/jassub",
+  "homepage": "https://github.com/altqx/akarisub",
   "devDependencies": {
     "@types/bun": "latest",
     "@types/emscripten": "^1.41.5",

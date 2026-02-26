@@ -88,7 +88,7 @@ function compileShader(gl: WebGL2RenderingContext, type: number, source: string)
 }
 
 /**
- * High-performance WebGL2 subtitle renderer for JASSUB.
+ * High-performance WebGL2 subtitle renderer for AkariSub.
  */
 export class WebGL2Renderer {
   private _gl: WebGL2RenderingContext | null = null

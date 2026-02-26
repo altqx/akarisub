@@ -3,7 +3,7 @@
   "configVersion": 0,
   "workspaces": {
     "": {
-      "name": "jassub",
+      "name": "akarisub",
       "devDependencies": {
         "@types/bun": "latest",
         "@types/emscripten": "^1.41.5",

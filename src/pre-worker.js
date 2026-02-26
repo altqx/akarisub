@@ -20,7 +20,7 @@ let asm = null
     })
 
     return _origStreaming.call(WebAssembly, responsePromise, importObject).catch(function (e) {
-      console.warn('[JASSUB] instantiateStreaming failed, using ArrayBuffer fallback:', e && e.message || e)
+      console.warn('[AkariSub] instantiateStreaming failed, using ArrayBuffer fallback:', e && e.message || e)
       if (!clonedForFallback) {
         throw e
       }
@@ -33,7 +33,7 @@ let asm = null
 
 // Suppress expected fontconfig warnings/errors in console
 out = (text) => {
-  if (text === 'JASSUB: No usable fontconfig configuration file found, using fallback.' ||
+  if (text === 'AkariSub: No usable fontconfig configuration file found, using fallback.' ||
       text.startsWith('Unable to revert mtime:') ||
       text.trim() === '') {
     console.debug(text)

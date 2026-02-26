@@ -1,10 +1,10 @@
 /**
- * Main JASSUB class - TypeScript implementation.
+ * Main AkariSub class - TypeScript implementation.
  * High-level ASS/SSA subtitle renderer for web browsers using libass.
  */
 
 import type {
-  JASSUBOptions,
+  AkariSubOptions,
   ASSEvent,
   ASSStyle,
   PerformanceStats,
@@ -29,23 +29,23 @@ import { WebGL2Renderer, isWebGL2Supported } from './webgl2-renderer'
 type AnyGPURenderer = WebGPURenderer | WebGL2Renderer
 
 /**
- * JASSUB - JavaScript ASS/SSA Subtitle Renderer
+ * AkariSub - JavaScript ASS/SSA Subtitle Renderer
  *
  * Renders ASS/SSA subtitles on an HTML5 video element using libass compiled to WebAssembly.
  *
  * @example
  * ```typescript
- * const renderer = new JASSUB({
+ * const renderer = new AkariSub({
  *   video: document.querySelector('video'),
  *   subUrl: '/subtitles/example.ass',
- *   workerUrl: '/jassub-worker.js'
+ *   workerUrl: '/akarisub-worker.js'
  * });
  *
  * // Later, cleanup
  * renderer.destroy();
  * ```
  */
-export default class JASSUB extends EventTarget {
+export default class AkariSub extends EventTarget {
   // Feature detection cache (static)
   private static _hasAlphaBug: boolean | null = null
   private static _hasBitmapBug: boolean | null = null
@@ -96,7 +96,7 @@ export default class JASSUB extends EventTarget {
   public busy: boolean = false
   public renderAhead: number
 
-  constructor(options: JASSUBOptions) {
+  constructor(options: AkariSubOptions) {
     super()
 
     if (!globalThis.Worker) {
@@ -111,7 +111,7 @@ export default class JASSUB extends EventTarget {
     })
 
     // Run feature tests
-    const test = JASSUB._test()
+    const test = AkariSub._test()
 
     this._onDemandRender = 'requestVideoFrameCallback' in HTMLVideoElement.prototype && (options.onDemandRender ?? true)
 
@@ -132,7 +132,7 @@ export default class JASSUB extends EventTarget {
 
     if (this._video && !this._canvas) {
       this._canvasParent = document.createElement('div')
-      this._canvasParent.className = 'JASSUB'
+      this._canvasParent.className = 'AkariSub'
       this._canvasParent.style.position = 'relative'
       this._canvas = this._createCanvas()
       this._video.insertAdjacentElement('afterend', this._canvasParent)
@@ -181,7 +181,7 @@ export default class JASSUB extends EventTarget {
     }
 
     // Create worker
-    this._worker = new Worker(options.workerUrl || 'jassub-worker.js')
+    this._worker = new Worker(options.workerUrl || 'akarisub-worker.js')
     this._worker.onmessage = (e) => this._onmessage(e)
     this._worker.onerror = (e) => this._error(e)
 
@@ -189,7 +189,7 @@ export default class JASSUB extends EventTarget {
     test.then(() => {
       this._worker.postMessage({
         target: 'init',
-        wasmUrl: options.wasmUrl ?? 'jassub-worker.wasm',
+        wasmUrl: options.wasmUrl ?? 'akarisub-worker.wasm',
         asyncRender: typeof createImageBitmap !== 'undefined' && (options.asyncRender ?? true),
         onDemandRender: this._onDemandRender,
         width: this._canvasctrl.width || 0,
@@ -208,7 +208,7 @@ export default class JASSUB extends EventTarget {
         libassMemoryLimit: options.libassMemoryLimit ?? 128,
         libassGlyphLimit: options.libassGlyphLimit ?? 2048,
         useLocalFonts: typeof (globalThis as any).queryLocalFonts !== 'undefined' && (options.useLocalFonts ?? true),
-        hasBitmapBug: JASSUB._hasBitmapBug
+        hasBitmapBug: AkariSub._hasBitmapBug
       })
 
       if (this._offscreenRender) {
@@ -222,7 +222,7 @@ export default class JASSUB extends EventTarget {
   // ==========================================================================
 
   private static async _testImageBugs(): Promise<void> {
-    if (JASSUB._hasBitmapBug !== null) return
+    if (AkariSub._hasBitmapBug !== null) return
 
     const canvas1 = document.createElement('canvas')
     const ctx1 = canvas1.getContext('2d', { willReadFrequently: true })
@@ -251,8 +251,8 @@ export default class JASSUB extends EventTarget {
     ctx2.drawImage(canvas1, 0, 0)
     const postPut = ctx2.getImageData(0, 0, 1, 1).data
 
-    JASSUB._hasAlphaBug = prePut[1] !== postPut[1]
-    if (JASSUB._hasAlphaBug) {
+    AkariSub._hasAlphaBug = prePut[1] !== postPut[1]
+    if (AkariSub._hasAlphaBug) {
       console.log('Detected a browser having issue with transparent pixels, applying workaround')
     }
 
@@ -260,17 +260,17 @@ export default class JASSUB extends EventTarget {
       const subarray = new Uint8ClampedArray([255, 0, 255, 0, 255]).subarray(1, 5)
       ctx2.drawImage(await createImageBitmap(new ImageData(subarray, 1)), 0, 0)
       const { data } = ctx2.getImageData(0, 0, 1, 1)
-      JASSUB._hasBitmapBug = false
+      AkariSub._hasBitmapBug = false
 
       for (let i = 0; i < data.length; i++) {
         if (Math.abs(subarray[i] - data[i]) > 15) {
-          JASSUB._hasBitmapBug = true
+          AkariSub._hasBitmapBug = true
           console.log('Detected a browser having issue with partial bitmaps, applying workaround')
           break
         }
       }
     } else {
-      JASSUB._hasBitmapBug = false
+      AkariSub._hasBitmapBug = false
     }
 
     canvas1.remove()
@@ -278,7 +278,7 @@ export default class JASSUB extends EventTarget {
   }
 
   private static async _test(): Promise<void> {
-    await JASSUB._testImageBugs()
+    await AkariSub._testImageBugs()
   }
 
   // ==========================================================================
@@ -297,10 +297,10 @@ export default class JASSUB extends EventTarget {
         await renderer.setCanvas(this._canvas, Math.max(1, this._canvas.width || 1), Math.max(1, this._canvas.height || 1))
         this._gpuRenderer = renderer
         this._rendererType = 'webgpu'
-        console.log('[JASSUB] Using WebGPU renderer')
+        console.log('[AkariSub] Using WebGPU renderer')
         return
       } catch (error) {
-        console.warn('[JASSUB] WebGPU init failed, trying WebGL2:', error)
+        console.warn('[AkariSub] WebGPU init failed, trying WebGL2:', error)
       }
     }
 
@@ -312,10 +312,10 @@ export default class JASSUB extends EventTarget {
         await renderer.setCanvas(this._canvas, Math.max(1, this._canvas.width || 1), Math.max(1, this._canvas.height || 1))
         this._gpuRenderer = renderer
         this._rendererType = 'webgl2'
-        console.log('[JASSUB] Using WebGL2 renderer')
+        console.log('[AkariSub] Using WebGL2 renderer')
         return
       } catch (error) {
-        console.warn('[JASSUB] WebGL2 init failed, falling back to Canvas2D:', error)
+        console.warn('[AkariSub] WebGL2 init failed, falling back to Canvas2D:', error)
       }
     }
 
@@ -885,7 +885,7 @@ export default class JASSUB extends EventTarget {
         }
       }
     } else {
-      const hasAlphaBug = JASSUB._hasAlphaBug ?? false
+      const hasAlphaBug = AkariSub._hasAlphaBug ?? false
 
       for (let i = 0; i < imageCount; i++) {
         const image = images[i]

@@ -27,7 +27,7 @@ const umdResult = await Bun.build({
   target: 'browser',
   format: 'iife',
   minify: true,
-  naming: 'jassub.umd.js'
+  naming: 'akarisub.umd.js'
 })
 
 if (!umdResult.success) {
@@ -36,7 +36,7 @@ if (!umdResult.success) {
 }
 
 // Wrap the IIFE output as UMD
-const umdPath = resolve(__dirname, 'dist/jassub.umd.js')
+const umdPath = resolve(__dirname, 'dist/akarisub.umd.js')
 let umdContent = await Bun.file(umdPath).text()
 
 // Add UMD wrapper
@@ -46,16 +46,16 @@ const umdWrapper = `(function(root, factory) {
   } else if (typeof module === 'object' && module.exports) {
     module.exports = factory();
   } else {
-    root.JASSUB = factory();
+    root.AkariSub = factory();
   }
 }(typeof self !== 'undefined' ? self : this, function() {
 ${umdContent}
-return JASSUB;
+return AkariSub;
 }));`
 
 await Bun.write(umdPath, umdWrapper)
 
-console.log('Built UMD bundle: dist/jassub.umd.js')
+console.log('Built UMD bundle: dist/akarisub.umd.js')
 
 // Build worker from TypeScript
 // First, we need to create a temporary file that imports the wasm module correctly
@@ -65,14 +65,14 @@ const workerBuildResult = await Bun.build({
   target: 'browser',
   format: 'iife',
   minify: true,
-  naming: 'jassub-worker.js',
+  naming: 'akarisub-worker.js',
   plugins: [
     {
       name: 'wasm-alias',
       setup(build) {
         // Resolve 'wasm' import to the actual wasm JS loader
         build.onResolve({ filter: /^wasm$/ }, () => {
-          return { path: resolve(__dirname, 'dist/js/jassub-worker.js') }
+          return { path: resolve(__dirname, 'dist/js/akarisub-worker.js') }
         })
       }
     }
@@ -87,13 +87,13 @@ if (!workerBuildResult.success) {
 // Copy the wasm file to dist root
 try {
   await copyFile(
-    resolve(__dirname, 'dist/js/jassub-worker.wasm'),
-    resolve(__dirname, 'dist/jassub-worker.wasm')
+    resolve(__dirname, 'dist/js/akarisub-worker.wasm'),
+    resolve(__dirname, 'dist/akarisub-worker.wasm')
   )
-  console.log('Copied jassub-worker.wasm to dist/')
+  console.log('Copied akarisub-worker.wasm to dist/')
 } catch (e) {
   console.warn('Could not copy wasm file (may already exist):', (e as Error).message)
 }
 
-console.log('Built worker: dist/jassub-worker.js')
+console.log('Built worker: dist/akarisub-worker.js')
 console.log('\nBuild complete!')

@@ -1,6 +1,6 @@
-# JASSUB.js - Makefile
+# AkariSub.js - Makefile
 
-# make - Build Dependencies and the JASSUB.js
+# make - Build Dependencies and the AkariSub.js
 BASE_DIR:=$(dir $(realpath $(firstword $(MAKEFILE_LIST))))
 DIST_DIR:=$(BASE_DIR)dist/libraries
 
@@ -24,14 +24,14 @@ export CXXFLAGS = $(CFLAGS)
 export PKG_CONFIG_PATH = $(DIST_DIR)/lib/pkgconfig
 export EM_PKG_CONFIG_PATH = $(PKG_CONFIG_PATH)
 
-WORKER_NAME = jassub-worker
+WORKER_NAME = akarisub-worker
 WORKER_ARGS = \
 	$(WASM_FEATURES)
 
-all: jassub
-jassub: dist
+all: akarisub
+akarisub: dist
 
-.PHONY: all jassub dist
+.PHONY: all akarisub dist
 
 include functions.mk
 
@@ -259,15 +259,15 @@ SIZE_ARGS = \
 # args that are required for this to even work at all
 # Modern browser targets: Chrome 114+, Safari 16.4+ (for all WASM features)
 COMPAT_ARGS = \
-		-s EXPORTED_FUNCTIONS="['_malloc', '_free']" \
+		-s EXPORTED_FUNCTIONS="['_malloc','_free','_akarisub_create','_akarisub_destroy','_akarisub_set_drop_animations','_akarisub_create_track_mem','_akarisub_remove_track','_akarisub_resize_canvas','_akarisub_add_font','_akarisub_reload_fonts','_akarisub_set_default_font','_akarisub_set_fallback_fonts','_akarisub_set_memory_limits','_akarisub_get_event_count','_akarisub_alloc_event','_akarisub_remove_event','_akarisub_get_style_count','_akarisub_alloc_style','_akarisub_remove_style','_akarisub_style_override_index','_akarisub_disable_style_override','_akarisub_render_blend','_akarisub_render_image','_akarisub_get_changed','_akarisub_get_count','_akarisub_get_time','_akarisub_get_track_color_space','_akarisub_event_get_int','_akarisub_event_set_int','_akarisub_event_get_str','_akarisub_event_set_str','_akarisub_style_get_num','_akarisub_style_set_num','_akarisub_style_get_str','_akarisub_style_set_str','_akarisub_render_result_x','_akarisub_render_result_y','_akarisub_render_result_w','_akarisub_render_result_h','_akarisub_render_result_image','_akarisub_render_result_next']" \
 		-s EXPORTED_RUNTIME_METHODS="['getTempRet0', 'setTempRet0', 'FS_createPath', 'FS_createDataFile']" \
 		-s IMPORTED_MEMORY=1 \
 		-s MIN_CHROME_VERSION=114 \
 		-s MIN_SAFARI_VERSION=160400
 
-dist/js/$(WORKER_NAME).js: src/JASSUB.cpp src/ts/worker.ts src/pre-worker.js src/post-worker.js
+dist/js/$(WORKER_NAME).js: src/AkariSub.cpp src/ts/worker.ts src/pre-worker.js src/post-worker.js
 	mkdir -p dist/js
-	emcc src/JASSUB.cpp $(LIBASS_DEPS) \
+	em++ src/AkariSub.cpp $(LIBASS_DEPS) \
 		-O3 \
 		-std=c++17 \
 		-fno-rtti -fno-exceptions -DEMSCRIPTEN_HAS_UNBOUND_TYPE_NAMES=0 \
@@ -287,19 +287,15 @@ dist/js/$(WORKER_NAME).js: src/JASSUB.cpp src/ts/worker.ts src/pre-worker.js src
 		-s INITIAL_MEMORY=16MB \
 		-s MODULARIZE=1 \
 		-s EXPORT_ES6=1 \
-		--bind \
-		-lembind \
-		-lc++-noexcept \
-		-lc++abi-noexcept \
 		-o $@
 
 .PHONY: worker
 
-worker: dist/js/jassub-worker.js
+worker: dist/js/akarisub-worker.js
 
-dist/js/jassub.js: src/jassub.js
+dist/js/akarisub.js: src/akarisub.js
 	mkdir -p dist/js
-	cp src/jassub.js $@
+	cp src/akarisub.js $@
 
 # dist/license/all:
 #	@#FIXME: allow -j in toplevel Makefile and reintegrate licence extraction into this file
@@ -310,7 +306,7 @@ dist/js/jassub.js: src/jassub.js
 
 # Clean Tasks
 
-clean: clean-dist clean-libs clean-jassub
+clean: clean-dist clean-libs clean-akarisub
 
 clean-dist:
 	rm -frv dist/libraries/*
@@ -318,7 +314,7 @@ clean-dist:
 	rm -frv dist/license/*
 clean-libs:
 	rm -frv dist/libraries build/lib
-clean-jassub:
+clean-akarisub:
 	cd src && git clean -fdX
 
 git-checkout:
@@ -333,4 +329,4 @@ $(foreach subm, $(SUBMODULES), $(eval $(call TR_GIT_SM_RESET,$(subm))))
 server: # Node http server npm i -g http-server
 	http-server
 
-.PHONY: clean clean-dist clean-libs clean-jassub git-checkout git-smreset server
+.PHONY: clean clean-dist clean-libs clean-akarisub git-checkout git-smreset server

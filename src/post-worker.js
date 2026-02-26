@@ -3,7 +3,7 @@
 // Emscripten MINIMAL_RUNTIME keeps heap views (`HEAPU8`, etc.) and `_malloc`/`_free` as local vars.
 // The JS worker glue expects `Module._malloc` and `self.HEAPU8`/`self.HEAPU8C`.
 
-const __jassub_sync_heap = () => {
+const __akarisub_sync_heap = () => {
   try {
     if (typeof wasmMemory !== 'undefined') {
       self.wasmMemory = wasmMemory
@@ -31,27 +31,27 @@ const __jassub_sync_heap = () => {
 
 // Keep self.HEAP* in sync on memory growth.
 if (typeof updateGlobalBufferAndViews === 'function') {
-  const __jassub_updateGlobalBufferAndViews = updateGlobalBufferAndViews
+  const __akarisub_updateGlobalBufferAndViews = updateGlobalBufferAndViews
   // eslint-disable-next-line no-global-assign
   updateGlobalBufferAndViews = (b) => {
-    __jassub_updateGlobalBufferAndViews(b)
-    __jassub_sync_heap()
+    __akarisub_updateGlobalBufferAndViews(b)
+    __akarisub_sync_heap()
   }
 }
 
 // Emscripten 4.x uses updateMemoryViews instead of updateGlobalBufferAndViews
 if (typeof updateMemoryViews === 'function') {
-  const __jassub_updateMemoryViews = updateMemoryViews
+  const __akarisub_updateMemoryViews = updateMemoryViews
   // eslint-disable-next-line no-global-assign
   updateMemoryViews = () => {
-    __jassub_updateMemoryViews()
-    __jassub_sync_heap()
+    __akarisub_updateMemoryViews()
+    __akarisub_sync_heap()
   }
 }
 
 // Expose `_malloc`/`_free`, FS functions, and initial heap views when the module becomes ready.
-const __jassub_ready = typeof ready === 'function' ? ready : null
-if (__jassub_ready) {
+const __akarisub_ready = typeof ready === 'function' ? ready : null
+if (__akarisub_ready) {
   // eslint-disable-next-line no-global-assign
   ready = () => {
     Module._malloc = _malloc
@@ -60,7 +60,7 @@ if (__jassub_ready) {
       Module.FS_createPath = FS.createPath
       Module.FS_createDataFile = FS.createDataFile
     }
-    __jassub_sync_heap()
-    return __jassub_ready()
+    __akarisub_sync_heap()
+    return __akarisub_ready()
   }
 }

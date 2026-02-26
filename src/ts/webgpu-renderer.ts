@@ -115,7 +115,7 @@ export function isWebGPUSupported(): boolean {
 }
 
 /**
- * High-performance WebGPU subtitle renderer for JASSUB.
+ * High-performance WebGPU subtitle renderer for AkariSub.
  */
 export class WebGPURenderer {
   private device: GPUDevice | null = null

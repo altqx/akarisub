@@ -1,5 +1,5 @@
 /**
- * JASSUB Worker - TypeScript implementation.
+ * AkariSub Worker - TypeScript implementation.
  * Runs in a Web Worker to offload subtitle rendering from the main thread.
  */
 
@@ -11,8 +11,7 @@ import WASM from 'wasm'
 import type {
   ASSEvent,
   ASSStyle,
-  JASSUBModule,
-  JASSUBWasmObject,
+  AkariSubModule,
   SubtitleColorSpace,
   WorkerInboundMessage
 } from './types'
@@ -98,11 +97,55 @@ let offCanvasCtx: OffscreenCanvasRenderingContext2D | null = null
 let offscreenRender: boolean | 'hybrid' = false
 let bufferCanvas: OffscreenCanvas | null = null
 let bufferCtx: OffscreenCanvasRenderingContext2D | null = null
-let jassubObj: JASSUBWasmObject | null = null
+let akariSubHandle = 0
 let subtitleColorSpace: SubtitleColorSpace = null
 let dropAllBlur = false
 let hasBitmapBug = false
-let _Module: JASSUBModule | null = null
+let _Module: AkariSubModule | null = null
+
+interface AkariSubApi {
+  create: (width: number, height: number, fallbackFontPtr: number, debug: number) => number
+  destroy: (handle: number) => void
+  setDropAnimations: (handle: number, value: number) => void
+  createTrackMem: (handle: number, contentPtr: number) => void
+  removeTrack: (handle: number) => void
+  resizeCanvas: (handle: number, width: number, height: number, videoWidth: number, videoHeight: number) => void
+  addFont: (handle: number, namePtr: number, dataPtr: number, dataSize: number) => void
+  reloadFonts: (handle: number) => void
+  setDefaultFont: (handle: number, fontPtr: number) => void
+  setFallbackFonts: (handle: number, fontsPtr: number) => void
+  setMemoryLimits: (handle: number, glyphLimit: number, memoryLimit: number) => void
+  getEventCount: (handle: number) => number
+  allocEvent: (handle: number) => number
+  removeEvent: (handle: number, index: number) => void
+  getStyleCount: (handle: number) => number
+  allocStyle: (handle: number) => number
+  removeStyle: (handle: number, index: number) => void
+  styleOverrideIndex: (handle: number, index: number) => void
+  disableStyleOverride: (handle: number) => void
+  renderBlend: (handle: number, time: number, force: number) => number
+  renderImage: (handle: number, time: number, force: number) => number
+  getChanged: (handle: number) => number
+  getCount: (handle: number) => number
+  getTime: (handle: number) => number
+  getTrackColorSpace: (handle: number) => number
+  eventGetInt: (handle: number, index: number, field: number) => number
+  eventSetInt: (handle: number, index: number, field: number, value: number) => void
+  eventGetStr: (handle: number, index: number, field: number) => number
+  eventSetStr: (handle: number, index: number, field: number, valuePtr: number) => void
+  styleGetNum: (handle: number, index: number, field: number) => number
+  styleSetNum: (handle: number, index: number, field: number, value: number) => void
+  styleGetStr: (handle: number, index: number, field: number) => number
+  styleSetStr: (handle: number, index: number, field: number, valuePtr: number) => void
+  rrX: (ptr: number) => number
+  rrY: (ptr: number) => number
+  rrW: (ptr: number) => number
+  rrH: (ptr: number) => number
+  rrImage: (ptr: number) => number
+  rrNext: (ptr: number) => number
+}
+
+let akariSubApi: AkariSubApi | null = null
 
 // Pre-allocated object pool for render results
 const MAX_POOLED_IMAGES = 128
@@ -130,6 +173,96 @@ const getPooledItem = (index: number): RenderResultItem => {
     return imagePool[index]
   }
   return { w: 0, h: 0, x: 0, y: 0, image: 0 }
+}
+
+const EVENT_INT_FIELDS: Record<string, number> = {
+  Start: 0,
+  Duration: 1,
+  ReadOrder: 2,
+  Layer: 3,
+  Style: 4,
+  MarginL: 5,
+  MarginR: 6,
+  MarginV: 7
+}
+
+const EVENT_STR_FIELDS: Record<string, number> = {
+  Name: 0,
+  Effect: 1,
+  Text: 2
+}
+
+const STYLE_NUM_FIELDS: Record<string, number> = {
+  FontSize: 0,
+  PrimaryColour: 1,
+  SecondaryColour: 2,
+  OutlineColour: 3,
+  BackColour: 4,
+  Bold: 5,
+  Italic: 6,
+  Underline: 7,
+  StrikeOut: 8,
+  ScaleX: 9,
+  ScaleY: 10,
+  Spacing: 11,
+  Angle: 12,
+  BorderStyle: 13,
+  Outline: 14,
+  Shadow: 15,
+  Alignment: 16,
+  MarginL: 17,
+  MarginR: 18,
+  MarginV: 19,
+  Encoding: 20,
+  treat_fontname_as_pattern: 21,
+  Blur: 22,
+  Justify: 23
+}
+
+const STYLE_STR_FIELDS: Record<string, number> = {
+  Name: 0,
+  FontName: 1
+}
+
+const encodeString = (input: string): Uint8Array => {
+  return new TextEncoder().encode(input)
+}
+
+const allocString = (input: string): number => {
+  if (!_Module) return 0
+  const bytes = encodeString(input)
+  const ptr = _Module._malloc(bytes.length + 1)
+  if (!ptr) return 0
+  self.HEAPU8.set(bytes, ptr)
+  self.HEAPU8[ptr + bytes.length] = 0
+  return ptr
+}
+
+const readCString = (ptr: number): string => {
+  if (!ptr) return ''
+  let end = ptr
+  const heap = self.HEAPU8
+  while (heap[end] !== 0) end++
+  return new TextDecoder().decode(heap.subarray(ptr, end))
+}
+
+const withCString = <T>(input: string, callback: (ptr: number) => T): T => {
+  const ptr = allocString(input)
+  try {
+    return callback(ptr)
+  } finally {
+    if (ptr && _Module) _Module._free(ptr)
+  }
+}
+
+const requireApi = (): AkariSubApi => {
+  if (!akariSubApi) throw new Error('AkariSub API is not initialized')
+  return akariSubApi
+}
+
+const requireHandle = (): number => {
+  if (!akariSubHandle) throw new Error('AkariSub instance is not initialized')
+  return akariSubHandle
 }
 
 // =============================================================================
@@ -185,7 +318,10 @@ const scheduleReloadFonts = (): void => {
   if (pendingFontReload) return
   pendingFontReload = setTimeout(() => {
     pendingFontReload = null
-    if (jassubObj) jassubObj.reloadFonts()
+    if (akariSubHandle) {
+      const api = requireApi()
+      api.reloadFonts(akariSubHandle)
+    }
   }, 16)
 }
 
@@ -194,28 +330,30 @@ const scheduleReloadFonts = (): void => {
  * Embedded fonts have higher priority than fontconfig fonts in libass.
  */
 const addFontAsEmbedded = (uint8: Uint8Array, name: string): void => {
-  if (!_Module || !jassubObj) {
-    if (debug) console.warn('[JASSUB] Cannot add embedded font, module or jassubObj not ready:', name)
+  if (!_Module || !akariSubHandle) {
+    if (debug) console.warn('[AkariSub] Cannot add embedded font, module or AkariSub not ready:', name)
     return
   }
 
   try {
+    const api = requireApi()
     // Allocate memory in WASM heap and copy font data
     const ptr = _Module._malloc(uint8.length)
     if (!ptr) {
-      console.warn('[JASSUB] Failed to allocate memory for embedded font:', name)
+      console.warn('[AkariSub] Failed to allocate memory for embedded font:', name)
       return
     }
 
     // Copy font data to WASM heap
     self.HEAPU8.set(uint8, ptr)
 
-    // Call jassubObj.addFont which calls ass_add_font and frees the memory
-    jassubObj.addFont(name, ptr, uint8.length)
+    withCString(name, (namePtr) => {
+      api.addFont(akariSubHandle, namePtr, ptr, uint8.length)
+    })
 
-    if (debug) console.log('[JASSUB] Added embedded font:', name, 'size:', uint8.length)
+    if (debug) console.log('[AkariSub] Added embedded font:', name, 'size:', uint8.length)
   } catch (e) {
-    console.warn('[JASSUB] Failed to add embedded font:', name, e)
+    console.warn('[AkariSub] Failed to add embedded font:', name, e)
   }
 }
 
@@ -253,7 +391,7 @@ const writeFontToFSImmediate = (uint8: Uint8Array, isFallback: boolean = true): 
   if (_Module) {
     try {
       _Module.FS_createDataFile(fontDir, fontFileName, uint8, true, true, true)
-      if (debug) console.log('[JASSUB] Wrote font to FS:', fontDir + '/' + fontFileName, 'size:', uint8.length)
+      if (debug) console.log('[AkariSub] Wrote font to FS:', fontDir + '/' + fontFileName, 'size:', uint8.length)
     } catch (e) {
       console.warn('Failed to write font to filesystem:', fontDir + '/' + fontFileName, e)
     }
@@ -351,8 +489,12 @@ self.setTrack = ({ content }: { content: string }): void => {
   if (clampPos) content = fixPlayRes(content)
   if (dropAllBlur) content = dropBlur(content)
 
-  jassubObj!.createTrackMem(content)
-  subtitleColorSpace = libassYCbCrMap[jassubObj!.trackColorSpace]
+  const api = requireApi()
+  const handle = requireHandle()
+  withCString(content, (contentPtr) => {
+    api.createTrackMem(handle, contentPtr)
+  })
+  subtitleColorSpace = libassYCbCrMap[api.getTrackColorSpace(handle)]
   postMessage({ target: 'verifyColorSpace', subtitleColorSpace })
 }
 
@@ -361,7 +503,9 @@ self.getColorSpace = (): void => {
 }
 
 self.freeTrack = (): void => {
-  jassubObj!.removeTrack()
+  const api = requireApi()
+  const handle = requireHandle()
+  api.removeTrack(handle)
 }
 
 self.setTrackByUrl = ({ url }: { url: string }): void => {
@@ -438,7 +582,9 @@ const render = (time: number, force?: boolean | number): void => {
   metrics.pendingRenders++
 
   const renderResult =
-    blendMode === 'wasm' ? jassubObj!.renderBlend(time, force ? 1 : 0) : jassubObj!.renderImage(time, force ? 1 : 0)
+    blendMode === 'wasm'
+      ? requireApi().renderBlend(requireHandle(), time, force ? 1 : 0)
+      : requireApi().renderImage(requireHandle(), time, force ? 1 : 0)
 
   // Update metrics
   const renderEndTime = performance.now()
@@ -450,27 +596,28 @@ const render = (time: number, force?: boolean | number): void => {
     metrics.minRenderTime = Math.min(metrics.minRenderTime, renderDuration)
   }
 
-  if (jassubObj!.changed !== 0 || force) {
+  const api = requireApi()
+  const handle = requireHandle()
+  const changed = api.getChanged(handle)
+  if (changed !== 0 || force) {
     metrics.framesRendered++
     metrics.cacheMisses++
   } else {
     metrics.cacheHits++
   }
 
-  if (jassubObj && jassubObj.getEventCount) {
-    metrics.totalEvents = jassubObj.getEventCount()
-  }
+  metrics.totalEvents = api.getEventCount(handle)
 
   if (debug) {
     const decodeEndTime = performance.now()
-    const renderEndTimeWasm = jassubObj!.time
+    const renderEndTimeWasm = api.getTime(handle)
     times.WASMRenderTime = renderEndTimeWasm - renderStartTime
     times.WASMBitmapDecodeTime = decodeEndTime - renderEndTimeWasm
     times.JSRenderTime = Date.now()
   }
 
-  if (jassubObj!.changed !== 0 || force) {
-    const imageCount = jassubObj!.count
+  if (changed !== 0 || force) {
+    const imageCount = api.getCount(handle)
     const images: RenderResultItem[] = new Array(imageCount)
     const buffers: ArrayBuffer[] = []
 
@@ -480,15 +627,15 @@ const render = (time: number, force?: boolean | number): void => {
       const promises: Promise<ImageBitmap>[] = new Array(imageCount)
       let result = renderResult
 
-      for (let i = 0; i < imageCount; result = result.next!, ++i) {
+      for (let i = 0; i < imageCount && result; ++i) {
         const item = getPooledItem(i)
-        item.w = result.w
-        item.h = result.h
-        item.x = result.x
-        item.y = result.y
+        item.w = api.rrW(result)
+        item.h = api.rrH(result)
+        item.x = api.rrX(result)
+        item.y = api.rrY(result)
         item.image = 0
 
-        const pointer = result.image
+        const pointer = api.rrImage(result)
         const byteLength = item.w * item.h * 4
 
         // Avoid slice when possible
@@ -510,6 +657,7 @@ const render = (time: number, force?: boolean | number): void => {
           ? createImageBitmap(imageData, { premultiplyAlpha: 'none', colorSpaceConversion: 'none' })
           : createImageBitmap(imageData)
         images[i] = item
+        result = api.rrNext(result)
       }
 
       Promise.all(promises).then((bitmaps) => {
@@ -521,7 +669,7 @@ const render = (time: number, force?: boolean | number): void => {
       }).catch(() => {
         if (asyncRenderOptions) {
           asyncRenderOptions = false
-          console.warn('[JASSUB] createImageBitmap options not supported, disabling')
+          console.warn('[AkariSub] createImageBitmap options not supported, disabling')
           render(time, force)
         } else {
           postMessage({ target: 'unbusy' })
@@ -529,20 +677,22 @@ const render = (time: number, force?: boolean | number): void => {
       })
     } else {
       let result = renderResult
-      for (let i = 0; i < imageCount; result = result.next!, ++i) {
+      for (let i = 0; i < imageCount && result; ++i) {
         const item = getPooledItem(i)
-        item.w = result.w
-        item.h = result.h
-        item.x = result.x
-        item.y = result.y
-        item.image = result.image
+        item.w = api.rrW(result)
+        item.h = api.rrH(result)
+        item.x = api.rrX(result)
+        item.y = api.rrY(result)
+        item.image = api.rrImage(result)
 
         if (!offCanvasCtx) {
-          const buf = self.wasmMemory.buffer.slice(result.image, result.image + result.w * result.h * 4)
+          const imagePtr = item.image as number
+          const buf = self.wasmMemory.buffer.slice(imagePtr, imagePtr + item.w * item.h * 4)
           buffers.push(buf)
           item.image = buf
         }
         images[i] = item
+        result = api.rrNext(result)
       }
       paintImages({ images, buffers, times })
     }
@@ -705,15 +855,57 @@ self.init = async (data: any): Promise<void> => {
     self.fetch = _fetch
   }
 
-  const loadWasm = (wasmUrl: string): Promise<JASSUBModule> => {
+  const loadWasm = (wasmUrl: string): Promise<AkariSubModule> => {
     setWasmUrl(wasmUrl)
     return WASM({
       wasm: !(WebAssembly as any).instantiateStreaming ? (read_(wasmUrl, true) as ArrayBuffer) : undefined
     }).finally(restoreFetch)
   }
 
-  const onWasmLoaded = async (Module: JASSUBModule): Promise<void> => {
+  const onWasmLoaded = async (Module: AkariSubModule): Promise<void> => {
     _Module = Module // Store module reference for FS access
+
+    akariSubApi = {
+      create: Module._akarisub_create,
+      destroy: Module._akarisub_destroy,
+      setDropAnimations: Module._akarisub_set_drop_animations,
+      createTrackMem: Module._akarisub_create_track_mem,
+      removeTrack: Module._akarisub_remove_track,
+      resizeCanvas: Module._akarisub_resize_canvas,
+      addFont: Module._akarisub_add_font,
+      reloadFonts: Module._akarisub_reload_fonts,
+      setDefaultFont: Module._akarisub_set_default_font,
+      setFallbackFonts: Module._akarisub_set_fallback_fonts,
+      setMemoryLimits: Module._akarisub_set_memory_limits,
+      getEventCount: Module._akarisub_get_event_count,
+      allocEvent: Module._akarisub_alloc_event,
+      removeEvent: Module._akarisub_remove_event,
+      getStyleCount: Module._akarisub_get_style_count,
+      allocStyle: Module._akarisub_alloc_style,
+      removeStyle: Module._akarisub_remove_style,
+      styleOverrideIndex: Module._akarisub_style_override_index,
+      disableStyleOverride: Module._akarisub_disable_style_override,
+      renderBlend: Module._akarisub_render_blend,
+      renderImage: Module._akarisub_render_image,
+      getChanged: Module._akarisub_get_changed,
+      getCount: Module._akarisub_get_count,
+      getTime: Module._akarisub_get_time,
+      getTrackColorSpace: Module._akarisub_get_track_color_space,
+      eventGetInt: Module._akarisub_event_get_int,
+      eventSetInt: Module._akarisub_event_set_int,
+      eventGetStr: Module._akarisub_event_get_str,
+      eventSetStr: Module._akarisub_event_set_str,
+      styleGetNum: Module._akarisub_style_get_num,
+      styleSetNum: Module._akarisub_style_set_num,
+      styleGetStr: Module._akarisub_style_get_str,
+      styleSetStr: Module._akarisub_style_set_str,
+      rrX: Module._akarisub_render_result_x,
+      rrY: Module._akarisub_render_result_y,
+      rrW: Module._akarisub_render_result_w,
+      rrH: Module._akarisub_render_result_h,
+      rrImage: Module._akarisub_render_result_image,
+      rrNext: Module._akarisub_render_result_next
+    }
 
     try {
       Module.FS_createPath('/', 'fonts', true, true)
@@ -790,7 +982,7 @@ self.init = async (data: any): Promise<void> => {
           await createImageBitmap(testData, { premultiplyAlpha: 'none', colorSpaceConversion: 'none' })
             .catch(() => {
               asyncRenderOptions = false
-              console.warn('[JASSUB] createImageBitmap options not supported (Safari?), rendering without options')
+              console.warn('[AkariSub] createImageBitmap options not supported (Safari?), rendering without options')
             })
         }
       } catch {
@@ -834,7 +1026,7 @@ self.init = async (data: any): Promise<void> => {
                 (fontData: ArrayBuffer) => {
                   writeFontToFSImmediate(new Uint8Array(fontData), true)
                   fontMap_[fontKey] = true
-                  if (debug) console.log('[JASSUB] Loaded fallback font async:', fontKey)
+                  if (debug) console.log('[AkariSub] Loaded fallback font async:', fontKey)
                   resolve()
                 },
                 (e) => {
@@ -859,7 +1051,7 @@ self.init = async (data: any): Promise<void> => {
         const timeoutPromise = new Promise<void>((resolve) => {
           timeoutId = setTimeout(() => {
             timedOut = true
-            console.warn('[JASSUB] Fallback font loading timeout, continuing with available fonts')
+            console.warn('[AkariSub] Fallback font loading timeout, continuing with available fonts')
             resolve()
           }, 30000)
         })
@@ -870,7 +1062,7 @@ self.init = async (data: any): Promise<void> => {
           timeoutPromise
         ])
         if (!timedOut && debug) {
-          console.log('[JASSUB] All fallback fonts loaded successfully')
+          console.log('[AkariSub] All fallback fonts loaded successfully')
         }
       }
     }
@@ -878,10 +1070,14 @@ self.init = async (data: any): Promise<void> => {
     await loadFallbackFontsAsync()
 
     const primaryFallback = fallbackFonts.length > 0 ? fallbackFonts[0] : null
-    jassubObj = new Module.JASSUB(self.width, self.height, primaryFallback, debug)
+    akariSubHandle = withCString(primaryFallback || '', (fontPtr) => {
+      return requireApi().create(self.width, self.height, fontPtr, debug ? 1 : 0)
+    })
 
     if (fallbackFonts.length > 0) {
-      jassubObj.setFallbackFonts(fallbackFonts.join(','))
+      withCString(fallbackFonts.join(','), (fontsPtr) => {
+        requireApi().setFallbackFonts(requireHandle(), fontsPtr)
+      })
     }
 
     let subContent = data.subContent
@@ -892,7 +1088,7 @@ self.init = async (data: any): Promise<void> => {
     const isLargeSubtitle = subContent.length > 500000
     if (isLargeSubtitle) {
       postMessage({ target: 'partial_ready' })
-      if (debug) console.log('[JASSUB] Large subtitle detected, emitting partial_ready early')
+      if (debug) console.log('[AkariSub] Large subtitle detected, emitting partial_ready early')
     }
 
     processAvailableFonts(subContent)
@@ -912,19 +1108,21 @@ self.init = async (data: any): Promise<void> => {
     }
 
     if (hasPreloadedFonts) {
-      if (debug) console.log('[JASSUB] Reloading fonts after writing', 'preloaded', 'fonts to FS')
-      jassubObj.reloadFonts()
-      if (debug) console.log('[JASSUB] Font reload complete')
+      if (debug) console.log('[AkariSub] Reloading fonts after writing', 'preloaded', 'fonts to FS')
+      requireApi().reloadFonts(requireHandle())
+      if (debug) console.log('[AkariSub] Font reload complete')
     }
 
     processAvailableFonts(subContent)
 
-    jassubObj.createTrackMem(subContent)
-    subtitleColorSpace = libassYCbCrMap[jassubObj.trackColorSpace]
-    jassubObj.setDropAnimations(data.dropAllAnimations || 0)
+    withCString(subContent, (subPtr) => {
+      requireApi().createTrackMem(requireHandle(), subPtr)
+    })
+    subtitleColorSpace = libassYCbCrMap[requireApi().getTrackColorSpace(requireHandle())]
+    requireApi().setDropAnimations(requireHandle(), data.dropAllAnimations || 0)
 
     if (data.libassMemoryLimit > 0 || data.libassGlyphLimit > 0) {
-      jassubObj.setMemoryLimits(data.libassGlyphLimit || 0, data.libassMemoryLimit || 0)
+      requireApi().setMemoryLimits(requireHandle(), data.libassGlyphLimit || 0, data.libassMemoryLimit || 0)
     }
 
     postMessage({ target: 'ready' })
@@ -932,7 +1130,7 @@ self.init = async (data: any): Promise<void> => {
   }
 
   loadWasm(data.wasmUrl).then(onWasmLoaded).catch((e) => {
-    console.error('[JASSUB] WASM loading failed:', e)
+    console.error('[AkariSub] WASM loading failed:', e)
     postMessage({ target: 'error', error: 'WASM loading failed: ' + (e && e.message ? e.message : String(e)) })
   })
 }
@@ -973,7 +1171,7 @@ self.canvas = ({
   if (width == null) throw new Error('Invalid canvas size specified')
   self.width = width
   self.height = height
-  if (jassubObj) jassubObj.resizeCanvas(width, height, videoWidth, videoHeight)
+  if (akariSubHandle) requireApi().resizeCanvas(akariSubHandle, width, height, videoWidth, videoHeight)
   if (force) render(lastCurrentTime, true)
 }
 
@@ -992,7 +1190,10 @@ self.video = ({
 }
 
 self.destroy = (): void => {
-  jassubObj!.quitLibrary()
+  if (akariSubHandle) {
+    requireApi().destroy(akariSubHandle)
+    akariSubHandle = 0
+  }
 }
 
 self.setAsyncRender = ({ value }: { value: boolean }): void => {
@@ -1003,45 +1204,118 @@ self.setAsyncRender = ({ value }: { value: boolean }): void => {
 // Event Management
 // =============================================================================
 
-const _applyKeys = <T extends object>(input: Partial<T>, output: T): void => {
-  for (const v of Object.keys(input) as (keyof T)[]) {
-    ; (output as any)[v] = input[v]
+const applyEventFields = (index: number, event: Partial<ASSEvent>): void => {
+  const api = requireApi()
+  const handle = requireHandle()
+  for (const key of Object.keys(event) as (keyof ASSEvent)[]) {
+    const value = event[key]
+    if (value == null || key === '_index') continue
+
+    if (key in EVENT_INT_FIELDS) {
+      api.eventSetInt(handle, index, EVENT_INT_FIELDS[key as string], Number(value))
+      continue
+    }
+
+    if (key in EVENT_STR_FIELDS) {
+      withCString(String(value), (ptr) => {
+        api.eventSetStr(handle, index, EVENT_STR_FIELDS[key as string], ptr)
+      })
+    }
+  }
+}
+
+const readEvent = (index: number): ASSEvent => {
+  const api = requireApi()
+  const handle = requireHandle()
+  return {
+    Start: api.eventGetInt(handle, index, EVENT_INT_FIELDS.Start),
+    Duration: api.eventGetInt(handle, index, EVENT_INT_FIELDS.Duration),
+    ReadOrder: api.eventGetInt(handle, index, EVENT_INT_FIELDS.ReadOrder),
+    Layer: api.eventGetInt(handle, index, EVENT_INT_FIELDS.Layer),
+    Style: String(api.eventGetInt(handle, index, EVENT_INT_FIELDS.Style)),
+    MarginL: api.eventGetInt(handle, index, EVENT_INT_FIELDS.MarginL),
+    MarginR: api.eventGetInt(handle, index, EVENT_INT_FIELDS.MarginR),
+    MarginV: api.eventGetInt(handle, index, EVENT_INT_FIELDS.MarginV),
+    Name: readCString(api.eventGetStr(handle, index, EVENT_STR_FIELDS.Name)),
+    Text: readCString(api.eventGetStr(handle, index, EVENT_STR_FIELDS.Text)),
+    Effect: readCString(api.eventGetStr(handle, index, EVENT_STR_FIELDS.Effect))
+  }
+}
+
+const applyStyleFields = (index: number, style: Partial<ASSStyle>): void => {
+  const api = requireApi()
+  const handle = requireHandle()
+  for (const key of Object.keys(style) as (keyof ASSStyle)[]) {
+    const value = style[key]
+    if (value == null) continue
+
+    if (key in STYLE_NUM_FIELDS) {
+      api.styleSetNum(handle, index, STYLE_NUM_FIELDS[key as string], Number(value))
+      continue
+    }
+
+    if (key in STYLE_STR_FIELDS) {
+      withCString(String(value), (ptr) => {
+        api.styleSetStr(handle, index, STYLE_STR_FIELDS[key as string], ptr)
+      })
+    }
+  }
+}
+
+const readStyle = (index: number): ASSStyle => {
+  const api = requireApi()
+  const handle = requireHandle()
+  return {
+    Name: readCString(api.styleGetStr(handle, index, STYLE_STR_FIELDS.Name)),
+    FontName: readCString(api.styleGetStr(handle, index, STYLE_STR_FIELDS.FontName)),
+    FontSize: api.styleGetNum(handle, index, STYLE_NUM_FIELDS.FontSize),
+    PrimaryColour: api.styleGetNum(handle, index, STYLE_NUM_FIELDS.PrimaryColour),
+    SecondaryColour: api.styleGetNum(handle, index, STYLE_NUM_FIELDS.SecondaryColour),
+    OutlineColour: api.styleGetNum(handle, index, STYLE_NUM_FIELDS.OutlineColour),
+    BackColour: api.styleGetNum(handle, index, STYLE_NUM_FIELDS.BackColour),
+    Bold: api.styleGetNum(handle, index, STYLE_NUM_FIELDS.Bold),
+    Italic: api.styleGetNum(handle, index, STYLE_NUM_FIELDS.Italic),
+    Underline: api.styleGetNum(handle, index, STYLE_NUM_FIELDS.Underline),
+    StrikeOut: api.styleGetNum(handle, index, STYLE_NUM_FIELDS.StrikeOut),
+    ScaleX: api.styleGetNum(handle, index, STYLE_NUM_FIELDS.ScaleX),
+    ScaleY: api.styleGetNum(handle, index, STYLE_NUM_FIELDS.ScaleY),
+    Spacing: api.styleGetNum(handle, index, STYLE_NUM_FIELDS.Spacing),
+    Angle: api.styleGetNum(handle, index, STYLE_NUM_FIELDS.Angle),
+    BorderStyle: api.styleGetNum(handle, index, STYLE_NUM_FIELDS.BorderStyle),
+    Outline: api.styleGetNum(handle, index, STYLE_NUM_FIELDS.Outline),
+    Shadow: api.styleGetNum(handle, index, STYLE_NUM_FIELDS.Shadow),
+    Alignment: api.styleGetNum(handle, index, STYLE_NUM_FIELDS.Alignment),
+    MarginL: api.styleGetNum(handle, index, STYLE_NUM_FIELDS.MarginL),
+    MarginR: api.styleGetNum(handle, index, STYLE_NUM_FIELDS.MarginR),
+    MarginV: api.styleGetNum(handle, index, STYLE_NUM_FIELDS.MarginV),
+    Encoding: api.styleGetNum(handle, index, STYLE_NUM_FIELDS.Encoding),
+    treat_fontname_as_pattern: api.styleGetNum(handle, index, STYLE_NUM_FIELDS.treat_fontname_as_pattern),
+    Blur: api.styleGetNum(handle, index, STYLE_NUM_FIELDS.Blur),
+    Justify: api.styleGetNum(handle, index, STYLE_NUM_FIELDS.Justify)
   }
 }
 
 self.createEvent = ({ event }: { event: Partial<ASSEvent> }): void => {
-  _applyKeys(event, jassubObj!.getEvent(jassubObj!.allocEvent()))
+  const index = requireApi().allocEvent(requireHandle())
+  if (index >= 0) applyEventFields(index, event)
 }
 
 self.getEvents = (): void => {
   const events: ASSEvent[] = []
-  for (let i = 0; i < jassubObj!.getEventCount(); i++) {
-    const { Start, Duration, ReadOrder, Layer, Style, MarginL, MarginR, MarginV, Name, Text, Effect } =
-      jassubObj!.getEvent(i)
-    events.push({
-      Start,
-      Duration,
-      ReadOrder,
-      Layer,
-      Style,
-      MarginL,
-      MarginR,
-      MarginV,
-      Name,
-      Text,
-      Effect,
-      _index: i
-    })
+  const api = requireApi()
+  const count = api.getEventCount(requireHandle())
+  for (let i = 0; i < count; i++) {
+    events.push({ ...readEvent(i), _index: i })
   }
   postMessage({ target: 'getEvents', events })
 }
 
 self.setEvent = ({ event, index }: { event: Partial<ASSEvent>; index: number }): void => {
-  _applyKeys(event, jassubObj!.getEvent(index))
+  applyEventFields(index, event)
 }
 
 self.removeEvent = ({ index }: { index: number }): void => {
-  jassubObj!.removeEvent(index)
+  requireApi().removeEvent(requireHandle(), index)
 }
 
 // =============================================================================
@@ -1049,92 +1323,44 @@ self.removeEvent = ({ index }: { index: number }): void => {
 // =============================================================================
 
 self.createStyle = ({ style }: { style: Partial<ASSStyle> }): any => {
-  const alloc = jassubObj!.getStyle(jassubObj!.allocStyle())
-  _applyKeys(style, alloc)
-  return alloc
+  const index = requireApi().allocStyle(requireHandle())
+  if (index >= 0) applyStyleFields(index, style)
+  return index
 }
 
 self.getStyles = (): void => {
   const styles: ASSStyle[] = []
-  for (let i = 0; i < jassubObj!.getStyleCount(); i++) {
-    const {
-      Name,
-      FontName,
-      FontSize,
-      PrimaryColour,
-      SecondaryColour,
-      OutlineColour,
-      BackColour,
-      Bold,
-      Italic,
-      Underline,
-      StrikeOut,
-      ScaleX,
-      ScaleY,
-      Spacing,
-      Angle,
-      BorderStyle,
-      Outline,
-      Shadow,
-      Alignment,
-      MarginL,
-      MarginR,
-      MarginV,
-      Encoding,
-      treat_fontname_as_pattern,
-      Blur,
-      Justify
-    } = jassubObj!.getStyle(i)
-    styles.push({
-      Name,
-      FontName,
-      FontSize,
-      PrimaryColour,
-      SecondaryColour,
-      OutlineColour,
-      BackColour,
-      Bold,
-      Italic,
-      Underline,
-      StrikeOut,
-      ScaleX,
-      ScaleY,
-      Spacing,
-      Angle,
-      BorderStyle,
-      Outline,
-      Shadow,
-      Alignment,
-      MarginL,
-      MarginR,
-      MarginV,
-      Encoding,
-      treat_fontname_as_pattern,
-      Blur,
-      Justify
-    })
+  const api = requireApi()
+  const count = api.getStyleCount(requireHandle())
+  for (let i = 0; i < count; i++) {
+    styles.push(readStyle(i))
   }
   postMessage({ target: 'getStyles', time: Date.now(), styles })
 }
 
 self.setStyle = ({ style, index }: { style: Partial<ASSStyle>; index: number }): void => {
-  _applyKeys(style, jassubObj!.getStyle(index))
+  applyStyleFields(index, style)
 }
 
 self.removeStyle = ({ index }: { index: number }): void => {
-  jassubObj!.removeStyle(index)
+  requireApi().removeStyle(requireHandle(), index)
 }
 
 self.styleOverride = (data: { style: Partial<ASSStyle> }): void => {
-  jassubObj!.styleOverride(self.createStyle(data))
+  const index = self.createStyle(data)
+  if (typeof index === 'number' && index >= 0) {
+    requireApi().styleOverrideIndex(requireHandle(), index)
+  }
 }
 
 self.disableStyleOverride = (): void => {
-  jassubObj!.disableStyleOverride()
+  requireApi().disableStyleOverride(requireHandle())
 }
 
 self.defaultFont = ({ font }: { font: string }): void => {
-  jassubObj!.setDefaultFont(font)
+  withCString(font, (fontPtr) => {
+    requireApi().setDefaultFont(requireHandle(), fontPtr)
+  })
 }
 
 // =============================================================================
@@ -1167,12 +1393,12 @@ self.resetStats = (): void => {
 }
 
 self.getEventCount = (): void => {
-  const count = jassubObj ? jassubObj.getEventCount() : 0
+  const count = akariSubHandle ? requireApi().getEventCount(akariSubHandle) : 0
   postMessage({ target: 'getEventCount', count })
 }
 
 self.getStyleCount = (): void => {
-  const count = jassubObj ? jassubObj.getStyleCount() : 0
+  const count = akariSubHandle ? requireApi().getStyleCount(akariSubHandle) : 0
   postMessage({ target: 'getStyleCount', count })
 }
 

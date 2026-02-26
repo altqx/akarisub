@@ -1,5 +1,5 @@
 /**
- * Utility functions for JASSUB.
+ * Utility functions for AkariSub.
  */
 
 import type { SubtitleColorSpace, WebYCbCrColorSpace } from './types'

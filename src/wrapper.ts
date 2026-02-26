@@ -1,13 +1,13 @@
 /**
- * TypeScript wrapper for JASSUB.
- * Re-exports all types and the main JASSUB class.
+ * TypeScript wrapper for AkariSub.
+ * Re-exports all types and the main AkariSub class.
  */
 
 // Re-export all types
 export type {
   ASSEvent,
   ASSStyle,
-  JASSUBOptions,
+  AkariSubOptions,
   PerformanceStats,
   ASSEventCallback,
   ASSStyleCallback,
@@ -18,8 +18,7 @@ export type {
   VideoFrameCallbackMetadata,
   SubtitleColorSpace,
   WebYCbCrColorSpace,
-  JASSUBModule,
-  JASSUBWasmObject,
+  AkariSubModule,
   WorkerInboundMessage,
   WorkerOutboundMessage
 } from './ts/types'
@@ -43,4 +42,4 @@ export {
 } from './ts/utils'
 
 // Re-export main class
-export { default as JASSUB } from './ts/jassub'
+export { default as AkariSub } from './ts/akarisub'

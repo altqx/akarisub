@@ -1,20 +1,20 @@
 /**
- * JASSUB - JavaScript ASS/SSA Subtitle Renderer
+ * AkariSub - JavaScript ASS/SSA Subtitle Renderer
  *
  * High-performance ASS/SSA subtitle renderer using libass compiled to WebAssembly.
  *
  * @packageDocumentation
  */
 
-// Main JASSUB class (default export for backwards compatibility)
-export { default } from './ts/jassub'
-export { default as JASSUB } from './ts/jassub'
+// Main AkariSub class
+export { default } from './ts/akarisub'
+export { default as AkariSub } from './ts/akarisub'
 
 // Type exports
 export type {
   ASSEvent,
   ASSStyle,
-  JASSUBOptions,
+  AkariSubOptions,
   PerformanceStats,
   ASSEventCallback,
   ASSStyleCallback,

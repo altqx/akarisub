@@ -1,5 +1,5 @@
 <h1 align="center">
-  JASSUB
+  AkariSub
 </h1>
 <p align="center">
   JavaScript SSA/ASS Subtitle Renderer.
@@ -7,7 +7,7 @@
 
 > **Note:** This is a fork of [ThaUnknown's JASSUB](https://github.com/ThaUnknown/jassub) legacy version with hyper optimizations, intelligent caching, and many quality-of-life improvements.
 
-JASSUB is a JS wrapper for <a href="https://github.com/libass/libass">libass</a>, which renders <a href="https://en.wikipedia.org/wiki/SubStation_Alpha">SSA/ASS subtitles</a> directly in your browser. It uses Emscripten to compile libass' C++ code to WASM.
+AkariSub is a JS wrapper for <a href="https://github.com/libass/libass">libass</a>, which renders <a href="https://en.wikipedia.org/wiki/SubStation_Alpha">SSA/ASS subtitles</a> directly in your browser. It uses Emscripten to compile libass' C++ code to WASM.
 
 <p align="center">
   <a href="https://thaunknown.github.io/jassub/">Online Demos</a>
@@ -38,16 +38,16 @@ JASSUB is a JS wrapper for <a href="https://github.com/libass/libass">libass</a>
 
 ## Isn't this just the same thing as JavascriptSubtitlesOctopus?
 
-No. See <a href="https://thaunknown.github.io/jassub/explainer.html">this</a> comparison.
+No. See <a href="https://thaunknown.github.io/akarisub/explainer.html">this</a> comparison.
 
 ## Usage
 
 By default all you need to do is copy the files from the `dist/` folder of the repository into the same folder as where your JS runs, then do:
 
 ```js
-import JASSUB from './jassub.es.js'
+import AkariSub from './akarisub.es.js'
 
-const renderer = new JASSUB({
+const renderer = new AkariSub({
   video: document.querySelector('video'),
   subUrl: './tracks/sub.ass'
 })
@@ -58,18 +58,18 @@ const renderer = new JASSUB({
 If you use a bundler like Vite, you can instead do:
 
 ```shell
-npm i jassub
+npm i akarisub
 ```
 
 ```js
-import JASSUB from 'jassub'
-import workerUrl from 'jassub/dist/jassub-worker.js?url'
-import wasmUrl from 'jassub/dist/jassub-worker.wasm?url'
+import AkariSub from 'akarisub'
+import workerUrl from 'akarisub/dist/akarisub-worker.js?url'
+import wasmUrl from 'akarisub/dist/akarisub-worker.wasm?url'
 
-const renderer = new JASSUB({
+const renderer = new AkariSub({
   video: document.querySelector('video'),
   subContent: subtitleString,
-  workerUrl, // you can also use: `new URL('jassub/dist/jassub-worker.js', import.meta.url)` instead of importing it as an url
+  workerUrl, // you can also use: `new URL('akarisub/dist/akarisub-worker.js', import.meta.url)` instead of importing it as an url
   wasmUrl
 })
 ```
@@ -79,9 +79,9 @@ const renderer = new JASSUB({
 You're also able to use it without any video. However, that requires you to set the time the subtitles should render at yourself:
 
 ```js
-import JASSUB from './jassub.es.js'
+import AkariSub from './akarisub.es.js'
 
-const renderer = new JASSUB({
+const renderer = new AkariSub({
   canvas: document.querySelector('canvas'),
   subUrl: './tracks/sub.ass'
 })
@@ -106,7 +106,7 @@ renderer.setTrackByUrl('/newsub.ass')
 After you're finished with rendering the subtitles. You need to call the `destroy()` method to correctly destroy the object.
 
 ```js
-const renderer = new JASSUB(options)
+const renderer = new AkariSub(options)
 // After you've finished using it...
 renderer.destroy()
 ```
@@ -168,12 +168,12 @@ console.log(`Events: ${eventCount}, Styles: ${styleCount}`)
 
 ## WebGPU Rendering
 
-JASSUB automatically uses WebGPU for GPU-accelerated rendering when available, with automatic fallback to Canvas2D:
+AkariSub automatically uses WebGPU for GPU-accelerated rendering when available, with automatic fallback to Canvas2D:
 
 ```typescript
-import JASSUB from 'jassub'
+import AkariSub from 'akarisub'
 
-const renderer = new JASSUB({
+const renderer = new AkariSub({
   video: document.querySelector('video'),
   subUrl: './tracks/sub.ass',
   preferWebGPU: true, // Enable WebGPU (default: true)
@@ -209,8 +209,8 @@ The default options are best, and automatically fallback to the next fastest opt
 | `dropAllAnimations` | boolean | `false` | Discard all animated tags for performance |
 | `dropAllBlur` | boolean | `false` | Drop all blur effects (~10x performance gain) |
 | `clampPos` | boolean | `false` | Clamp `\pos` values to script resolution |
-| `workerUrl` | string | `'jassub-worker.js'` | URL to the worker script |
-| `wasmUrl` | string | `'jassub-worker.wasm'` | URL to the WASM binary |
+| `workerUrl` | string | `'akarisub-worker.js'` | URL to the worker script |
+| `wasmUrl` | string | `'akarisub-worker.wasm'` | URL to the WASM binary |
 | `subUrl` | string | - | URL of the subtitle file to play |
 | `subContent` | string | - | Content of the subtitle file to play |
 | `fonts` | (string \| Uint8Array)[] | - | Array of font URLs or Uint8Arrays to force load |
@@ -376,7 +376,7 @@ The default options are best, and automatically fallback to the next fastest opt
 
 ## Get the Source
 
-Run git clone --recursive https://github.com/ThaUnknown/jassub.git
+Run git clone --recursive https://github.com/altqx/akarisub.git
 
 ## Build inside a Container
 

@@ -1,5 +1,5 @@
 /**
- * Type definitions for JASSUB TypeScript implementation.
+ * Type definitions for AkariSub TypeScript implementation.
  */
 
 // =============================================================================
@@ -127,11 +127,11 @@ export interface PerformanceStats {
 }
 
 // =============================================================================
-// JASSUB Options Types
+// AkariSub Options Types
 // =============================================================================
 
-/** Configuration options for JASSUB */
-export interface JASSUBOptions {
+/** Configuration options for AkariSub */
+export interface AkariSubOptions {
   /** Video element to sync with and overlay */
   video?: HTMLVideoElement
   /** Custom canvas element (optional if video is provided) */
@@ -336,74 +336,52 @@ export type WebYCbCrColorSpace = 'BT709' | 'BT601'
 export type SubtitleColorSpace = 'BT601' | 'BT709' | 'SMPTE240M' | 'FCC' | null
 
 // =============================================================================
-// JASSUB WASM Module Types
+// AkariSub WASM Module Types
 // =============================================================================
 
-/** JASSUB object exposed by Emscripten */
-export interface JASSUBWasmObject {
-  resizeCanvas(width: number, height: number, videoWidth: number, videoHeight: number): void
-  createTrackMem(content: string): void
-  removeTrack(): void
-  reloadFonts(): void
-  addFont(name: string, ptr: number, length: number): void
-  setDefaultFont(font: string): void
-  setFallbackFonts(fonts: string): void
-  addFallbackFont(font: string): void
-  getFallbackFonts(): string
-  setDropAnimations(drop: number): void
-  setMemoryLimits(glyphLimit: number, memoryLimit: number): void
-  styleOverride(style: JASSUBWasmStyle): void
-  disableStyleOverride(): void
-  renderBlend(time: number, force: number): JASSUBWasmRenderResult | null
-  renderImage(time: number, force: number): JASSUBWasmRenderResult | null
-  changed: number
-  count: number
-  time: number
-  trackColorSpace: number
-  allocEvent(): number
-  getEvent(index: number): JASSUBWasmEvent
-  getEventCount(): number
-  removeEvent(index: number): void
-  allocStyle(): number
-  getStyle(index: number): JASSUBWasmStyle
-  getStyleCount(): number
-  removeStyle(index: number): void
-  quitLibrary(): void
-}
-
-/** WASM render result linked list */
-export interface JASSUBWasmRenderResult {
-  w: number
-  h: number
-  x: number
-  y: number
-  image: number // pointer
-  next: JASSUBWasmRenderResult | null
-}
-
-/** WASM event object */
-export interface JASSUBWasmEvent {
-  Start: number
-  Duration: number
-  ReadOrder: number
-  Layer: number
-  Style: string
-  MarginL: number
-  MarginR: number
-  MarginV: number
-  Name: string
-  Text: string
-  Effect: string
-}
-
-/** WASM style object */
-export interface JASSUBWasmStyle extends ASSStyle {}
-
-/** Emscripten JASSUB Module */
-export interface JASSUBModule extends EmscriptenModule {
-  JASSUB: new (width: number, height: number, fallbackFont: string | null, debug: boolean) => JASSUBWasmObject
+/** Emscripten AkariSub Module (C ABI exports) */
+export interface AkariSubModule extends EmscriptenModule {
   _malloc: (size: number) => number
   _free: (ptr: number) => void
+  _akarisub_create: (width: number, height: number, fallbackFontPtr: number, debug: number) => number
+  _akarisub_destroy: (handle: number) => void
+  _akarisub_set_drop_animations: (handle: number, value: number) => void
+  _akarisub_create_track_mem: (handle: number, contentPtr: number) => void
+  _akarisub_remove_track: (handle: number) => void
+  _akarisub_resize_canvas: (handle: number, width: number, height: number, videoWidth: number, videoHeight: number) => void
+  _akarisub_add_font: (handle: number, namePtr: number, dataPtr: number, size: number) => void
+  _akarisub_reload_fonts: (handle: number) => void
+  _akarisub_set_default_font: (handle: number, fontPtr: number) => void
+  _akarisub_set_fallback_fonts: (handle: number, fontsPtr: number) => void
+  _akarisub_set_memory_limits: (handle: number, glyphLimit: number, memoryLimit: number) => void
+  _akarisub_get_event_count: (handle: number) => number
+  _akarisub_alloc_event: (handle: number) => number
+  _akarisub_remove_event: (handle: number, index: number) => void
+  _akarisub_get_style_count: (handle: number) => number
+  _akarisub_alloc_style: (handle: number) => number
+  _akarisub_remove_style: (handle: number, index: number) => void
+  _akarisub_style_override_index: (handle: number, index: number) => void
+  _akarisub_disable_style_override: (handle: number) => void
+  _akarisub_render_blend: (handle: number, time: number, force: number) => number
+  _akarisub_render_image: (handle: number, time: number, force: number) => number
+  _akarisub_get_changed: (handle: number) => number
+  _akarisub_get_count: (handle: number) => number
+  _akarisub_get_time: (handle: number) => number
+  _akarisub_get_track_color_space: (handle: number) => number
+  _akarisub_event_get_int: (handle: number, index: number, field: number) => number
+  _akarisub_event_set_int: (handle: number, index: number, field: number, value: number) => void
+  _akarisub_event_get_str: (handle: number, index: number, field: number) => number
+  _akarisub_event_set_str: (handle: number, index: number, field: number, valuePtr: number) => void
+  _akarisub_style_get_num: (handle: number, index: number, field: number) => number
+  _akarisub_style_set_num: (handle: number, index: number, field: number, value: number) => void
+  _akarisub_style_get_str: (handle: number, index: number, field: number) => number
+  _akarisub_style_set_str: (handle: number, index: number, field: number, valuePtr: number) => void
+  _akarisub_render_result_x: (resultPtr: number) => number
+  _akarisub_render_result_y: (resultPtr: number) => number
+  _akarisub_render_result_w: (resultPtr: number) => number
+  _akarisub_render_result_h: (resultPtr: number) => number
+  _akarisub_render_result_image: (resultPtr: number) => number
+  _akarisub_render_result_next: (resultPtr: number) => number
   FS_createPath: (parent: string, path: string, canRead: boolean, canWrite: boolean) => void
   FS_createDataFile: (parent: string, name: string | null, data: Uint8Array, canRead: boolean, canWrite: boolean, canOwn?: boolean) => void
 }

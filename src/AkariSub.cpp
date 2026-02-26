@@ -8,7 +8,6 @@
 #include <string>
 
 #include <emscripten.h>
-#include <emscripten/bind.h>
 
 int log_level = 3;
 
@@ -64,7 +63,7 @@ void msg_callback(int level, const char *fmt, va_list va, void *data) {
   const int ERR_LEVEL = 1;
   FILE *stream = level <= ERR_LEVEL ? stderr : stdout;
 
-  fprintf(stream, "JASSUB: ");
+  fprintf(stream, "AkariSub: ");
   vfprintf(stream, fmt, va);
   fprintf(stream, "\n");
 }
@@ -324,7 +323,7 @@ struct FrameCache {
   void invalidate() { valid = false; }
 };
 
-class JASSUB {
+class AkariSub {
 private:
   ReusableBuffer m_buffer;
   RenderBlendStorage m_blendParts[MAX_BLEND_STORAGES];
@@ -354,7 +353,7 @@ public:
   int changed = 0;
   int count = 0;
   int time = 0;
-  JASSUB(int canvas_w, int canvas_h, const std::string &df, bool debug) {
+  AkariSub(int canvas_w, int canvas_h, const std::string &df, bool debug) {
     status = 0;
     ass_library = NULL;
     ass_renderer = NULL;
@@ -373,7 +372,7 @@ public:
     defaultFont = copyString(df);
     ass_library = ass_library_init();
     if (!ass_library) {
-      fprintf(stderr, "JASSUB: ass_library_init failed!\n");
+      fprintf(stderr, "AkariSub: ass_library_init failed!\n");
       exit(2);
     }
 
@@ -381,7 +380,7 @@ public:
 
     ass_renderer = ass_renderer_init(ass_library);
     if (!ass_renderer) {
-      fprintf(stderr, "JASSUB: ass_renderer_init failed!\n");
+      fprintf(stderr, "AkariSub: ass_renderer_init failed!\n");
       exit(3);
     }
     ass_set_extract_fonts(ass_library, true);
@@ -436,7 +435,7 @@ public:
 
     event_index_valid = true;
     if (debug) {
-      printf("JASSUB: Built event index with %d entries\n", event_index_size);
+      printf("AkariSub: Built event index with %d entries\n", event_index_size);
     }
   }
 
@@ -486,7 +485,7 @@ public:
     char *data = buf.empty() ? nullptr : &buf[0];
     track = ass_read_memory(ass_library, data, buf.size(), NULL);
     if (!track) {
-      fprintf(stderr, "JASSUB: Failed to start a track\n");
+      fprintf(stderr, "AkariSub: Failed to start a track\n");
       exit(4);
     }
 
@@ -535,7 +534,7 @@ public:
     RenderResult *renderResult = NULL;
     char *rawbuffer = (char *)m_buffer.take(getBufferSize(img));
     if (rawbuffer == NULL) {
-      fprintf(stderr, "JASSUB: cannot allocate buffer for rendering\n");
+      fprintf(stderr, "AkariSub: cannot allocate buffer for rendering\n");
       return NULL;
     }
     for (RenderResult *tmp = renderResult; img; img = img->next) {
@@ -704,7 +703,7 @@ public:
   }
 
   void setMemoryLimits(int glyph_limit, int bitmap_cache_limit) {
-    printf("JASSUB: setting total libass memory limits to: glyph=%d MiB, "
+    printf("AkariSub: setting total libass memory limits to: glyph=%d MiB, "
            "bitmap cache=%d MiB\n",
            glyph_limit, bitmap_cache_limit);
     ass_set_cache_limits(ass_renderer, glyph_limit, bitmap_cache_limit);
@@ -856,7 +855,7 @@ public:
     const size_t buffer_size = width * height * 4 * sizeof(float);
     float *buf = (float *)m_buffer.take(buffer_size);
     if (buf == NULL) {
-      fprintf(stderr, "JASSUB: cannot allocate buffer for blending\n");
+      fprintf(stderr, "AkariSub: cannot allocate buffer for blending\n");
       return NULL;
     }
 
@@ -957,13 +956,13 @@ public:
     } else if (smallBuffer != NULL) {
       storage = smallBuffer;
     } else {
-      printf("JASSUB: cannot get a buffer for rendering part!\n");
+      printf("AkariSub: cannot get a buffer for rendering part!\n");
       return NULL;
     }
 
     unsigned int *result = (unsigned int *)storage->buf.take(needed);
     if (result == NULL) {
-      printf("JASSUB: cannot make a buffer for rendering part!\n");
+      printf("AkariSub: cannot make a buffer for rendering part!\n");
       return NULL;
     }
     storage->taken = true;
@@ -1031,146 +1030,466 @@ public:
   }
 };
 
-static uint32_t getDuration(const ASS_Event &evt) {
-  return (uint32_t)evt.Duration;
+enum EventIntField {
+  EVENT_START = 0,
+  EVENT_DURATION = 1,
+  EVENT_READ_ORDER = 2,
+  EVENT_LAYER = 3,
+  EVENT_STYLE = 4,
+  EVENT_MARGIN_L = 5,
+  EVENT_MARGIN_R = 6,
+  EVENT_MARGIN_V = 7
+};
+
+enum EventStrField {
+  EVENT_NAME = 0,
+  EVENT_EFFECT = 1,
+  EVENT_TEXT = 2
+};
+
+enum StyleNumField {
+  STYLE_FONT_SIZE = 0,
+  STYLE_PRIMARY_COLOUR = 1,
+  STYLE_SECONDARY_COLOUR = 2,
+  STYLE_OUTLINE_COLOUR = 3,
+  STYLE_BACK_COLOUR = 4,
+  STYLE_BOLD = 5,
+  STYLE_ITALIC = 6,
+  STYLE_UNDERLINE = 7,
+  STYLE_STRIKEOUT = 8,
+  STYLE_SCALE_X = 9,
+  STYLE_SCALE_Y = 10,
+  STYLE_SPACING = 11,
+  STYLE_ANGLE = 12,
+  STYLE_BORDER_STYLE = 13,
+  STYLE_OUTLINE = 14,
+  STYLE_SHADOW = 15,
+  STYLE_ALIGNMENT = 16,
+  STYLE_MARGIN_L = 17,
+  STYLE_MARGIN_R = 18,
+  STYLE_MARGIN_V = 19,
+  STYLE_ENCODING = 20,
+  STYLE_TREAT_FONTNAME_AS_PATTERN = 21,
+  STYLE_BLUR = 22,
+  STYLE_JUSTIFY = 23
+};
+
+enum StyleStrField {
+  STYLE_NAME = 0,
+  STYLE_FONT_NAME = 1
+};
+
+static ASS_Event *get_event_ptr(AkariSub *instance, int index) {
+  if (!instance || !instance->track || index < 0 || index >= instance->track->n_events)
+    return NULL;
+  return &instance->track->events[index];
 }
 
-static void setDuration(ASS_Event &evt, const long ms) { evt.Duration = ms; }
-
-static uint32_t getStart(const ASS_Event &evt) { return (uint32_t)evt.Start; }
-
-static void setStart(ASS_Event &evt, const long ms) { evt.Start = ms; }
-
-static std::string getEventName(const ASS_Event &evt) { return evt.Name; }
-
-static void setEventName(ASS_Event &evt, const std::string &str) {
-  free(evt.Name);
-  evt.Name = copyString(str);
+static ASS_Style *get_style_ptr(AkariSub *instance, int index) {
+  if (!instance || !instance->track || index < 0 || index >= instance->track->n_styles)
+    return NULL;
+  return &instance->track->styles[index];
 }
 
-static std::string getText(const ASS_Event &evt) { return evt.Text; }
+extern "C" {
 
-static void setText(ASS_Event &evt, const std::string &str) {
-  free(evt.Text);
-  evt.Text = copyString(str);
+EMSCRIPTEN_KEEPALIVE AkariSub *akarisub_create(int width, int height, const char *fallback_font, int debug) {
+  std::string fallback = fallback_font ? fallback_font : "";
+  return new AkariSub(width, height, fallback, !!debug);
 }
 
-static std::string getEffect(const ASS_Event &evt) { return evt.Effect; }
-
-static void setEffect(ASS_Event &evt, const std::string &str) {
-  free(evt.Effect);
-  evt.Effect = copyString(str);
+EMSCRIPTEN_KEEPALIVE void akarisub_destroy(AkariSub *instance) {
+  if (!instance)
+    return;
+  instance->quitLibrary();
+  delete instance;
 }
 
-static std::string getStyleName(const ASS_Style &style) { return style.Name; }
-
-static void setStyleName(ASS_Style &style, const std::string &str) {
-  free(style.Name);
-  style.Name = copyString(str);
+EMSCRIPTEN_KEEPALIVE void akarisub_set_drop_animations(AkariSub *instance, int value) {
+  if (instance)
+    instance->setDropAnimations(value);
 }
 
-static std::string getFontName(const ASS_Style &style) {
-  return style.FontName;
+EMSCRIPTEN_KEEPALIVE void akarisub_create_track_mem(AkariSub *instance, const char *content) {
+  if (instance)
+    instance->createTrackMem(content ? std::string(content) : std::string());
 }
 
-static void setFontName(ASS_Style &style, const std::string &str) {
-  free(style.FontName);
-  style.FontName = copyString(str);
+EMSCRIPTEN_KEEPALIVE void akarisub_remove_track(AkariSub *instance) {
+  if (instance)
+    instance->removeTrack();
 }
 
-static RenderResult getNext(const RenderResult &res) {
-  if (res.next == NULL) {
-    RenderResult empty = {0, 0, 0, 0, 0, NULL};
-    return empty;
+EMSCRIPTEN_KEEPALIVE void akarisub_resize_canvas(AkariSub *instance, int width, int height, int video_w, int video_h) {
+  if (instance)
+    instance->resizeCanvas(width, height, video_w, video_h);
+}
+
+EMSCRIPTEN_KEEPALIVE void akarisub_add_font(AkariSub *instance, const char *name, int data, unsigned long data_size) {
+  if (instance)
+    instance->addFont(name ? std::string(name) : std::string(), data, data_size);
+}
+
+EMSCRIPTEN_KEEPALIVE void akarisub_reload_fonts(AkariSub *instance) {
+  if (instance)
+    instance->reloadFonts();
+}
+
+EMSCRIPTEN_KEEPALIVE void akarisub_set_default_font(AkariSub *instance, const char *name) {
+  if (instance)
+    instance->setDefaultFont(name ? std::string(name) : std::string());
+}
+
+EMSCRIPTEN_KEEPALIVE void akarisub_set_fallback_fonts(AkariSub *instance, const char *fonts) {
+  if (instance)
+    instance->setFallbackFonts(fonts ? std::string(fonts) : std::string());
+}
+
+EMSCRIPTEN_KEEPALIVE void akarisub_set_memory_limits(AkariSub *instance, int glyph_limit, int bitmap_cache_limit) {
+  if (instance)
+    instance->setMemoryLimits(glyph_limit, bitmap_cache_limit);
+}
+
+EMSCRIPTEN_KEEPALIVE int akarisub_get_event_count(AkariSub *instance) {
+  return instance ? instance->getEventCount() : 0;
+}
+
+EMSCRIPTEN_KEEPALIVE int akarisub_alloc_event(AkariSub *instance) {
+  return instance ? instance->allocEvent() : -1;
+}
+
+EMSCRIPTEN_KEEPALIVE void akarisub_remove_event(AkariSub *instance, int index) {
+  if (instance)
+    instance->removeEvent(index);
+}
+
+EMSCRIPTEN_KEEPALIVE int akarisub_get_style_count(AkariSub *instance) {
+  return instance ? instance->getStyleCount() : 0;
+}
+
+EMSCRIPTEN_KEEPALIVE int akarisub_alloc_style(AkariSub *instance) {
+  return instance ? instance->allocStyle() : -1;
+}
+
+EMSCRIPTEN_KEEPALIVE void akarisub_remove_style(AkariSub *instance, int index) {
+  if (instance)
+    instance->removeStyle(index);
+}
+
+EMSCRIPTEN_KEEPALIVE void akarisub_style_override_index(AkariSub *instance, int index) {
+  ASS_Style *style = get_style_ptr(instance, index);
+  if (instance && style)
+    instance->styleOverride(*style);
+}
+
+EMSCRIPTEN_KEEPALIVE void akarisub_disable_style_override(AkariSub *instance) {
+  if (instance)
+    instance->disableStyleOverride();
+}
+
+EMSCRIPTEN_KEEPALIVE RenderResult *akarisub_render_blend(AkariSub *instance, double tm, int force) {
+  return instance ? instance->renderBlend(tm, force) : NULL;
+}
+
+EMSCRIPTEN_KEEPALIVE RenderResult *akarisub_render_image(AkariSub *instance, double tm, int force) {
+  return instance ? instance->renderImage(tm, force) : NULL;
+}
+
+EMSCRIPTEN_KEEPALIVE int akarisub_get_changed(AkariSub *instance) {
+  return instance ? instance->changed : 0;
+}
+
+EMSCRIPTEN_KEEPALIVE int akarisub_get_count(AkariSub *instance) {
+  return instance ? instance->count : 0;
+}
+
+EMSCRIPTEN_KEEPALIVE int akarisub_get_time(AkariSub *instance) {
+  return instance ? instance->time : 0;
+}
+
+EMSCRIPTEN_KEEPALIVE int akarisub_get_track_color_space(AkariSub *instance) {
+  return instance ? instance->trackColorSpace : 0;
+}
+
+EMSCRIPTEN_KEEPALIVE int akarisub_event_get_int(AkariSub *instance, int index, int field) {
+  ASS_Event *evt = get_event_ptr(instance, index);
+  if (!evt)
+    return 0;
+
+  switch (field) {
+  case EVENT_START:
+    return evt->Start;
+  case EVENT_DURATION:
+    return evt->Duration;
+  case EVENT_READ_ORDER:
+    return evt->ReadOrder;
+  case EVENT_LAYER:
+    return evt->Layer;
+  case EVENT_STYLE:
+    return evt->Style;
+  case EVENT_MARGIN_L:
+    return evt->MarginL;
+  case EVENT_MARGIN_R:
+    return evt->MarginR;
+  case EVENT_MARGIN_V:
+    return evt->MarginV;
+  default:
+    return 0;
   }
-  return *res.next;
 }
 
-EMSCRIPTEN_BINDINGS(JASSUB) {
-  emscripten::class_<RenderResult>("RenderResult")
-      .property("x", &RenderResult::x)
-      .property("y", &RenderResult::y)
-      .property("w", &RenderResult::w)
-      .property("h", &RenderResult::h)
-      .property("next", &getNext)
-      .property("image", &RenderResult::image);
+EMSCRIPTEN_KEEPALIVE void akarisub_event_set_int(AkariSub *instance, int index, int field, int value) {
+  ASS_Event *evt = get_event_ptr(instance, index);
+  if (!evt)
+    return;
 
-  emscripten::class_<ASS_Style>("ASS_Style")
-      .property("Name", &getStyleName, &setStyleName)
-      .property("FontName", &getFontName, &setFontName)
-      .property("FontSize", &ASS_Style::FontSize)
-      .property("PrimaryColour", &ASS_Style::PrimaryColour)
-      .property("SecondaryColour", &ASS_Style::SecondaryColour)
-      .property("OutlineColour", &ASS_Style::OutlineColour)
-      .property("BackColour", &ASS_Style::BackColour)
-      .property("Bold", &ASS_Style::Bold)
-      .property("Italic", &ASS_Style::Italic)
-      .property("Underline", &ASS_Style::Underline)
-      .property("StrikeOut", &ASS_Style::StrikeOut)
-      .property("ScaleX", &ASS_Style::ScaleX)
-      .property("ScaleY", &ASS_Style::ScaleY)
-      .property("Spacing", &ASS_Style::Spacing)
-      .property("Angle", &ASS_Style::Angle)
-      .property("BorderStyle", &ASS_Style::BorderStyle)
-      .property("Outline", &ASS_Style::Outline)
-      .property("Shadow", &ASS_Style::Shadow)
-      .property("Alignment", &ASS_Style::Alignment)
-      .property("MarginL", &ASS_Style::MarginL)
-      .property("MarginR", &ASS_Style::MarginR)
-      .property("MarginV", &ASS_Style::MarginV)
-      .property("Encoding", &ASS_Style::Encoding)
-      .property("treat_fontname_as_pattern",
-                &ASS_Style::treat_fontname_as_pattern)
-      .property("Blur", &ASS_Style::Blur)
-      .property("Justify", &ASS_Style::Justify);
+  switch (field) {
+  case EVENT_START:
+    evt->Start = value;
+    break;
+  case EVENT_DURATION:
+    evt->Duration = value;
+    break;
+  case EVENT_READ_ORDER:
+    evt->ReadOrder = value;
+    break;
+  case EVENT_LAYER:
+    evt->Layer = value;
+    break;
+  case EVENT_STYLE:
+    evt->Style = value;
+    break;
+  case EVENT_MARGIN_L:
+    evt->MarginL = value;
+    break;
+  case EVENT_MARGIN_R:
+    evt->MarginR = value;
+    break;
+  case EVENT_MARGIN_V:
+    evt->MarginV = value;
+    break;
+  }
+}
 
-  emscripten::class_<ASS_Event>("ASS_Event")
-      .property("Start", &getStart, &setStart)
-      .property("Duration", &getDuration, &setDuration)
-      .property("Name", &getEventName, &setEventName)
-      .property("Effect", &getEffect, &setEffect)
-      .property("Text", &getText, &setText)
-      .property("ReadOrder", &ASS_Event::ReadOrder)
-      .property("Layer", &ASS_Event::Layer)
-      .property("Style", &ASS_Event::Style)
-      .property("MarginL", &ASS_Event::MarginL)
-      .property("MarginR", &ASS_Event::MarginR)
-      .property("MarginV", &ASS_Event::MarginV);
+EMSCRIPTEN_KEEPALIVE const char *akarisub_event_get_str(AkariSub *instance, int index, int field) {
+  ASS_Event *evt = get_event_ptr(instance, index);
+  if (!evt)
+    return "";
 
-  emscripten::class_<JASSUB>("JASSUB")
-      .constructor<int, int, std::string, bool>()
-      .function("setLogLevel", &JASSUB::setLogLevel)
-      .function("setDropAnimations", &JASSUB::setDropAnimations)
-      .function("createTrackMem", &JASSUB::createTrackMem)
-      .function("removeTrack", &JASSUB::removeTrack)
-      .function("resizeCanvas", &JASSUB::resizeCanvas)
-      .function("quitLibrary", &JASSUB::quitLibrary)
-      .function("addFont", &JASSUB::addFont)
-      .function("reloadFonts", &JASSUB::reloadFonts)
-      .function("setMargin", &JASSUB::setMargin)
-      .function("getEventCount", &JASSUB::getEventCount)
-      .function("allocEvent", &JASSUB::allocEvent)
-      .function("allocStyle", &JASSUB::allocStyle)
-      .function("removeEvent", &JASSUB::removeEvent)
-      .function("getStyleCount", &JASSUB::getStyleCount)
-      .function("removeStyle", &JASSUB::removeStyle)
-      .function("removeAllEvents", &JASSUB::removeAllEvents)
-      .function("setMemoryLimits", &JASSUB::setMemoryLimits)
-      .function("renderBlend", &JASSUB::renderBlend,
-                emscripten::allow_raw_pointers())
-      .function("renderImage", &JASSUB::renderImage,
-                emscripten::allow_raw_pointers())
-      .function("getEvent", &JASSUB::getEvent, emscripten::allow_raw_pointers())
-      .function("getStyle", &JASSUB::getStyle, emscripten::allow_raw_pointers())
-      .function("styleOverride", &JASSUB::styleOverride,
-                emscripten::allow_raw_pointers())
-      .function("disableStyleOverride", &JASSUB::disableStyleOverride)
-      .function("setDefaultFont", &JASSUB::setDefaultFont)
-      .function("setFallbackFonts", &JASSUB::setFallbackFonts)
-      .function("addFallbackFont", &JASSUB::addFallbackFont)
-      .function("getFallbackFonts", &JASSUB::getFallbackFonts)
-      .property("trackColorSpace", &JASSUB::trackColorSpace)
-      .property("changed", &JASSUB::changed)
-      .property("count", &JASSUB::count)
-      .property("time", &JASSUB::time);
+  switch (field) {
+  case EVENT_NAME:
+    return evt->Name ? evt->Name : "";
+  case EVENT_EFFECT:
+    return evt->Effect ? evt->Effect : "";
+  case EVENT_TEXT:
+    return evt->Text ? evt->Text : "";
+  default:
+    return "";
+  }
+}
+
+EMSCRIPTEN_KEEPALIVE void akarisub_event_set_str(AkariSub *instance, int index, int field, const char *value) {
+  ASS_Event *evt = get_event_ptr(instance, index);
+  if (!evt)
+    return;
+  const char *src = value ? value : "";
+
+  switch (field) {
+  case EVENT_NAME:
+    free(evt->Name);
+    evt->Name = copyString(src);
+    break;
+  case EVENT_EFFECT:
+    free(evt->Effect);
+    evt->Effect = copyString(src);
+    break;
+  case EVENT_TEXT:
+    free(evt->Text);
+    evt->Text = copyString(src);
+    break;
+  }
+}
+
+EMSCRIPTEN_KEEPALIVE double akarisub_style_get_num(AkariSub *instance, int index, int field) {
+  ASS_Style *style = get_style_ptr(instance, index);
+  if (!style)
+    return 0;
+
+  switch (field) {
+  case STYLE_FONT_SIZE:
+    return style->FontSize;
+  case STYLE_PRIMARY_COLOUR:
+    return style->PrimaryColour;
+  case STYLE_SECONDARY_COLOUR:
+    return style->SecondaryColour;
+  case STYLE_OUTLINE_COLOUR:
+    return style->OutlineColour;
+  case STYLE_BACK_COLOUR:
+    return style->BackColour;
+  case STYLE_BOLD:
+    return style->Bold;
+  case STYLE_ITALIC:
+    return style->Italic;
+  case STYLE_UNDERLINE:
+    return style->Underline;
+  case STYLE_STRIKEOUT:
+    return style->StrikeOut;
+  case STYLE_SCALE_X:
+    return style->ScaleX;
+  case STYLE_SCALE_Y:
+    return style->ScaleY;
+  case STYLE_SPACING:
+    return style->Spacing;
+  case STYLE_ANGLE:
+    return style->Angle;
+  case STYLE_BORDER_STYLE:
+    return style->BorderStyle;
+  case STYLE_OUTLINE:
+    return style->Outline;
+  case STYLE_SHADOW:
+    return style->Shadow;
+  case STYLE_ALIGNMENT:
+    return style->Alignment;
+  case STYLE_MARGIN_L:
+    return style->MarginL;
+  case STYLE_MARGIN_R:
+    return style->MarginR;
+  case STYLE_MARGIN_V:
+    return style->MarginV;
+  case STYLE_ENCODING:
+    return style->Encoding;
+  case STYLE_TREAT_FONTNAME_AS_PATTERN:
+    return style->treat_fontname_as_pattern;
+  case STYLE_BLUR:
+    return style->Blur;
+  case STYLE_JUSTIFY:
+    return style->Justify;
+  default:
+    return 0;
+  }
+}
+
+EMSCRIPTEN_KEEPALIVE void akarisub_style_set_num(AkariSub *instance, int index, int field, double value) {
+  ASS_Style *style = get_style_ptr(instance, index);
+  if (!style)
+    return;
+
+  switch (field) {
+  case STYLE_FONT_SIZE:
+    style->FontSize = value;
+    break;
+  case STYLE_PRIMARY_COLOUR:
+    style->PrimaryColour = value;
+    break;
+  case STYLE_SECONDARY_COLOUR:
+    style->SecondaryColour = value;
+    break;
+  case STYLE_OUTLINE_COLOUR:
+    style->OutlineColour = value;
+    break;
+  case STYLE_BACK_COLOUR:
+    style->BackColour = value;
+    break;
+  case STYLE_BOLD:
+    style->Bold = value;
+    break;
+  case STYLE_ITALIC:
+    style->Italic = value;
+    break;
+  case STYLE_UNDERLINE:
+    style->Underline = value;
+    break;
+  case STYLE_STRIKEOUT:
+    style->StrikeOut = value;
+    break;
+  case STYLE_SCALE_X:
+    style->ScaleX = value;
+    break;
+  case STYLE_SCALE_Y:
+    style->ScaleY = value;
+    break;
+  case STYLE_SPACING:
+    style->Spacing = value;
+    break;
+  case STYLE_ANGLE:
+    style->Angle = value;
+    break;
+  case STYLE_BORDER_STYLE:
+    style->BorderStyle = value;
+    break;
+  case STYLE_OUTLINE:
+    style->Outline = value;
+    break;
+  case STYLE_SHADOW:
+    style->Shadow = value;
+    break;
+  case STYLE_ALIGNMENT:
+    style->Alignment = value;
+    break;
+  case STYLE_MARGIN_L:
+    style->MarginL = value;
+    break;
+  case STYLE_MARGIN_R:
+    style->MarginR = value;
+    break;
+  case STYLE_MARGIN_V:
+    style->MarginV = value;
+    break;
+  case STYLE_ENCODING:
+    style->Encoding = value;
+    break;
+  case STYLE_TREAT_FONTNAME_AS_PATTERN:
+    style->treat_fontname_as_pattern = value;
+    break;
+  case STYLE_BLUR:
+    style->Blur = value;
+    break;
+  case STYLE_JUSTIFY:
+    style->Justify = value;
+    break;
+  }
+}
+
+EMSCRIPTEN_KEEPALIVE const char *akarisub_style_get_str(AkariSub *instance, int index, int field) {
+  ASS_Style *style = get_style_ptr(instance, index);
+  if (!style)
+    return "";
+
+  switch (field) {
+  case STYLE_NAME:
+    return style->Name ? style->Name : "";
+  case STYLE_FONT_NAME:
+    return style->FontName ? style->FontName : "";
+  default:
+    return "";
+  }
+}
+
+EMSCRIPTEN_KEEPALIVE void akarisub_style_set_str(AkariSub *instance, int index, int field, const char *value) {
+  ASS_Style *style = get_style_ptr(instance, index);
+  if (!style)
+    return;
+  const char *src = value ? value : "";
+
+  switch (field) {
+  case STYLE_NAME:
+    free(style->Name);
+    style->Name = copyString(src);
+    break;
+  case STYLE_FONT_NAME:
+    free(style->FontName);
+    style->FontName = copyString(src);
+    break;
+  }
+}
+
+EMSCRIPTEN_KEEPALIVE int akarisub_render_result_x(RenderResult *result) { return result ? result->x : 0; }
+EMSCRIPTEN_KEEPALIVE int akarisub_render_result_y(RenderResult *result) { return result ? result->y : 0; }
+EMSCRIPTEN_KEEPALIVE int akarisub_render_result_w(RenderResult *result) { return result ? result->w : 0; }
+EMSCRIPTEN_KEEPALIVE int akarisub_render_result_h(RenderResult *result) { return result ? result->h : 0; }
+EMSCRIPTEN_KEEPALIVE size_t akarisub_render_result_image(RenderResult *result) { return result ? result->image : 0; }
+EMSCRIPTEN_KEEPALIVE RenderResult *akarisub_render_result_next(RenderResult *result) {
+  return result ? result->next : NULL;
+}
+
 }
