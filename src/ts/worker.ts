@@ -57,6 +57,7 @@ let availableFonts: Record<string, string | Uint8Array> = {}
 const fontMap_: Record<string, boolean> = {}
 let attachedFontId = 0  // For attached/preloaded fonts (higher priority)
 let fallbackFontId = 0  // For fallback fonts (lower priority)
+const pendingFallbackFonts: { data: Uint8Array; name: string }[] = []
 let debug = false
 let clampPos = false
 let renderInFlight = false
@@ -267,15 +268,6 @@ const requireHandle = (): number => {
   return akariSubHandle
 }
 
-const escapeFontconfigXml = (value: string): string => {
-  return value
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
-    .replaceAll("'", '&apos;')
-}
-
 // =============================================================================
 // Font Management
 // =============================================================================
@@ -387,6 +379,10 @@ const writeFontToFS = (uint8: Uint8Array, isFallback: boolean = true): void => {
 
     if (!isFallback) {
       addFontAsEmbedded(uint8, fontFileName)
+    } else if (akariSubHandle) {
+      addFontAsEmbedded(uint8, fontFileName)
+    } else {
+      pendingFallbackFonts.push({ data: uint8, name: fontFileName })
     }
   }
   scheduleReloadFonts()
@@ -409,6 +405,10 @@ const writeFontToFSImmediate = (uint8: Uint8Array, isFallback: boolean = true): 
 
     if (!isFallback) {
       addFontAsEmbedded(uint8, fontFileName)
+    } else if (akariSubHandle) {
+      addFontAsEmbedded(uint8, fontFileName)
+    } else {
+      pendingFallbackFonts.push({ data: uint8, name: fontFileName })
     }
   }
 }
@@ -976,47 +976,6 @@ self.init = async (data: any): Promise<void> => {
       Module.FS_createPath('/', 'etc', true, true)
       Module.FS_createPath('/etc', 'fonts', true, true)
 
-      const fallbackFamilyXml = fallbackFonts
-        .map((font) => `                        <family>${escapeFontconfigXml(font)}</family>`)
-        .join('\n')
-
-      const fallbackPrimaryPreferXml = fallbackFonts
-        .slice(1)
-        .map((font) => `                        <family>${escapeFontconfigXml(font)}</family>`)
-        .join('\n')
-
-      const genericFallbackAlias = fallbackFonts.length > 0
-        ? `
-        <alias binding="strong">
-                <family>sans-serif</family>
-                <prefer>
-${fallbackFamilyXml}
-                </prefer>
-        </alias>
-        <alias binding="strong">
-                <family>serif</family>
-                <prefer>
-${fallbackFamilyXml}
-                </prefer>
-        </alias>
-        <alias binding="strong">
-                <family>monospace</family>
-                <prefer>
-${fallbackFamilyXml}
-                </prefer>
-        </alias>`
-        : ''
-
-      const primaryFallbackAlias = fallbackFonts.length > 1
-        ? `
-        <alias binding="strong">
-                <family>${escapeFontconfigXml(fallbackFonts[0])}</family>
-                <prefer>
-${fallbackPrimaryPreferXml}
-                </prefer>
-        </alias>`
-        : ''
-
       const fontsConf = `<?xml version="1.0"?>
 <!DOCTYPE fontconfig SYSTEM "fonts.dtd">
 <fontconfig>
@@ -1048,8 +1007,6 @@ ${fallbackPrimaryPreferXml}
                         <string>sans-serif</string>
                 </edit>
         </match>
-      ${genericFallbackAlias}
-      ${primaryFallbackAlias}
         <cachedir>/fontconfig</cachedir>
         <config>
                 <rescan>
@@ -1165,6 +1122,14 @@ ${fallbackPrimaryPreferXml}
     akariSubHandle = withCString(primaryFallback || '', (fontPtr) => {
       return requireApi().create(self.width, self.height, fontPtr, debug ? 1 : 0)
     })
+
+    if (pendingFallbackFonts.length > 0) {
+      for (const { data: fontData, name: fontName } of pendingFallbackFonts) {
+        addFontAsEmbedded(fontData, fontName)
+      }
+      pendingFallbackFonts.length = 0
+      requireApi().reloadFonts(akariSubHandle)
+    }
 
     if (fallbackFonts.length > 0) {
       withCString(fallbackFonts.join(','), (fontsPtr) => {
