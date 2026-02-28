@@ -953,13 +953,16 @@ self.init = async (data: any): Promise<void> => {
       rrNext: Module._akarisub_render_result_next
     }
 
-    // Normalize fallback fonts to lowercase and deduplicate
+    // Normalize fallback fonts and deduplicate
     const fallbackFonts: string[] = []
+    const fallbackFontKeys = new Set<string>()
     if (data.fallbackFonts && data.fallbackFonts.length > 0) {
       for (const font of data.fallbackFonts) {
-        const lowerFont = font.toLowerCase()
-        if (lowerFont && !fallbackFonts.includes(lowerFont)) {
-          fallbackFonts.push(lowerFont)
+        const originalFont = font.trim()
+        const key = originalFont.toLowerCase()
+        if (key && !fallbackFontKeys.has(key)) {
+          fallbackFontKeys.add(key)
+          fallbackFonts.push(originalFont)
         }
       }
     }
