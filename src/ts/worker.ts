@@ -59,6 +59,8 @@ let attachedFontId = 0  // For attached/preloaded fonts (higher priority)
 let fallbackFontId = 0  // For fallback fonts (lower priority)
 let debug = false
 let clampPos = false
+let renderInFlight = false
+let queuedRender: { time: number; force?: boolean | number } | null = null
 
 self.width = 0
 self.height = 0
@@ -573,7 +575,26 @@ interface RenderTimes {
   bitmaps?: number
 }
 
+const flushQueuedRender = (): void => {
+  if (renderInFlight || !queuedRender) return
+  const next = queuedRender
+  queuedRender = null
+  render(next.time, next.force)
+}
+
+const completeRenderCycle = (): void => {
+  renderInFlight = false
+  flushQueuedRender()
+}
+
 const render = (time: number, force?: boolean | number): void => {
+  if (renderInFlight) {
+    queuedRender = { time, force: force ? 1 : queuedRender?.force }
+    metrics.framesDropped++
+    return
+  }
+
+  renderInFlight = true
   initPool() // Ensure pool is ready
 
   const times: RenderTimes = {}
@@ -670,9 +691,13 @@ const render = (time: number, force?: boolean | number): void => {
         if (asyncRenderOptions) {
           asyncRenderOptions = false
           console.warn('[AkariSub] createImageBitmap options not supported, disabling')
+          metrics.pendingRenders--
+          completeRenderCycle()
           render(time, force)
         } else {
+          metrics.pendingRenders--
           postMessage({ target: 'unbusy' })
+          completeRenderCycle()
         }
       })
     } else {
@@ -697,7 +722,9 @@ const render = (time: number, force?: boolean | number): void => {
       paintImages({ images, buffers, times })
     }
   } else {
+    metrics.pendingRenders--
     postMessage({ target: 'unbusy' })
+    completeRenderCycle()
   }
 }
 
@@ -793,7 +820,11 @@ const paintImages = ({
     }
 
     if (offscreenRender === 'hybrid') {
-      if (!imageCount) return postMessage(resultObject)
+      if (!imageCount) {
+        postMessage(resultObject)
+        completeRenderCycle()
+        return
+      }
       if (debug) times.bitmaps = imageCount
       try {
         const bitmap = offCanvas!.transferToImageBitmap()
@@ -803,8 +834,10 @@ const paintImages = ({
           asyncRender: true
         }
         postMessage(result, [bitmap])
+        completeRenderCycle()
       } catch {
         postMessage({ target: 'unbusy' })
+        completeRenderCycle()
       }
     } else {
       if (debug) {
@@ -814,9 +847,11 @@ const paintImages = ({
         console.log('Bitmaps: ' + imageCount + ' Total: ' + (total | 0) + 'ms', times)
       }
       postMessage({ target: 'unbusy' })
+      completeRenderCycle()
     }
   } else {
     postMessage(resultObject, buffers as Transferable[])
+    completeRenderCycle()
   }
 }
 
