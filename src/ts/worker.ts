@@ -644,7 +644,9 @@ const render = (time: number, force?: boolean | number): void => {
 
     if (!renderResult) return paintImages({ images: [], buffers, times })
 
-    if (asyncRender) {
+    const useAsyncBitmapPath = asyncRender && offscreenRender !== true
+
+    if (useAsyncBitmapPath) {
       const promises: Promise<ImageBitmap>[] = new Array(imageCount)
       let result = renderResult
 
