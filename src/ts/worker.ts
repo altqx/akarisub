@@ -267,6 +267,15 @@ const requireHandle = (): number => {
   return akariSubHandle
 }
 
+const escapeFontconfigXml = (value: string): string => {
+  return value
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&apos;')
+}
+
 // =============================================================================
 // Font Management
 // =============================================================================
@@ -944,6 +953,17 @@ self.init = async (data: any): Promise<void> => {
       rrNext: Module._akarisub_render_result_next
     }
 
+    // Normalize fallback fonts to lowercase and deduplicate
+    const fallbackFonts: string[] = []
+    if (data.fallbackFonts && data.fallbackFonts.length > 0) {
+      for (const font of data.fallbackFonts) {
+        const lowerFont = font.toLowerCase()
+        if (lowerFont && !fallbackFonts.includes(lowerFont)) {
+          fallbackFonts.push(lowerFont)
+        }
+      }
+    }
+
     try {
       Module.FS_createPath('/', 'fonts', true, true)
       Module.FS_createPath('/fonts', 'attached', true, true)
@@ -952,6 +972,47 @@ self.init = async (data: any): Promise<void> => {
       Module.FS_createPath('/', 'assets', true, true)
       Module.FS_createPath('/', 'etc', true, true)
       Module.FS_createPath('/etc', 'fonts', true, true)
+
+      const fallbackFamilyXml = fallbackFonts
+        .map((font) => `                        <family>${escapeFontconfigXml(font)}</family>`)
+        .join('\n')
+
+      const fallbackPrimaryPreferXml = fallbackFonts
+        .slice(1)
+        .map((font) => `                        <family>${escapeFontconfigXml(font)}</family>`)
+        .join('\n')
+
+      const genericFallbackAlias = fallbackFonts.length > 0
+        ? `
+        <alias binding="strong">
+                <family>sans-serif</family>
+                <prefer>
+${fallbackFamilyXml}
+                </prefer>
+        </alias>
+        <alias binding="strong">
+                <family>serif</family>
+                <prefer>
+${fallbackFamilyXml}
+                </prefer>
+        </alias>
+        <alias binding="strong">
+                <family>monospace</family>
+                <prefer>
+${fallbackFamilyXml}
+                </prefer>
+        </alias>`
+        : ''
+
+      const primaryFallbackAlias = fallbackFonts.length > 1
+        ? `
+        <alias binding="strong">
+                <family>${escapeFontconfigXml(fallbackFonts[0])}</family>
+                <prefer>
+${fallbackPrimaryPreferXml}
+                </prefer>
+        </alias>`
+        : ''
 
       const fontsConf = `<?xml version="1.0"?>
 <!DOCTYPE fontconfig SYSTEM "fonts.dtd">
@@ -984,6 +1045,8 @@ self.init = async (data: any): Promise<void> => {
                         <string>sans-serif</string>
                 </edit>
         </match>
+      ${genericFallbackAlias}
+      ${primaryFallbackAlias}
         <cachedir>/fontconfig</cachedir>
         <config>
                 <rescan>
@@ -1033,17 +1096,6 @@ self.init = async (data: any): Promise<void> => {
     useLocalFonts = data.useLocalFonts
     dropAllBlur = data.dropAllBlur
     clampPos = data.clampPos
-
-    // Normalize fallback fonts to lowercase and deduplicate
-    const fallbackFonts: string[] = []
-    if (data.fallbackFonts && data.fallbackFonts.length > 0) {
-      for (const font of data.fallbackFonts) {
-        const lowerFont = font.toLowerCase()
-        if (lowerFont && !fallbackFonts.includes(lowerFont)) {
-          fallbackFonts.push(lowerFont)
-        }
-      }
-    }
 
     // Load fallback fonts asynchronously to avoid blocking worker thread
     // This is critical for mobile devices where sync XHR can cause timeouts
