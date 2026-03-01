@@ -96,6 +96,9 @@ if (__akarisub_ready) {
     Module._akarisub_render_result_h = _akarisub_render_result_h
     Module._akarisub_render_result_image = _akarisub_render_result_image
     Module._akarisub_render_result_next = _akarisub_render_result_next
+    Module._akarisub_render_result_collect = _akarisub_render_result_collect
+    Module._akarisub_render_blend_collect = _akarisub_render_blend_collect
+    Module._akarisub_render_image_collect = _akarisub_render_image_collect
     if (typeof FS !== 'undefined') {
       Module.FS_createPath = FS.createPath
       Module.FS_createDataFile = FS.createDataFile

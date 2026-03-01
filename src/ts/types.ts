@@ -382,6 +382,9 @@ export interface AkariSubModule extends EmscriptenModule {
   _akarisub_render_result_h: (resultPtr: number) => number
   _akarisub_render_result_image: (resultPtr: number) => number
   _akarisub_render_result_next: (resultPtr: number) => number
+  _akarisub_render_result_collect: (resultPtr: number, outPtr: number, maxItems: number) => number
+  _akarisub_render_blend_collect: (handle: number, time: number, force: number, outPtr: number, maxItems: number) => number
+  _akarisub_render_image_collect: (handle: number, time: number, force: number, outPtr: number, maxItems: number) => number
   FS_createPath: (parent: string, path: string, canRead: boolean, canWrite: boolean) => void
   FS_createDataFile: (parent: string, name: string | null, data: Uint8Array, canRead: boolean, canWrite: boolean, canOwn?: boolean) => void
 }

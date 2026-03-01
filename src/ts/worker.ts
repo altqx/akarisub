@@ -146,6 +146,9 @@ interface AkariSubApi {
   rrH: (ptr: number) => number
   rrImage: (ptr: number) => number
   rrNext: (ptr: number) => number
+  rrCollect: (resultPtr: number, outPtr: number, maxItems: number) => number
+  renderBlendCollect: (handle: number, time: number, force: number, outPtr: number, maxItems: number) => number
+  renderImageCollect: (handle: number, time: number, force: number, outPtr: number, maxItems: number) => number
 }
 
 let akariSubApi: AkariSubApi | null = null
@@ -154,6 +157,15 @@ let akariSubApi: AkariSubApi | null = null
 const MAX_POOLED_IMAGES = 128
 const imagePool: RenderResultItem[] = new Array(MAX_POOLED_IMAGES)
 let poolInitialized = false
+const RR_META_STRIDE = 6
+// Batch render-collect buffer: 3 header ints (changed, count, time) + 5 ints per image (x, y, w, h, image_ptr)
+const RRC_HEADER_INTS = 3
+const RRC_IMG_STRIDE = 5
+let rrMetaPtr = 0
+let rrMetaCapacity = 0
+// Pre-allocated buffer for batch render-collect calls
+let rrcBufPtr = 0
+let rrcBufCapacity = 0
 
 interface RenderResultItem {
   w: number
@@ -176,6 +188,56 @@ const getPooledItem = (index: number): RenderResultItem => {
     return imagePool[index]
   }
   return { w: 0, h: 0, x: 0, y: 0, image: 0 }
+}
+
+const ensureRenderMetaBuffer = (imageCount: number): void => {
+  if (!_Module || imageCount <= 0) return
+  if (rrMetaCapacity >= imageCount && rrMetaPtr) return
+
+  const nextCapacity = Math.max(imageCount, rrMetaCapacity * 2 || 64)
+  const nextSizeBytes = nextCapacity * RR_META_STRIDE * Int32Array.BYTES_PER_ELEMENT
+
+  if (rrMetaPtr) {
+    _Module._free(rrMetaPtr)
+    rrMetaPtr = 0
+    rrMetaCapacity = 0
+  }
+
+  rrMetaPtr = _Module._malloc(nextSizeBytes)
+  if (!rrMetaPtr) {
+    rrMetaCapacity = 0
+    throw new Error('Failed to allocate render metadata buffer')
+  }
+
+  rrMetaCapacity = nextCapacity
+}
+
+/**
+ * Ensure the batch render-collect buffer is large enough.
+ * Layout: [changed, count, time, (x, y, w, h, image_ptr) * N]
+ * = 3 + 5*N ints
+ */
+const ensureRenderCollectBuffer = (maxImages: number): void => {
+  if (!_Module || maxImages <= 0) return
+  const totalInts = RRC_HEADER_INTS + RRC_IMG_STRIDE * maxImages
+  if (rrcBufCapacity >= totalInts && rrcBufPtr) return
+
+  const nextCapacity = Math.max(totalInts, (rrcBufCapacity || 64) * 2)
+  const nextSizeBytes = nextCapacity * Int32Array.BYTES_PER_ELEMENT
+
+  if (rrcBufPtr) {
+    _Module._free(rrcBufPtr)
+    rrcBufPtr = 0
+    rrcBufCapacity = 0
+  }
+
+  rrcBufPtr = _Module._malloc(nextSizeBytes)
+  if (!rrcBufPtr) {
+    rrcBufCapacity = 0
+    throw new Error('Failed to allocate render-collect buffer')
+  }
+
+  rrcBufCapacity = nextCapacity
 }
 
 const EVENT_INT_FIELDS: Record<string, number> = {
@@ -550,6 +612,7 @@ const setCurrentTime = (currentTime: number): void => {
       rafId = requestAnimationFrame(renderLoop)
     } else {
       renderLoop()
+      nextIsRaf = true
       setTimeout(() => {
         nextIsRaf = false
       }, 20)
@@ -611,10 +674,22 @@ const render = (time: number, force?: boolean | number): void => {
   metrics.renderStartTime = renderStartTime
   metrics.pendingRenders++
 
-  const renderResult =
+  const api = requireApi()
+  const handle = requireHandle()
+  const forceInt = force ? 1 : 0
+
+  // Use the batch render-collect API: single WASM call does render + metadata + image data extraction.
+  const maxImages = MAX_POOLED_IMAGES
+  ensureRenderCollectBuffer(maxImages)
+
+  const written =
     blendMode === 'wasm'
-      ? requireApi().renderBlend(requireHandle(), time, force ? 1 : 0)
-      : requireApi().renderImage(requireHandle(), time, force ? 1 : 0)
+      ? api.renderBlendCollect(handle, time, forceInt, rrcBufPtr, rrcBufCapacity)
+      : api.renderImageCollect(handle, time, forceInt, rrcBufPtr, rrcBufCapacity)
+
+  const headerView = new Int32Array(self.wasmMemory.buffer, rrcBufPtr, RRC_HEADER_INTS)
+  const changed = headerView[0]
+  const imageCount = headerView[1]
 
   // Update metrics
   const renderEndTime = performance.now()
@@ -626,9 +701,6 @@ const render = (time: number, force?: boolean | number): void => {
     metrics.minRenderTime = Math.min(metrics.minRenderTime, renderDuration)
   }
 
-  const api = requireApi()
-  const handle = requireHandle()
-  const changed = api.getChanged(handle)
   if (changed !== 0 || force) {
     metrics.framesRendered++
     metrics.cacheMisses++
@@ -640,60 +712,49 @@ const render = (time: number, force?: boolean | number): void => {
 
   if (debug) {
     const decodeEndTime = performance.now()
-    const renderEndTimeWasm = api.getTime(handle)
+    const renderEndTimeWasm = headerView[2]
     times.WASMRenderTime = renderEndTimeWasm - renderStartTime
     times.WASMBitmapDecodeTime = decodeEndTime - renderEndTimeWasm
     times.JSRenderTime = Date.now()
   }
 
   if (changed !== 0 || force) {
-    const imageCount = api.getCount(handle)
-    const images: RenderResultItem[] = new Array(imageCount)
+    const images: RenderResultItem[] = new Array(written)
     const buffers: ArrayBuffer[] = []
 
-    if (!renderResult) return paintImages({ images: [], buffers, times })
+    if (written === 0) return paintImages({ images: [], buffers, times })
+
+    const imgDataOffset = rrcBufPtr + RRC_HEADER_INTS * Int32Array.BYTES_PER_ELEMENT
+    const meta = new Int32Array(self.wasmMemory.buffer, imgDataOffset, written * RRC_IMG_STRIDE)
 
     const useAsyncBitmapPath = asyncRender && offscreenRender !== true
 
     if (useAsyncBitmapPath) {
-      const promises: Promise<ImageBitmap>[] = new Array(imageCount)
-      let result = renderResult
+      const promises: Promise<ImageBitmap>[] = new Array(written)
 
-      for (let i = 0; i < imageCount && result; ++i) {
+      for (let i = 0; i < written; ++i) {
+        const metaOffset = i * RRC_IMG_STRIDE
         const item = getPooledItem(i)
-        item.w = api.rrW(result)
-        item.h = api.rrH(result)
-        item.x = api.rrX(result)
-        item.y = api.rrY(result)
+        item.x = meta[metaOffset]
+        item.y = meta[metaOffset + 1]
+        item.w = meta[metaOffset + 2]
+        item.h = meta[metaOffset + 3]
         item.image = 0
 
-        const pointer = api.rrImage(result)
+        const pointer = meta[metaOffset + 4]
         const byteLength = item.w * item.h * 4
+        const rawData = self.HEAPU8C.slice(pointer, pointer + byteLength)
 
-        // Avoid slice when possible
-        const rawData = hasBitmapBug
-          ? self.HEAPU8C.slice(pointer, pointer + byteLength)
-          : self.HEAPU8C.subarray(pointer, pointer + byteLength)
-
-        const imageData = new ImageData(
-          new Uint8ClampedArray(
-            rawData.buffer,
-            rawData.byteOffset,
-            rawData.byteLength
-          ) as Uint8ClampedArray<ArrayBuffer>,
-          item.w,
-          item.h
-        )
+        const imageData = new ImageData(rawData as Uint8ClampedArray<ArrayBuffer>, item.w, item.h)
 
         promises[i] = asyncRenderOptions
           ? createImageBitmap(imageData, { premultiplyAlpha: 'none', colorSpaceConversion: 'none' })
           : createImageBitmap(imageData)
         images[i] = item
-        result = api.rrNext(result)
       }
 
       Promise.all(promises).then((bitmaps) => {
-        for (let i = 0; i < imageCount; i++) {
+        for (let i = 0; i < written; i++) {
           images[i].image = bitmaps[i]
         }
         if (debug) times.JSBitmapGenerationTime = Date.now() - (times.JSRenderTime || 0)
@@ -712,14 +773,14 @@ const render = (time: number, force?: boolean | number): void => {
         }
       })
     } else {
-      let result = renderResult
-      for (let i = 0; i < imageCount && result; ++i) {
+      for (let i = 0; i < written; ++i) {
+        const metaOffset = i * RRC_IMG_STRIDE
         const item = getPooledItem(i)
-        item.w = api.rrW(result)
-        item.h = api.rrH(result)
-        item.x = api.rrX(result)
-        item.y = api.rrY(result)
-        item.image = api.rrImage(result)
+        item.x = meta[metaOffset]
+        item.y = meta[metaOffset + 1]
+        item.w = meta[metaOffset + 2]
+        item.h = meta[metaOffset + 3]
+        item.image = meta[metaOffset + 4]
 
         if (!offCanvasCtx) {
           const imagePtr = item.image as number
@@ -728,7 +789,6 @@ const render = (time: number, force?: boolean | number): void => {
           item.image = buf
         }
         images[i] = item
-        result = api.rrNext(result)
       }
       paintImages({ images, buffers, times })
     }
@@ -950,7 +1010,10 @@ self.init = async (data: any): Promise<void> => {
       rrW: Module._akarisub_render_result_w,
       rrH: Module._akarisub_render_result_h,
       rrImage: Module._akarisub_render_result_image,
-      rrNext: Module._akarisub_render_result_next
+      rrNext: Module._akarisub_render_result_next,
+      rrCollect: Module._akarisub_render_result_collect,
+      renderBlendCollect: Module._akarisub_render_blend_collect,
+      renderImageCollect: Module._akarisub_render_image_collect
     }
 
     // Normalize fallback fonts and deduplicate
@@ -1247,6 +1310,18 @@ self.video = ({
 }
 
 self.destroy = (): void => {
+  if (_Module) {
+    if (rrMetaPtr) {
+      _Module._free(rrMetaPtr)
+      rrMetaPtr = 0
+      rrMetaCapacity = 0
+    }
+    if (rrcBufPtr) {
+      _Module._free(rrcBufPtr)
+      rrcBufPtr = 0
+      rrcBufCapacity = 0
+    }
+  }
   if (akariSubHandle) {
     requireApi().destroy(akariSubHandle)
     akariSubHandle = 0

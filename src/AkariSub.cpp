@@ -290,8 +290,11 @@ static bool _is_event_animated(ASS_Event *event, bool drop_animations) {
 }
 
 static char *copyString(const std::string &str) {
-  char *result = new char[str.length() + 1];
-  strcpy(result, str.data());
+  size_t len = str.size();
+  char *result = (char *)malloc(len + 1);
+  if (!result)
+    return NULL;
+  memcpy(result, str.c_str(), len + 1);
   return result;
 }
 
@@ -1490,6 +1493,106 @@ EMSCRIPTEN_KEEPALIVE int akarisub_render_result_h(RenderResult *result) { return
 EMSCRIPTEN_KEEPALIVE size_t akarisub_render_result_image(RenderResult *result) { return result ? result->image : 0; }
 EMSCRIPTEN_KEEPALIVE RenderResult *akarisub_render_result_next(RenderResult *result) {
   return result ? result->next : NULL;
+}
+
+// Fill metadata for a linked list of RenderResult nodes in one call.
+// out layout per image (6 ints): x, y, w, h, image_ptr, next_ptr
+EMSCRIPTEN_KEEPALIVE int akarisub_render_result_collect(RenderResult *result, int *out, int max_items) {
+  if (!out || max_items <= 0)
+    return 0;
+
+  int count = 0;
+  RenderResult *cur = result;
+  while (cur && count < max_items) {
+    int base = count * 6;
+    out[base + 0] = cur->x;
+    out[base + 1] = cur->y;
+    out[base + 2] = cur->w;
+    out[base + 3] = cur->h;
+    out[base + 4] = (int)(uintptr_t)cur->image;
+    out[base + 5] = (int)(uintptr_t)cur->next;
+    cur = cur->next;
+    count++;
+  }
+
+  return count;
+}
+
+// Combined render + collect: render, then collect results into `out` buffer in one WASM call.
+// Returns the number of images written. Also writes header metadata at out[0..2]:
+//   out[0] = changed, out[1] = count, out[2] = render_time
+// Image data starts at out[3], with 5 ints per image: x, y, w, h, image_ptr
+EMSCRIPTEN_KEEPALIVE int akarisub_render_blend_collect(
+    AkariSub *instance, double tm, int force, int *out, int max_items) {
+  if (!instance || !out || max_items < 3)
+    return 0;
+
+  RenderResult *result = instance->renderBlend(tm, force);
+
+  // Write header: changed, count, time
+  out[0] = instance->changed;
+  out[1] = instance->count;
+  out[2] = instance->time;
+
+  if (!result || instance->count == 0)
+    return 0;
+
+  // Collect render results starting at out[3]
+  int *img_out = out + 3;
+  int written = 0;
+  int img_max = (max_items - 3) / 5; // 5 ints per image
+  if (img_max > instance->count)
+    img_max = instance->count;
+
+  RenderResult *cur = result;
+  while (cur && written < img_max) {
+    int base = written * 5;
+    img_out[base + 0] = cur->x;
+    img_out[base + 1] = cur->y;
+    img_out[base + 2] = cur->w;
+    img_out[base + 3] = cur->h;
+    img_out[base + 4] = (int)(uintptr_t)cur->image;
+    cur = cur->next;
+    written++;
+  }
+
+  return written;
+}
+
+// Same as above but for renderImage mode
+EMSCRIPTEN_KEEPALIVE int akarisub_render_image_collect(
+    AkariSub *instance, double tm, int force, int *out, int max_items) {
+  if (!instance || !out || max_items < 3)
+    return 0;
+
+  RenderResult *result = instance->renderImage(tm, force);
+
+  out[0] = instance->changed;
+  out[1] = instance->count;
+  out[2] = instance->time;
+
+  if (!result || instance->count == 0)
+    return 0;
+
+  int *img_out = out + 3;
+  int written = 0;
+  int img_max = (max_items - 3) / 5;
+  if (img_max > instance->count)
+    img_max = instance->count;
+
+  RenderResult *cur = result;
+  while (cur && written < img_max) {
+    int base = written * 5;
+    img_out[base + 0] = cur->x;
+    img_out[base + 1] = cur->y;
+    img_out[base + 2] = cur->w;
+    img_out[base + 3] = cur->h;
+    img_out[base + 4] = (int)(uintptr_t)cur->image;
+    cur = cur->next;
+    written++;
+  }
+
+  return written;
 }
 
 }
