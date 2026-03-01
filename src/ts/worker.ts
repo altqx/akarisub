@@ -155,6 +155,7 @@ let akariSubApi: AkariSubApi | null = null
 
 // Pre-allocated object pool for render results
 const MAX_POOLED_IMAGES = 128
+const PREWARM_MAX_IMAGES = Math.max(MAX_POOLED_IMAGES, 4096)
 const imagePool: RenderResultItem[] = new Array(MAX_POOLED_IMAGES)
 let poolInitialized = false
 const RR_META_STRIDE = 6
@@ -238,6 +239,20 @@ const ensureRenderCollectBuffer = (maxImages: number): void => {
   }
 
   rrcBufCapacity = nextCapacity
+}
+
+const prewarmRenderer = (time: number): void => {
+  if (!akariSubHandle) return
+
+  const api = requireApi()
+  const handle = requireHandle()
+  ensureRenderCollectBuffer(PREWARM_MAX_IMAGES)
+
+  if (blendMode === 'wasm') {
+    api.renderBlendCollect(handle, time, 0, rrcBufPtr, rrcBufCapacity)
+  } else {
+    api.renderImageCollect(handle, time, 0, rrcBufPtr, rrcBufCapacity)
+  }
 }
 
 const EVENT_INT_FIELDS: Record<string, number> = {
@@ -951,6 +966,9 @@ const cancelAnimationFrame = self.cancelAnimationFrame ? self.cancelAnimationFra
 
 self.init = async (data: any): Promise<void> => {
   hasBitmapBug = data.hasBitmapBug
+  if (typeof data.initialTime === 'number' && Number.isFinite(data.initialTime)) {
+    lastCurrentTime = data.initialTime
+  }
 
   const _fetch = self.fetch
   const setWasmUrl = (wasmUrl: string): void => {
@@ -1245,6 +1263,15 @@ self.init = async (data: any): Promise<void> => {
 
     if (data.libassMemoryLimit > 0 || data.libassGlyphLimit > 0) {
       requireApi().setMemoryLimits(requireHandle(), data.libassGlyphLimit || 0, data.libassMemoryLimit || 0)
+    }
+
+    initPool()
+    ensureRenderCollectBuffer(PREWARM_MAX_IMAGES)
+
+    try {
+      prewarmRenderer(lastCurrentTime)
+    } catch (e) {
+      if (debug) console.warn('[AkariSub] Prewarm render failed, continuing:', e)
     }
 
     postMessage({ target: 'ready' })

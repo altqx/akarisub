@@ -256,6 +256,7 @@ export interface WorkerInitMessage {
   wasmUrl: string
   asyncRender: boolean
   onDemandRender: boolean
+  initialTime: number
   width: number
   height: number
   blendMode: 'js' | 'wasm'

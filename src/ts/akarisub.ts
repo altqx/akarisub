@@ -77,6 +77,7 @@ export default class AkariSub extends EventTarget {
   private _boundTimeUpdate: (e: Event) => void
   private _boundSetRate: () => void
   private _boundUpdateColorSpace: () => void
+  private _boundHandleRVFC: (now: number, metadata: VideoFrameCallbackMetadata) => void
 
   // GPU renderer (WebGPU or WebGL2 – whichever initialises first in the fallback chain)
   private _gpuRenderer: AnyGPURenderer | null = null
@@ -170,6 +171,7 @@ export default class AkariSub extends EventTarget {
     this._boundTimeUpdate = this._timeupdate.bind(this)
     this._boundSetRate = () => this.setRate((this._video as HTMLVideoElement).playbackRate)
     this._boundUpdateColorSpace = this._updateColorSpace.bind(this)
+    this._boundHandleRVFC = this._handleRVFC.bind(this)
 
     if (this._video) {
       this.setVideo(this._video)
@@ -192,6 +194,7 @@ export default class AkariSub extends EventTarget {
         wasmUrl: options.wasmUrl ?? 'akarisub-worker.wasm',
         asyncRender: typeof createImageBitmap !== 'undefined' && (options.asyncRender ?? true),
         onDemandRender: this._onDemandRender,
+        initialTime: (this._video?.currentTime ?? 0) + this.timeOffset,
         width: this._canvasctrl.width || 0,
         height: this._canvasctrl.height || 0,
         blendMode: options.blendMode ?? 'wasm',
@@ -450,7 +453,7 @@ export default class AkariSub extends EventTarget {
       if (this._onDemandRender) {
         this._loaded.then(() => {
           if (!this._destroyed && this._video === video) {
-            ; (video as any).requestVideoFrameCallback(this._handleRVFC.bind(this))
+              ; (video as any).requestVideoFrameCallback(this._boundHandleRVFC)
           }
         })
       } else {
@@ -761,7 +764,7 @@ export default class AkariSub extends EventTarget {
       this._demandRender(demandData)
     }
 
-    ; (this._video as any).requestVideoFrameCallback(this._handleRVFC.bind(this))
+    ; (this._video as any).requestVideoFrameCallback(this._boundHandleRVFC)
   }
 
   private _demandRender(metadata: { mediaTime: number; width: number; height: number }): void {
