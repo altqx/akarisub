@@ -625,7 +625,7 @@ const setIsPaused = (isPaused: boolean): void => {
     _isPaused = isPaused
     if (isPaused) {
       if (rafId) {
-        clearTimeout(rafId)
+        cancelAnimationFrame(rafId)
         rafId = null
       }
     } else {
@@ -679,7 +679,7 @@ const render = (time: number, force?: boolean | number): void => {
   const forceInt = force ? 1 : 0
 
   // Use the batch render-collect API: single WASM call does render + metadata + image data extraction.
-  const maxImages = MAX_POOLED_IMAGES
+  const maxImages = Math.max(MAX_POOLED_IMAGES, 4096)
   ensureRenderCollectBuffer(maxImages)
 
   const written =
@@ -927,7 +927,7 @@ const paintImages = ({
 }
 
 // Custom requestAnimationFrame for worker
-const requestAnimationFrame = ((): ((func: () => void) => number) => {
+const requestAnimationFrame = self.requestAnimationFrame ? self.requestAnimationFrame.bind(self) : ((): ((func: () => void) => number) => {
   let nextRAF = 0
   return (func: () => void): number => {
     const now = Date.now()
@@ -942,6 +942,8 @@ const requestAnimationFrame = ((): ((func: () => void) => number) => {
     return setTimeout(func, delay) as unknown as number
   }
 })()
+
+const cancelAnimationFrame = self.cancelAnimationFrame ? self.cancelAnimationFrame.bind(self) : clearTimeout
 
 // =============================================================================
 // WASM Initialization
