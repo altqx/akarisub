@@ -106,6 +106,9 @@ let dropAllBlur = false
 let hasBitmapBug = false
 let _Module: AkariSubModule | null = null
 
+const TEXT_ENCODER = new TextEncoder()
+const TEXT_DECODER = new TextDecoder()
+
 interface AkariSubApi {
   create: (width: number, height: number, fallbackFontPtr: number, debug: number) => number
   destroy: (handle: number) => void
@@ -155,7 +158,8 @@ let akariSubApi: AkariSubApi | null = null
 
 // Pre-allocated object pool for render results
 const MAX_POOLED_IMAGES = 128
-const PREWARM_MAX_IMAGES = Math.max(MAX_POOLED_IMAGES, 4096)
+const RENDER_COLLECT_MAX_IMAGES = Math.max(MAX_POOLED_IMAGES, 4096)
+const PREWARM_MAX_IMAGES = RENDER_COLLECT_MAX_IMAGES
 const imagePool: RenderResultItem[] = new Array(MAX_POOLED_IMAGES)
 let poolInitialized = false
 const RR_META_STRIDE = 6
@@ -167,6 +171,9 @@ let rrMetaCapacity = 0
 // Pre-allocated buffer for batch render-collect calls
 let rrcBufPtr = 0
 let rrcBufCapacity = 0
+const frameImages: RenderResultItem[] = []
+const frameArrayBuffers: ArrayBuffer[] = []
+const frameBitmapPromises: Promise<ImageBitmap>[] = []
 
 interface RenderResultItem {
   w: number
@@ -305,7 +312,7 @@ const STYLE_STR_FIELDS: Record<string, number> = {
 }
 
 const encodeString = (input: string): Uint8Array => {
-  return new TextEncoder().encode(input)
+  return TEXT_ENCODER.encode(input)
 }
 
 const allocString = (input: string): number => {
@@ -323,7 +330,7 @@ const readCString = (ptr: number): string => {
   let end = ptr
   const heap = self.HEAPU8
   while (heap[end] !== 0) end++
-  return new TextDecoder().decode(heap.subarray(ptr, end))
+  return TEXT_DECODER.decode(heap.subarray(ptr, end))
 }
 
 const withCString = <T>(input: string, callback: (ptr: number) => T): T => {
@@ -676,7 +683,12 @@ const completeRenderCycle = (): void => {
 
 const render = (time: number, force?: boolean | number): void => {
   if (renderInFlight) {
-    queuedRender = { time, force: force ? 1 : queuedRender?.force }
+    if (queuedRender) {
+      queuedRender.time = time
+      if (force) queuedRender.force = 1
+    } else {
+      queuedRender = { time, force: force ? 1 : undefined }
+    }
     metrics.framesDropped++
     return
   }
@@ -694,8 +706,7 @@ const render = (time: number, force?: boolean | number): void => {
   const forceInt = force ? 1 : 0
 
   // Use the batch render-collect API: single WASM call does render + metadata + image data extraction.
-  const maxImages = Math.max(MAX_POOLED_IMAGES, 4096)
-  ensureRenderCollectBuffer(maxImages)
+  ensureRenderCollectBuffer(RENDER_COLLECT_MAX_IMAGES)
 
   const written =
     blendMode === 'wasm'
@@ -734,10 +745,12 @@ const render = (time: number, force?: boolean | number): void => {
   }
 
   if (changed !== 0 || force) {
-    const images: RenderResultItem[] = new Array(written)
-    const buffers: ArrayBuffer[] = []
+    const images = frameImages
+    const buffers = frameArrayBuffers
+    images.length = 0
+    buffers.length = 0
 
-    if (written === 0) return paintImages({ images: [], buffers, times })
+    if (written === 0) return paintImages({ images, buffers, times })
 
     const imgDataOffset = rrcBufPtr + RRC_HEADER_INTS * Int32Array.BYTES_PER_ELEMENT
     const meta = new Int32Array(self.wasmMemory.buffer, imgDataOffset, written * RRC_IMG_STRIDE)
@@ -745,7 +758,8 @@ const render = (time: number, force?: boolean | number): void => {
     const useAsyncBitmapPath = asyncRender && offscreenRender !== true
 
     if (useAsyncBitmapPath) {
-      const promises: Promise<ImageBitmap>[] = new Array(written)
+      const promises = frameBitmapPromises
+      promises.length = written
 
       for (let i = 0; i < written; ++i) {
         const metaOffset = i * RRC_IMG_STRIDE
@@ -1098,8 +1112,7 @@ self.init = async (data: any): Promise<void> => {
         </config>
 </fontconfig>
 `
-      const encoder = new TextEncoder()
-      const fontsConfData = encoder.encode(fontsConf)
+      const fontsConfData = TEXT_ENCODER.encode(fontsConf)
       Module.FS_createDataFile('/assets', 'fonts.conf', fontsConfData, true, false, false)
       Module.FS_createDataFile('/etc/fonts', 'fonts.conf', fontsConfData, true, false, false)
     } catch (e) {
