@@ -46,6 +46,8 @@ type AnyGPURenderer = WebGPURenderer | WebGL2Renderer
  * ```
  */
 export default class AkariSub extends EventTarget {
+  private static readonly MAX_PENDING_DEMANDS = 3
+
   // Feature detection cache (static)
   private static _hasAlphaBug: boolean | null = null
   private static _hasBitmapBug: boolean | null = null
@@ -70,7 +72,7 @@ export default class AkariSub extends EventTarget {
   private _destroyed: boolean = false
   private _ro?: ResizeObserver
   private _worker: Worker
-  private _lastDemandTime: { mediaTime: number; width: number; height: number } | null = null
+  private _pendingDemandTimes: Array<{ mediaTime: number; width: number; height: number }> = []
 
   // Bound methods for event listeners
   private _boundResize: () => void
@@ -179,7 +181,7 @@ export default class AkariSub extends EventTarget {
 
     if (this._onDemandRender) {
       this.busy = false
-      this._lastDemandTime = null
+      this._pendingDemandTimes.length = 0
     }
 
     // Create worker
@@ -737,11 +739,32 @@ export default class AkariSub extends EventTarget {
   }
 
   private _unbusy(): void {
-    if (this._lastDemandTime) {
-      this._demandRender(this._lastDemandTime)
-    } else {
-      this.busy = false
+    if (this._pendingDemandTimes.length > 0) {
+      const nextDemand = this._pendingDemandTimes.shift()
+      if (nextDemand) {
+        this._demandRender(nextDemand)
+        return
+      }
     }
+
+    this.busy = false
+  }
+
+  private _enqueueDemand(metadata: { mediaTime: number; width: number; height: number }): void {
+    const queue = this._pendingDemandTimes
+
+    if (queue.length > 0) {
+      const lastQueued = queue[queue.length - 1]
+      if (Math.abs(lastQueued.mediaTime - metadata.mediaTime) > 0.25) {
+        queue.length = 0
+      }
+    }
+
+    if (queue.length >= AkariSub.MAX_PENDING_DEMANDS) {
+      queue.shift()
+    }
+
+    queue.push(metadata)
   }
 
   private _handleRVFC(now: number, metadata: VideoFrameCallbackMetadata): void {
@@ -758,7 +781,7 @@ export default class AkariSub extends EventTarget {
     }
 
     if (this.busy) {
-      this._lastDemandTime = demandData
+      this._enqueueDemand(demandData)
     } else {
       this.busy = true
       this._demandRender(demandData)
@@ -768,8 +791,6 @@ export default class AkariSub extends EventTarget {
   }
 
   private _demandRender(metadata: { mediaTime: number; width: number; height: number }): void {
-    this._lastDemandTime = null
-
     if (metadata.width !== this._videoWidth || metadata.height !== this._videoHeight) {
       this._videoWidth = metadata.width
       this._videoHeight = metadata.height
@@ -788,6 +809,7 @@ export default class AkariSub extends EventTarget {
     this._ctx = this._canvasctrl.getContext('2d')
     this.sendMessage('detachOffscreen')
     this.busy = false
+    this._pendingDemandTimes.length = 0
     this.resize(0, 0, 0, 0, true)
   }
 

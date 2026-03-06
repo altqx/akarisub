@@ -61,7 +61,8 @@ const pendingFallbackFonts: { data: Uint8Array; name: string }[] = []
 let debug = false
 let clampPos = false
 let renderInFlight = false
-let queuedRender: { time: number; force?: boolean | number } | null = null
+const MAX_QUEUED_RENDERS = 3
+const queuedRenders: Array<{ time: number; force: 0 | 1 }> = []
 
 self.width = 0
 self.height = 0
@@ -670,9 +671,9 @@ interface RenderTimes {
 }
 
 const flushQueuedRender = (): void => {
-  if (renderInFlight || !queuedRender) return
-  const next = queuedRender
-  queuedRender = null
+  if (renderInFlight || queuedRenders.length === 0) return
+  const next = queuedRenders.shift()
+  if (!next) return
   render(next.time, next.force)
 }
 
@@ -683,13 +684,22 @@ const completeRenderCycle = (): void => {
 
 const render = (time: number, force?: boolean | number): void => {
   if (renderInFlight) {
-    if (queuedRender) {
-      queuedRender.time = time
-      if (force) queuedRender.force = 1
+    const queuedItem = { time, force: force ? 1 as const : 0 as const }
+
+    if (queuedItem.force) {
+      queuedRenders.length = 0
     } else {
-      queuedRender = { time, force: force ? 1 : undefined }
+      const lastQueued = queuedRenders[queuedRenders.length - 1]
+      if (lastQueued && Math.abs(lastQueued.time - queuedItem.time) > 0.25) {
+        queuedRenders.length = 0
+      }
     }
-    metrics.framesDropped++
+
+    if (queuedRenders.length >= MAX_QUEUED_RENDERS) {
+      queuedRenders.shift()
+      metrics.framesDropped++
+    }
+    queuedRenders.push(queuedItem)
     return
   }
 
