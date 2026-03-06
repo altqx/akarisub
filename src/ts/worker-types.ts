@@ -44,6 +44,13 @@ export interface WorkerAddFontMessage {
   data: Uint8Array
 }
 
+export interface WorkerAttachOffscreenCanvasMessage {
+  type: 'attach-offscreen-canvas'
+  canvas: OffscreenCanvas
+  width: number
+  height: number
+}
+
 export interface WorkerLoadTrackMessage {
   type: 'load-track'
   subtitleData: string
@@ -73,8 +80,15 @@ export interface WorkerDisposeMessage {
   type: 'dispose'
 }
 
+export interface WorkerRenderOffscreenFrameMessage {
+  type: 'render-offscreen-frame'
+  timestampMs: number
+  force?: boolean
+}
+
 export type AkariSubWorkerInboundMessage =
   | WorkerAddFontMessage
+  | WorkerAttachOffscreenCanvasMessage
   | WorkerClearFontsMessage
   | WorkerClearTrackMessage
   | WorkerConfigureCanvasMessage
@@ -82,6 +96,7 @@ export type AkariSubWorkerInboundMessage =
   | WorkerInitMessage
   | WorkerLoadTrackMessage
   | WorkerRenderCompositedFrameMessage
+  | WorkerRenderOffscreenFrameMessage
   | WorkerRenderImageSlicesMessage
   | WorkerSetCacheLimitsMessage
   | WorkerSetFontsMessage
@@ -96,6 +111,7 @@ export interface WorkerAckMessage {
   type: 'ack'
   action:
     | 'add-font'
+    | 'attach-offscreen-canvas'
     | 'clear-fonts'
     | 'clear-track'
     | 'configure-canvas'
@@ -119,6 +135,12 @@ export interface WorkerRenderedImageSlicesMessage {
   frame: ImageSliceFrameResult | null
 }
 
+export interface WorkerRenderedOffscreenFrameMessage {
+  type: 'rendered-offscreen-frame'
+  changed: number
+  timestampMs: number
+}
+
 export interface WorkerErrorMessage {
   type: 'error'
   error: string
@@ -131,6 +153,7 @@ export type AkariSubWorkerOutboundMessage =
   | WorkerReadyMessage
   | WorkerRenderedCompositedFrameMessage
   | WorkerRenderedImageSlicesMessage
+  | WorkerRenderedOffscreenFrameMessage
 
 export interface TransferableCompositedFrameResult extends Omit<CompositedFrameResult, 'pixels'> {
   pixels: Uint8Array

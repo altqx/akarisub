@@ -1,8 +1,7 @@
-import {
-  AkariSubAsyncRenderer,
-  type AsyncRendererCreateOptions,
-} from './async-renderer'
-import type { FontConfig, FrameMargins, FrameSize } from './renderer'
+import { AkariSubAsyncRenderer, type AsyncRendererCreateOptions } from './async-renderer'
+import type { FontConfig, FrameMargins, FrameSize, RenderImageSlice } from './renderer'
+import { WebGL2Renderer, isWebGL2Supported } from './webgl2-renderer'
+import { WebGPURenderer, isWebGPUSupported } from './webgpu-renderer'
 
 type VideoFrameRequestCallback = (now: number, metadata: { mediaTime: number }) => void
 
@@ -20,15 +19,72 @@ export interface BrowserRendererOptions {
   cacheLimits?: AsyncRendererCreateOptions['cacheLimits']
   workerOptions?: Omit<AsyncRendererCreateOptions, 'frame' | 'storage' | 'margins' | 'fonts' | 'cacheLimits'>
   autoRender?: boolean
+  renderer?: BrowserRendererType | 'auto'
+  offscreenRender?: boolean
+  onCanvasFallback?: () => void
+}
+
+export type BrowserRendererType = 'canvas2d' | 'webgl2' | 'webgpu'
+
+export interface BrowserRendererSupport {
+  canvas2d: boolean
+  offscreenCanvas2d: boolean
+  webgl2: boolean
+  webgpu: boolean
+}
+
+export interface BrowserRendererPerformanceStats {
+  framesRendered: number
+  framesDropped: number
+  avgRenderTime: number
+  maxRenderTime: number
+  minRenderTime: number
+  lastRenderTime: number
+  renderFps: number
+  usingWorker: boolean
+  offscreenRender: boolean
+  onDemandRender: boolean
+  pendingRenders: number
+  totalEvents: number
+  cacheHits: number
+  cacheMisses: number
+}
+
+type GpuRenderer = WebGL2Renderer | WebGPURenderer
+
+type RendererSelection = {
+  rendererType: BrowserRendererType
+  usedCanvasFallback: boolean
+}
+
+type RenderImageInput = {
+  x: number
+  y: number
+  w: number
+  h: number
+  image: Uint8Array | ArrayBuffer | ImageBitmap
 }
 
 export class AkariSubCanvasRenderer {
   private readonly renderer: AkariSubAsyncRenderer
   private readonly canvas: HTMLCanvasElement
-  private readonly ctx: CanvasRenderingContext2D
+  private readonly ctx: CanvasRenderingContext2D | null
   private readonly video?: HTMLVideoElementWithRVFC
   private readonly resizeObserver?: ResizeObserver
   private readonly ownsCanvas: boolean
+  private readonly rendererTypeValue: BrowserRendererType
+  private readonly usesOffscreenCanvasValue: boolean
+  private readonly gpuRenderer: GpuRenderer | null
+  private pendingRenders = 0
+  private framesRendered = 0
+  private framesDropped = 0
+  private totalRenderTime = 0
+  private maxRenderTime = 0
+  private minRenderTime = Number.POSITIVE_INFINITY
+  private lastRenderTime = 0
+  private cacheHits = 0
+  private cacheMisses = 0
+  private readonly statsStart = performance.now()
   private rafId: number | null = null
   private rvfcId: number | null = null
   private destroyed = false
@@ -38,11 +94,14 @@ export class AkariSubCanvasRenderer {
   private constructor(
     renderer: AkariSubAsyncRenderer,
     canvas: HTMLCanvasElement,
-    ctx: CanvasRenderingContext2D,
+    ctx: CanvasRenderingContext2D | null,
     video?: HTMLVideoElementWithRVFC,
     resizeObserver?: ResizeObserver,
     ownsCanvas = false,
-    autoRender = true
+    autoRender = true,
+    rendererType: BrowserRendererType = 'canvas2d',
+    usesOffscreenCanvas = false,
+    gpuRenderer: GpuRenderer | null = null
   ) {
     this.renderer = renderer
     this.canvas = canvas
@@ -51,15 +110,14 @@ export class AkariSubCanvasRenderer {
     this.resizeObserver = resizeObserver
     this.ownsCanvas = ownsCanvas
     this.autoRenderEnabled = autoRender
+    this.rendererTypeValue = rendererType
+    this.usesOffscreenCanvasValue = usesOffscreenCanvas
+    this.gpuRenderer = gpuRenderer
   }
 
   static async create(options: BrowserRendererOptions): Promise<AkariSubCanvasRenderer> {
     const ownsCanvas = !options.canvas
     const canvas = options.canvas ?? createOverlayCanvas(options.video)
-    const ctx = canvas.getContext('2d', { alpha: true })
-    if (!ctx) {
-      throw new Error('2D canvas rendering is not supported')
-    }
 
     const frame = computeFrameSize(canvas, options.video)
     const renderer = await AkariSubAsyncRenderer.create({
@@ -73,6 +131,37 @@ export class AkariSubCanvasRenderer {
 
     if (options.trackContent) {
       await renderer.loadTrackFromUtf8(options.trackContent)
+    }
+
+    const selection = selectRenderer(options.renderer)
+    let ctx: CanvasRenderingContext2D | null = null
+    let gpuRenderer: GpuRenderer | null = null
+    let usesOffscreenCanvas = false
+
+    if (selection.rendererType === 'canvas2d') {
+      usesOffscreenCanvas = canUseOffscreenCanvas(options)
+
+      if (usesOffscreenCanvas) {
+        const offscreenCanvas = (
+          canvas as HTMLCanvasElement & { transferControlToOffscreen(): OffscreenCanvas }
+        ).transferControlToOffscreen()
+        await renderer.attachOffscreenCanvas(offscreenCanvas, frame.width, frame.height)
+      } else {
+        ctx = canvas.getContext('2d', { alpha: true })
+        if (!ctx) {
+          throw new Error('2D canvas rendering is not supported')
+        }
+      }
+    } else if (selection.rendererType === 'webgpu') {
+      gpuRenderer = new WebGPURenderer()
+      await gpuRenderer.setCanvas(canvas, frame.width, frame.height)
+    } else {
+      gpuRenderer = new WebGL2Renderer()
+      await gpuRenderer.setCanvas(canvas, frame.width, frame.height)
+    }
+
+    if (selection.usedCanvasFallback) {
+      options.onCanvasFallback?.()
     }
 
     const resizeObserver = options.video
@@ -89,7 +178,10 @@ export class AkariSubCanvasRenderer {
       options.video as HTMLVideoElementWithRVFC | undefined,
       resizeObserver,
       ownsCanvas,
-      options.autoRender ?? true
+      options.autoRender ?? true,
+      selection.rendererType,
+      usesOffscreenCanvas,
+      gpuRenderer
     )
 
     if (resizeObserver && options.video) {
@@ -113,6 +205,14 @@ export class AkariSubCanvasRenderer {
     return this.renderer.runtimeVersion
   }
 
+  get rendererType(): BrowserRendererType {
+    return this.rendererTypeValue
+  }
+
+  get usesOffscreenCanvas(): boolean {
+    return this.usesOffscreenCanvasValue
+  }
+
   get libassVersion(): number {
     return this.renderer.libassVersion
   }
@@ -133,6 +233,35 @@ export class AkariSubCanvasRenderer {
     return this.renderer.trackColorSpace
   }
 
+  getStats(): BrowserRendererPerformanceStats {
+    const elapsedMs = Math.max(performance.now() - this.statsStart, 1)
+    return {
+      framesRendered: this.framesRendered,
+      framesDropped: this.framesDropped,
+      avgRenderTime: this.framesRendered > 0 ? this.totalRenderTime / this.framesRendered : 0,
+      maxRenderTime: this.maxRenderTime,
+      minRenderTime: this.minRenderTime === Number.POSITIVE_INFINITY ? 0 : this.minRenderTime,
+      lastRenderTime: this.lastRenderTime,
+      renderFps: this.framesRendered / (elapsedMs / 1000),
+      usingWorker: true,
+      offscreenRender: this.usesOffscreenCanvasValue,
+      onDemandRender: Boolean(this.video?.requestVideoFrameCallback),
+      pendingRenders: this.pendingRenders,
+      totalEvents: this.eventCount,
+      cacheHits: this.cacheHits,
+      cacheMisses: this.cacheMisses,
+    }
+  }
+
+  static getSupportedRenderers(): BrowserRendererSupport {
+    return {
+      canvas2d: isCanvas2dSupported(),
+      offscreenCanvas2d: isOffscreenCanvas2dSupported(),
+      webgl2: isWebGL2Supported(),
+      webgpu: isWebGPUSupported(),
+    }
+  }
+
   async loadTrackFromUtf8(trackContent: string): Promise<void> {
     await this.renderer.loadTrackFromUtf8(trackContent)
     await this.renderCurrentFrame(true)
@@ -148,7 +277,12 @@ export class AkariSubCanvasRenderer {
 
   async clearTrack(): Promise<void> {
     await this.renderer.clearTrack()
-    this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height)
+    if (this.gpuRenderer) {
+      this.gpuRenderer.clear()
+      return
+    }
+
+    this.ctx?.clearRect(0, 0, this.canvas.width, this.canvas.height)
   }
 
   start(): void {
@@ -165,12 +299,51 @@ export class AkariSubCanvasRenderer {
   async renderCurrentFrame(force = false): Promise<void> {
     if (this.destroyed) return
 
-    const timestampMs = this.video ? Math.round(this.video.currentTime * 1000) : 0
-    const frame = await this.renderer.renderCompositedFrame(timestampMs, force)
-    if (!frame) return
+    if (this.pendingRenders > 0 && !force) {
+      this.framesDropped++
+      return
+    }
 
-    const imageData = new ImageData(new Uint8ClampedArray(frame.pixels), frame.width, frame.height)
-    this.ctx.putImageData(imageData, 0, 0)
+    const startedAt = performance.now()
+    this.pendingRenders++
+
+    try {
+      const timestampMs = this.video ? Math.round(this.video.currentTime * 1000) : 0
+
+      if (this.rendererTypeValue === 'canvas2d') {
+        if (this.usesOffscreenCanvasValue) {
+          const frame = await this.renderer.renderOffscreenFrame(timestampMs, force)
+          this.recordFrameStats(frame.changed !== 0)
+          return
+        }
+
+        const frame = await this.renderer.renderCompositedFrame(timestampMs, force)
+        if (!frame) return
+        this.recordFrameStats(frame.changed !== 0)
+        if (frame.changed === 0 && !force) return
+
+        const imageData = new ImageData(new Uint8ClampedArray(frame.pixels), frame.width, frame.height)
+        this.ctx?.putImageData(imageData, 0, 0)
+        return
+      }
+
+      const frame = await this.renderer.renderImageSlices(timestampMs, force)
+      if (!frame) return
+
+      this.recordFrameStats(frame.changed !== 0)
+      if (frame.changed === 0 && !force) return
+
+      const images = normalizeRenderImages(frame.images)
+      this.gpuRenderer?.render(images, this.canvas.width, this.canvas.height)
+    } finally {
+      this.pendingRenders--
+      const elapsed = performance.now() - startedAt
+      this.lastRenderTime = elapsed
+      this.totalRenderTime += elapsed
+      this.maxRenderTime = Math.max(this.maxRenderTime, elapsed)
+      this.minRenderTime = Math.min(this.minRenderTime, elapsed)
+      this.framesRendered++
+    }
   }
 
   async syncCanvasToVideo(): Promise<void> {
@@ -184,6 +357,8 @@ export class AkariSubCanvasRenderer {
       syncCanvasStyleToVideo(this.canvas, this.video)
     }
 
+    this.gpuRenderer?.updateSize(frame.width, frame.height)
+
     await this.renderer.configureCanvas(frame, frame)
   }
 
@@ -193,6 +368,7 @@ export class AkariSubCanvasRenderer {
     this.destroyed = true
     this.stop()
     this.resizeObserver?.disconnect()
+    this.gpuRenderer?.destroy()
     await this.renderer.dispose()
 
     if (this.ownsCanvas) {
@@ -230,6 +406,91 @@ export class AkariSubCanvasRenderer {
       this.rvfcId = null
     }
   }
+
+  private recordFrameStats(changed: boolean): void {
+    if (changed) {
+      this.cacheMisses++
+    } else {
+      this.cacheHits++
+    }
+  }
+}
+
+function isCanvas2dSupported(): boolean {
+  if (typeof document === 'undefined') return false
+
+  try {
+    return document.createElement('canvas').getContext('2d') !== null
+  } catch {
+    return false
+  }
+}
+
+function isOffscreenCanvas2dSupported(): boolean {
+  if (typeof OffscreenCanvas === 'undefined') return false
+
+  try {
+    return new OffscreenCanvas(1, 1).getContext('2d') !== null
+  } catch {
+    return false
+  }
+}
+
+function canUseOffscreenCanvas(options: BrowserRendererOptions): boolean {
+  if (options.offscreenRender === false) return false
+  if (options.canvas) return false
+  if (typeof HTMLCanvasElement === 'undefined') return false
+  if (!('transferControlToOffscreen' in HTMLCanvasElement.prototype)) return false
+  return isOffscreenCanvas2dSupported()
+}
+
+function selectRenderer(requested: BrowserRendererOptions['renderer'] = 'auto'): RendererSelection {
+  const webgpu = isWebGPUSupported()
+  const webgl2 = isWebGL2Supported()
+
+  switch (requested) {
+    case 'webgpu':
+      if (webgpu) return { rendererType: 'webgpu', usedCanvasFallback: false }
+      if (webgl2) return { rendererType: 'webgl2', usedCanvasFallback: false }
+      return { rendererType: 'canvas2d', usedCanvasFallback: true }
+    case 'webgl2':
+      if (webgl2) return { rendererType: 'webgl2', usedCanvasFallback: false }
+      return { rendererType: 'canvas2d', usedCanvasFallback: true }
+    case 'canvas2d':
+      return { rendererType: 'canvas2d', usedCanvasFallback: false }
+    case 'auto':
+    default:
+      if (webgpu) return { rendererType: 'webgpu', usedCanvasFallback: false }
+      if (webgl2) return { rendererType: 'webgl2', usedCanvasFallback: false }
+      return { rendererType: 'canvas2d', usedCanvasFallback: false }
+  }
+}
+
+function normalizeRenderImages(images: RenderImageSlice[]): RenderImageInput[] {
+  return images.map((image) => ({
+    x: image.x,
+    y: image.y,
+    w: image.width,
+    h: image.height,
+    image: normalizePixels(image),
+  }))
+}
+
+function normalizePixels(image: RenderImageSlice): Uint8Array {
+  const packedStride = image.width * 4
+  if (image.stride === packedStride) {
+    return image.pixels.byteOffset === 0 && image.pixels.byteLength === image.pixels.buffer.byteLength
+      ? image.pixels
+      : image.pixels.slice()
+  }
+
+  const packed = new Uint8Array(image.height * packedStride)
+  for (let row = 0; row < image.height; row++) {
+    const sourceOffset = row * image.stride
+    const targetOffset = row * packedStride
+    packed.set(image.pixels.subarray(sourceOffset, sourceOffset + packedStride), targetOffset)
+  }
+  return packed
 }
 
 function createOverlayCanvas(video?: HTMLVideoElement): HTMLCanvasElement {

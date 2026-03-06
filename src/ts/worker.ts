@@ -11,6 +11,8 @@ import type {
 declare const self: DedicatedWorkerGlobalScope
 
 let renderer: AkariSubRenderer | null = null
+let offscreenCanvas: OffscreenCanvas | null = null
+let offscreenCtx: OffscreenCanvasRenderingContext2D | null = null
 
 const ensureRenderer = (): AkariSubRenderer => {
   if (!renderer) {
@@ -45,6 +47,10 @@ const postAck = (action: WorkerAckMessage['action']): void => {
 
 const applyInit = (activeRenderer: AkariSubRenderer, data: WorkerInitMessage): void => {
   activeRenderer.configureCanvas(data.frame, data.storage)
+  if (offscreenCanvas) {
+    offscreenCanvas.width = data.frame.width
+    offscreenCanvas.height = data.frame.height
+  }
   if (data.margins) {
     activeRenderer.setMargins(data.margins)
   }
@@ -100,6 +106,18 @@ const handleMessage = async (data: AkariSubWorkerInboundMessage): Promise<void> 
       return
     }
 
+    case 'attach-offscreen-canvas': {
+      offscreenCanvas = data.canvas
+      offscreenCanvas.width = data.width
+      offscreenCanvas.height = data.height
+      offscreenCtx = offscreenCanvas.getContext('2d', { alpha: true, desynchronized: true })
+      if (!offscreenCtx) {
+        throw new Error('2D OffscreenCanvas rendering is not supported')
+      }
+      postAck('attach-offscreen-canvas')
+      return
+    }
+
     case 'load-track': {
       const activeRenderer = ensureRenderer()
       activeRenderer.loadTrackFromUtf8(data.subtitleData)
@@ -137,11 +155,46 @@ const handleMessage = async (data: AkariSubWorkerInboundMessage): Promise<void> 
       return
     }
 
+    case 'render-offscreen-frame': {
+      const activeRenderer = ensureRenderer()
+      if (!offscreenCanvas || !offscreenCtx) {
+        throw new Error('OffscreenCanvas has not been attached')
+      }
+
+      const frame = activeRenderer.renderCompositedFrame(data.timestampMs, data.force ?? false)
+      if (frame) {
+        if (offscreenCanvas.width !== frame.width) offscreenCanvas.width = frame.width
+        if (offscreenCanvas.height !== frame.height) offscreenCanvas.height = frame.height
+
+        if (frame.changed !== 0 || data.force) {
+          const imageData = new ImageData(new Uint8ClampedArray(frame.pixels), frame.width, frame.height)
+          offscreenCtx.clearRect(0, 0, frame.width, frame.height)
+          offscreenCtx.putImageData(imageData, 0, 0)
+        }
+
+        post({
+          type: 'rendered-offscreen-frame',
+          changed: frame.changed,
+          timestampMs: frame.timestampMs,
+        })
+        return
+      }
+
+      post({
+        type: 'rendered-offscreen-frame',
+        changed: 0,
+        timestampMs: data.timestampMs,
+      })
+      return
+    }
+
     case 'dispose': {
       const activeRenderer = ensureRenderer()
       activeRenderer.clearTrack()
       activeRenderer.clearFonts()
       renderer = null
+      offscreenCanvas = null
+      offscreenCtx = null
       post({
         type: 'ack',
         action: 'dispose',

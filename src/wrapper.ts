@@ -12,7 +12,10 @@ export {
 export {
   AkariSubCanvasRenderer,
   AkariSubCanvasRenderer as AkariSubBrowserRenderer,
+  type BrowserRendererPerformanceStats,
   type BrowserRendererOptions,
+  type BrowserRendererSupport,
+  type BrowserRendererType,
 } from './ts/browser-renderer'
 export { AkariSubWorkerClient, type WorkerClientCreateOptions } from './ts/worker-client'
 export {

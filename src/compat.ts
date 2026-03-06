@@ -1,4 +1,4 @@
-import { AkariSubCanvasRenderer } from './ts/browser-renderer'
+import { AkariSubCanvasRenderer, type BrowserRendererPerformanceStats, type BrowserRendererType } from './ts/browser-renderer'
 
 export interface AkariSubCompatOptions {
   video: HTMLVideoElement
@@ -13,6 +13,8 @@ export interface AkariSubCompatOptions {
   useLocalFonts?: boolean
   clampPos?: boolean
   debug?: boolean
+  offscreenRender?: boolean
+  renderer?: BrowserRendererType | 'auto'
   onCanvasFallback?: () => void
 }
 
@@ -25,6 +27,14 @@ export default class AkariSub extends EventTarget {
   private renderer: AkariSubCanvasRenderer | null = null
   private readonly readyPromise: Promise<void>
   private disposed = false
+
+  get rendererType(): BrowserRendererType {
+    return this.renderer?.rendererType ?? 'canvas2d'
+  }
+
+  get offscreenRender(): boolean {
+    return this.renderer?.usesOffscreenCanvas ?? false
+  }
 
   constructor(private readonly options: AkariSubCompatOptions) {
     super()
@@ -68,11 +78,37 @@ export default class AkariSub extends EventTarget {
     return this.renderer?.styleCount ?? 0
   }
 
+  async getStats(): Promise<BrowserRendererPerformanceStats> {
+    await this.readyPromise
+
+    return (
+      this.renderer?.getStats() ?? {
+        framesRendered: 0,
+        framesDropped: 0,
+        avgRenderTime: 0,
+        maxRenderTime: 0,
+        minRenderTime: 0,
+        lastRenderTime: 0,
+        renderFps: 0,
+        usingWorker: true,
+        offscreenRender: false,
+        onDemandRender: false,
+        pendingRenders: 0,
+        totalEvents: 0,
+        cacheHits: 0,
+        cacheMisses: 0,
+      }
+    )
+  }
+
   private async initialize(): Promise<void> {
     try {
       const renderer = await AkariSubCanvasRenderer.create({
         video: this.options.video,
         autoRender: true,
+        renderer: this.options.renderer,
+        offscreenRender: this.options.offscreenRender,
+        onCanvasFallback: this.options.onCanvasFallback,
         fonts: {
           fallbackFonts: this.options.fallbackFonts,
         },
@@ -99,10 +135,6 @@ export default class AkariSub extends EventTarget {
         this.dispatchEvent(new Event('ready'))
       }
     } catch (error) {
-      if (this.options.onCanvasFallback) {
-        this.options.onCanvasFallback()
-      }
-
       if (!this.disposed) {
         this.dispatchEvent(
           new CustomEvent('error', {
@@ -123,7 +155,7 @@ export default class AkariSub extends EventTarget {
       }
       await operation()
     } catch (error) {
-      console.warn('[akarisub-rs] compatibility operation failed', error)
+      console.warn('[akarisub] compatibility operation failed', error)
     }
   }
 
@@ -194,7 +226,7 @@ export default class AkariSub extends EventTarget {
         data: new Uint8Array(await response.arrayBuffer()),
       }
     } catch (error) {
-      console.warn('[akarisub-rs] failed to preload font', url, error)
+      console.warn('[akarisub] failed to preload font', url, error)
       return null
     }
   }

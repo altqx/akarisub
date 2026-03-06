@@ -2,10 +2,12 @@ import type {
   AkariSubWorkerInboundMessage,
   AkariSubWorkerOutboundMessage,
   WorkerAckMessage,
+  WorkerAttachOffscreenCanvasMessage,
   WorkerConfigureCanvasMessage,
   WorkerInitMessage,
   WorkerRenderedCompositedFrameMessage,
   WorkerRenderedImageSlicesMessage,
+  WorkerRenderedOffscreenFrameMessage,
 } from './worker-types'
 import type { FontConfig, FrameMargins, FrameSize, ImageSliceFrameResult, CompositedFrameResult } from './renderer'
 
@@ -75,6 +77,17 @@ export class AkariSubWorkerClient {
     return this.waitForAck({ type: 'add-font', name, data }, 'add-font', [data.buffer])
   }
 
+  attachOffscreenCanvas(canvas: OffscreenCanvas, width: number, height: number): Promise<WorkerAckMessage> {
+    const message: WorkerAttachOffscreenCanvasMessage = {
+      type: 'attach-offscreen-canvas',
+      canvas,
+      width,
+      height,
+    }
+
+    return this.waitForAck(message, 'attach-offscreen-canvas', [canvas])
+  }
+
   loadTrack(subtitleData: string): Promise<WorkerAckMessage> {
     return this.waitForAck({ type: 'load-track', subtitleData }, 'load-track')
   }
@@ -106,6 +119,20 @@ export class AkariSubWorkerClient {
       )
 
       return response.frame
+    })
+  }
+
+  renderOffscreenFrame(timestampMs: number, force = false): Promise<{ changed: number; timestampMs: number }> {
+    return this.enqueue(async () => {
+      const response = await this.sendAndWait(
+        { type: 'render-offscreen-frame', timestampMs, force },
+        (outbound): outbound is WorkerRenderedOffscreenFrameMessage => outbound.type === 'rendered-offscreen-frame'
+      )
+
+      return {
+        changed: response.changed,
+        timestampMs: response.timestampMs,
+      }
     })
   }
 

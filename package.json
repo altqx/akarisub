@@ -27,13 +27,15 @@
   "scripts": {
     "build:wasm": "wasm-pack build --target web --out-dir pkg",
     "build:wasm:release": "wasm-pack build --release --target web --out-dir pkg",
-    "build:ts": "tsc",
+    "build:ts": "tsgo",
     "build": "bun run build:wasm:release && bun run build:ts",
     "clean": "rm -rf dist pkg target",
     "test": "cargo test",
     "format": "cargo fmt && prettier . --write"
   },
   "devDependencies": {
+    "@typescript/native-preview": "^7.0.0-dev.20260306.1",
+    "@webgpu/types": "^0.1.69",
     "prettier": "^3.8.1",
     "typescript": "^5.9.3"
   }

@@ -101,6 +101,11 @@ export class AkariSubAsyncRenderer {
     this.applyAck(ack)
   }
 
+  async attachOffscreenCanvas(canvas: OffscreenCanvas, width: number, height: number): Promise<void> {
+    const ack = await this.client.attachOffscreenCanvas(canvas, width, height)
+    this.applyAck(ack)
+  }
+
   async loadTrackFromUtf8(subtitleData: string): Promise<void> {
     const ack = await this.client.loadTrack(subtitleData)
     this.applyAck(ack)
@@ -122,6 +127,10 @@ export class AkariSubAsyncRenderer {
 
   renderImageSlices(timestampMs: number, force = false): Promise<ImageSliceFrameResult | null> {
     return this.client.renderImageSlices(timestampMs, force)
+  }
+
+  renderOffscreenFrame(timestampMs: number, force = false): Promise<{ changed: number; timestampMs: number }> {
+    return this.client.renderOffscreenFrame(timestampMs, force)
   }
 
   async dispose(): Promise<void> {
