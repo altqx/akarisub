@@ -107,6 +107,7 @@ let subtitleColorSpace: SubtitleColorSpace = null
 let dropAllBlur = false
 let hasBitmapBug = false
 let _Module: AkariSubModule | null = null
+let forceNextDemandRender = false
 
 const TEXT_ENCODER = new TextEncoder()
 const TEXT_DECODER = new TextDecoder()
@@ -169,6 +170,7 @@ const ENABLE_RUNTIME_WARMUP = false
 const FULL_WARMUP_CAP_SECONDS = 30
 const FULL_WARMUP_STEP_SECONDS = 1
 const FULL_WARMUP_YIELD_EVERY = 120
+const ASS_TIME_SCALE = 1000
 const imagePool: RenderResultItem[] = new Array(MAX_POOLED_IMAGES)
 let poolInitialized = false
 const RR_META_STRIDE = 6
@@ -289,7 +291,7 @@ const getFirstEventStartTime = (): number | null => {
   let firstStart = Number.POSITIVE_INFINITY
 
   for (let i = 0; i < count; i++) {
-    const start = api.eventGetInt(handle, i, EVENT_INT_FIELDS.Start)
+    const start = api.eventGetInt(handle, i, EVENT_INT_FIELDS.Start) / ASS_TIME_SCALE
     if (Number.isFinite(start) && start < firstStart) {
       firstStart = start
     }
@@ -311,8 +313,8 @@ const getTrackEventTimeRange = (): { start: number; end: number } | null => {
   let end = 0
 
   for (let i = 0; i < count; i++) {
-    const eventStart = api.eventGetInt(handle, i, EVENT_INT_FIELDS.Start)
-    const eventDuration = Math.max(0, api.eventGetInt(handle, i, EVENT_INT_FIELDS.Duration))
+    const eventStart = api.eventGetInt(handle, i, EVENT_INT_FIELDS.Start) / ASS_TIME_SCALE
+    const eventDuration = Math.max(0, api.eventGetInt(handle, i, EVENT_INT_FIELDS.Duration) / ASS_TIME_SCALE)
 
     if (!Number.isFinite(eventStart)) continue
 
@@ -746,6 +748,7 @@ self.setTrack = ({ content }: { content: string }): void => {
   })
   firstTrackEventStartTime = getFirstEventStartTime()
   subtitleColorSpace = libassYCbCrMap[api.getTrackColorSpace(handle)]
+  forceNextDemandRender = true
   postMessage({ target: 'verifyColorSpace', subtitleColorSpace })
 }
 
@@ -1020,7 +1023,9 @@ const render = (time: number, force?: boolean | number): void => {
 
 self.demand = ({ time }: { time: number }): void => {
   lastCurrentTime = time
-  render(time)
+  const force = forceNextDemandRender ? 1 : 0
+  forceNextDemandRender = false
+  render(time, force)
 }
 
 const renderLoop = (force?: boolean | number): void => {
@@ -1529,6 +1534,8 @@ self.init = async (data: any): Promise<void> => {
     } catch (e) {
       if (debug) console.warn('[AkariSub] Post-warmup re-prime failed, continuing:', e)
     }
+
+    forceNextDemandRender = true
 
     postMessage({ target: 'ready' })
     postMessage({ target: 'verifyColorSpace', subtitleColorSpace })

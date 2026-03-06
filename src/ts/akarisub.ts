@@ -454,11 +454,9 @@ export default class AkariSub extends EventTarget {
       this._video = video
 
       if (this._onDemandRender) {
-        this._loaded.then(() => {
-          if (!this._destroyed && this._video === video) {
-              ; (video as any).requestVideoFrameCallback(this._boundHandleRVFC)
-          }
-        })
+        if (!this._destroyed && this._video === video) {
+          ;(video as any).requestVideoFrameCallback(this._boundHandleRVFC)
+        }
       } else {
         this._playstate = video.paused
 
