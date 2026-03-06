@@ -51,6 +51,7 @@ let rafId: number | null = null
 let nextIsRaf = false
 let lastCurrentTimeReceivedAt = Date.now()
 let targetFps = 24
+let onDemandRenderMode = false
 let useLocalFonts = false
 let blendMode: 'js' | 'wasm' = 'wasm'
 let availableFonts: Record<string, string | Uint8Array> = {}
@@ -787,6 +788,10 @@ const setCurrentTime = (currentTime: number): void => {
   lastCurrentTime = currentTime
   lastCurrentTimeReceivedAt = Date.now()
 
+  if (onDemandRenderMode) {
+    return
+  }
+
   if (!rafId) {
     if (nextIsRaf) {
       rafId = requestAnimationFrame(renderLoop)
@@ -801,6 +806,15 @@ const setCurrentTime = (currentTime: number): void => {
 }
 
 const setIsPaused = (isPaused: boolean): void => {
+  if (onDemandRenderMode) {
+    _isPaused = isPaused
+    if (rafId) {
+      cancelAnimationFrame(rafId)
+      rafId = null
+    }
+    return
+  }
+
   if (isPaused !== _isPaused) {
     _isPaused = isPaused
     if (isPaused) {
@@ -1297,6 +1311,7 @@ self.init = async (data: any): Promise<void> => {
 
     self.width = data.width
     self.height = data.height
+    onDemandRenderMode = !!data.onDemandRender
     blendMode = data.blendMode
     asyncRender = data.asyncRender
 
@@ -1424,20 +1439,59 @@ self.init = async (data: any): Promise<void> => {
     if (clampPos) subContent = fixPlayRes(subContent)
     if (dropAllBlur) subContent = dropBlur(subContent)
 
-    // Check if we have preloaded fonts (Uint8Array)
-    const hasPreloadedFonts = (data.fonts || []).some((font: string | Uint8Array) => typeof font !== 'string')
+    // Load attached/preloaded fonts before ready to avoid runtime font churn during first playback.
+    let hasAttachedFonts = false
+    const attachedFontPromises: Promise<void>[] = []
 
-    // Write attached/preloaded fonts to filesystem
     for (const font of data.fonts || []) {
       if (typeof font === 'string') {
-        asyncWrite(font, false)
+        const promise = new Promise<void>((resolve) => {
+          readAsync(
+            font,
+            (fontData: ArrayBuffer) => {
+              writeFontToFSImmediate(new Uint8Array(fontData), false)
+              hasAttachedFonts = true
+              if (debug) console.log('[AkariSub] Loaded attached font async:', font)
+              resolve()
+            },
+            (e) => {
+              console.error('Failed to load attached font:', font, e)
+              resolve()
+            }
+          )
+        })
+        attachedFontPromises.push(promise)
       } else {
         writeFontToFSImmediate(font, false)
+        hasAttachedFonts = true
       }
     }
 
-    if (hasPreloadedFonts) {
-      if (debug) console.log('[AkariSub] Reloading fonts after writing', 'preloaded', 'fonts to FS')
+    if (attachedFontPromises.length > 0) {
+      let attachedTimeoutId: ReturnType<typeof setTimeout> | null = null
+      let attachedTimedOut = false
+      const attachedTimeoutPromise = new Promise<void>((resolve) => {
+        attachedTimeoutId = setTimeout(() => {
+          attachedTimedOut = true
+          console.warn('[AkariSub] Attached font loading timeout, continuing with available fonts')
+          resolve()
+        }, 30000)
+      })
+
+      await Promise.race([
+        Promise.all(attachedFontPromises).then(() => {
+          if (attachedTimeoutId !== null) clearTimeout(attachedTimeoutId)
+        }),
+        attachedTimeoutPromise
+      ])
+
+      if (!attachedTimedOut && debug) {
+        console.log('[AkariSub] Attached font loading complete')
+      }
+    }
+
+    if (hasAttachedFonts) {
+      if (debug) console.log('[AkariSub] Reloading fonts after writing attached fonts to FS')
       requireApi().reloadFonts(requireHandle())
       if (debug) console.log('[AkariSub] Font reload complete')
     }
@@ -1468,6 +1522,12 @@ self.init = async (data: any): Promise<void> => {
       await prewarmEntireTrack()
     } catch (e) {
       if (debug) console.warn('[AkariSub] Full track warmup failed, continuing:', e)
+    }
+
+    try {
+      prewarmRenderer(lastCurrentTime)
+    } catch (e) {
+      if (debug) console.warn('[AkariSub] Post-warmup re-prime failed, continuing:', e)
     }
 
     postMessage({ target: 'ready' })

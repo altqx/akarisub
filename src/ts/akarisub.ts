@@ -70,6 +70,7 @@ export default class AkariSub extends EventTarget {
   private _lastRenderTime: number = 0
   private _playstate: boolean = true
   private _destroyed: boolean = false
+  private _workerReady: boolean = false
   private _ro?: ResizeObserver
   private _worker: Worker
   private _pendingDemandTimes: Array<{ mediaTime: number; width: number; height: number }> = []
@@ -786,6 +787,12 @@ export default class AkariSub extends EventTarget {
       height: metadata.height
     }
 
+    if (!this._workerReady) {
+      this._enqueueDemand(demandData)
+      ; (this._video as any).requestVideoFrameCallback(this._boundHandleRVFC)
+      return
+    }
+
     if (this.busy) {
       this._enqueueDemand(demandData)
     } else {
@@ -992,7 +999,25 @@ export default class AkariSub extends EventTarget {
   }
 
   private _ready(): void {
+    this._workerReady = true
     this._init()
+
+    if (this._onDemandRender && this._video) {
+      this.setCurrentTime(this._video.paused, this._video.currentTime + this.timeOffset, this._video.playbackRate)
+
+      const pending = this._pendingDemandTimes.length > 0
+        ? this._pendingDemandTimes[this._pendingDemandTimes.length - 1]
+        : {
+          mediaTime: this._video.currentTime + this.renderAhead * (this._video.playbackRate || 1),
+          width: this._video.videoWidth,
+          height: this._video.videoHeight
+        }
+
+      this._pendingDemandTimes.length = 0
+      this.busy = true
+      this._demandRender(pending)
+    }
+
     this.dispatchEvent(new CustomEvent('ready'))
   }
 
