@@ -164,6 +164,7 @@ const PREWARM_MAX_IMAGES = RENDER_COLLECT_MAX_IMAGES
 const WARMUP_AHEAD_SECONDS = 30
 const WARMUP_STEP_SECONDS = 0.5
 const WARMUP_TICK_MS = 40
+const ENABLE_RUNTIME_WARMUP = false
 const FULL_WARMUP_CAP_SECONDS = 30
 const FULL_WARMUP_STEP_SECONDS = 1
 const FULL_WARMUP_YIELD_EVERY = 120
@@ -371,6 +372,7 @@ const scheduleWarmupTick = (): void => {
 }
 
 const startWarmupWindow = (fromTime: number): void => {
+  if (!ENABLE_RUNTIME_WARMUP) return
   if (!akariSubHandle || !Number.isFinite(fromTime)) return
   warmupCursorTime = fromTime
   warmupEndTime = fromTime + WARMUP_AHEAD_SECONDS
@@ -744,7 +746,6 @@ self.setTrack = ({ content }: { content: string }): void => {
   firstTrackEventStartTime = getFirstEventStartTime()
   subtitleColorSpace = libassYCbCrMap[api.getTrackColorSpace(handle)]
   postMessage({ target: 'verifyColorSpace', subtitleColorSpace })
-  startWarmupWindow(getWarmupAnchorTime(lastCurrentTime))
 }
 
 self.getColorSpace = (): void => {
@@ -783,13 +784,8 @@ const getCurrentTime = (): number => {
 }
 
 const setCurrentTime = (currentTime: number): void => {
-  const timeJump = Math.abs(currentTime - lastCurrentTime)
   lastCurrentTime = currentTime
   lastCurrentTimeReceivedAt = Date.now()
-
-  if (timeJump > 0.5) {
-    startWarmupWindow(currentTime)
-  }
 
   if (!rafId) {
     if (nextIsRaf) {
@@ -1473,8 +1469,6 @@ self.init = async (data: any): Promise<void> => {
     } catch (e) {
       if (debug) console.warn('[AkariSub] Full track warmup failed, continuing:', e)
     }
-
-    startWarmupWindow(getWarmupAnchorTime(lastCurrentTime))
 
     postMessage({ target: 'ready' })
     postMessage({ target: 'verifyColorSpace', subtitleColorSpace })
