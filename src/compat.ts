@@ -10,7 +10,9 @@ const LARGE_SUBTITLE_THRESHOLD = 500000
 export interface AkariSubCompatOptions {
   video?: HTMLVideoElement
   canvas?: HTMLCanvasElement
+  /** @deprecated Ignored by the Rust runtime compatibility wrapper. */
   blendMode?: 'js' | 'wasm' | string
+  /** @deprecated Ignored by the Rust runtime compatibility wrapper. */
   asyncRender?: boolean
   offscreenRender?: boolean
   onDemandRender?: boolean
@@ -48,6 +50,8 @@ type FontSource =
   | { kind: 'inline'; name: string; data: Uint8Array }
 
 export default class AkariSub extends EventTarget {
+  private static readonly warnedMessages = new Set<string>()
+
   private renderer: AkariSubCanvasRenderer | null = null
   private readyPromise: Promise<void>
   private disposed = false
@@ -57,7 +61,6 @@ export default class AkariSub extends EventTarget {
   private defaultFont: string | null = null
   private manualCurrentTime = 0
   private manualPlaybackRate = 1
-  private isPaused = true
 
   public timeOffset: number
   public debug: boolean
@@ -80,9 +83,16 @@ export default class AkariSub extends EventTarget {
     this.prescaleHeightLimit = options.prescaleHeightLimit ?? 1080
     this.maxRenderHeight = options.maxRenderHeight ?? 0
     this.renderAhead = options.renderAhead ?? 0.008
-    this.isPaused = options.video?.paused ?? true
     this.manualCurrentTime = options.video?.currentTime ?? 0
     this.manualPlaybackRate = options.video?.playbackRate ?? 1
+
+    if (options.blendMode != null) {
+      this.warnOnce('[akarisub] blendMode is ignored by the Rust compatibility runtime')
+    }
+
+    if (options.asyncRender != null) {
+      this.warnOnce('[akarisub] asyncRender is ignored by the Rust compatibility runtime')
+    }
 
     this.readyPromise = this.initializeRenderer(false)
   }
@@ -109,12 +119,12 @@ export default class AkariSub extends EventTarget {
     }
     this.manualCurrentTime = video.currentTime
     this.manualPlaybackRate = video.playbackRate
-    this.isPaused = video.paused
     this.readyPromise = this.initializeRenderer(true)
   }
 
+  /** @deprecated Not implemented by the Rust runtime compatibility wrapper. */
   runBenchmark(): void {
-    console.warn('[akarisub] runBenchmark is not implemented in the Rust runtime')
+    this.warnOnce('[akarisub] runBenchmark is not implemented in the Rust runtime')
   }
 
   setTrackByUrl(url: string): void {
@@ -156,7 +166,6 @@ export default class AkariSub extends EventTarget {
   }
 
   setIsPaused(isPaused: boolean): void {
-    this.isPaused = isPaused
     if (isPaused) {
       void this.run(async () => {
         await this.renderAtCurrentTime(true)
@@ -169,14 +178,18 @@ export default class AkariSub extends EventTarget {
   }
 
   setCurrentTime(isPaused?: boolean, currentTime?: number, rate?: number): void {
-    if (typeof isPaused === 'boolean') {
-      this.isPaused = isPaused
-    }
     if (typeof currentTime === 'number') {
       this.manualCurrentTime = currentTime
     }
     if (typeof rate === 'number') {
       this.manualPlaybackRate = rate
+    }
+
+    if (typeof isPaused === 'boolean' && isPaused) {
+      void this.run(async () => {
+        await this.renderAtCurrentTime(true)
+      })
+      return
     }
 
     void this.run(async () => {
@@ -625,6 +638,15 @@ export default class AkariSub extends EventTarget {
 
   private toError(error: unknown): Error {
     return error instanceof Error ? error : new Error(String(error))
+  }
+
+  private warnOnce(message: string): void {
+    if (AkariSub.warnedMessages.has(message)) {
+      return
+    }
+
+    AkariSub.warnedMessages.add(message)
+    console.warn(message)
   }
 }
 
