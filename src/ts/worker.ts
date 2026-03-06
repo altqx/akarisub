@@ -169,7 +169,7 @@ const WARMUP_TICK_MS = 40
 const ENABLE_RUNTIME_WARMUP = false
 const FULL_WARMUP_CAP_SECONDS = 30
 const FULL_WARMUP_STEP_SECONDS = 1
-const FULL_WARMUP_YIELD_EVERY = 120
+const FULL_WARMUP_YIELD_EVERY = 24
 const ASS_TIME_SCALE = 1000
 const imagePool: RenderResultItem[] = new Array(MAX_POOLED_IMAGES)
 let poolInitialized = false
@@ -344,10 +344,16 @@ const prewarmEntireTrack = async (): Promise<void> => {
 
   for (let time = range.start; time <= cappedEnd; time += FULL_WARMUP_STEP_SECONDS) {
     if (!akariSubHandle) return
+
+    if (onDemandRenderMode && (renderInFlight || queuedRenders.length > 0 || metrics.pendingRenders > 0)) {
+      await sleep(0)
+      continue
+    }
+
     prewarmRenderer(time)
     ticks++
 
-    if (ticks % FULL_WARMUP_YIELD_EVERY === 0) {
+    if (onDemandRenderMode || ticks % FULL_WARMUP_YIELD_EVERY === 0) {
       await sleep(0)
     }
   }
@@ -1023,6 +1029,7 @@ const render = (time: number, force?: boolean | number): void => {
 
 self.demand = ({ time }: { time: number }): void => {
   lastCurrentTime = time
+  lastCurrentTimeReceivedAt = Date.now()
   const force = forceNextDemandRender ? 1 : 0
   forceNextDemandRender = false
   render(time, force)
@@ -1523,22 +1530,24 @@ self.init = async (data: any): Promise<void> => {
       if (debug) console.warn('[AkariSub] Prewarm render failed, continuing:', e)
     }
 
-    try {
-      await prewarmEntireTrack()
-    } catch (e) {
-      if (debug) console.warn('[AkariSub] Full track warmup failed, continuing:', e)
-    }
-
-    try {
-      prewarmRenderer(lastCurrentTime)
-    } catch (e) {
-      if (debug) console.warn('[AkariSub] Post-warmup re-prime failed, continuing:', e)
-    }
-
     forceNextDemandRender = true
 
     postMessage({ target: 'ready' })
     postMessage({ target: 'verifyColorSpace', subtitleColorSpace })
+
+    void (async () => {
+      try {
+        await prewarmEntireTrack()
+      } catch (e) {
+        if (debug) console.warn('[AkariSub] Full track warmup failed, continuing:', e)
+      }
+
+      try {
+        prewarmRenderer(getCurrentTime())
+      } catch (e) {
+        if (debug) console.warn('[AkariSub] Post-warmup re-prime failed, continuing:', e)
+      }
+    })()
   }
 
   loadWasm(data.wasmUrl).then(onWasmLoaded).catch((e) => {
