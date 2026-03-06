@@ -1,0 +1,11 @@
+[package]
+name = "akarisub-build-support"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Shared native build helpers for akarisub-rs sys crates"
+
+[dependencies]
+cc.workspace = true

@@ -1,0 +1,21 @@
+[submodule "vendor/brotli"]
+	path = vendor/brotli
+	url = https://github.com/google/brotli.git
+[submodule "vendor/expat"]
+	path = vendor/expat
+	url = https://github.com/libexpat/libexpat.git
+[submodule "vendor/fontconfig"]
+	path = vendor/fontconfig
+	url = https://gitlab.freedesktop.org/fontconfig/fontconfig.git
+[submodule "vendor/freetype"]
+	path = vendor/freetype
+	url = https://gitlab.freedesktop.org/freetype/freetype.git
+[submodule "vendor/fribidi"]
+	path = vendor/fribidi
+	url = https://github.com/fribidi/fribidi.git
+[submodule "vendor/harfbuzz"]
+	path = vendor/harfbuzz
+	url = https://github.com/harfbuzz/harfbuzz.git
+[submodule "vendor/libass"]
+	path = vendor/libass
+	url = https://github.com/libass/libass.git

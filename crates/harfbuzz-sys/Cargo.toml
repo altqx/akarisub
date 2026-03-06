@@ -1,0 +1,18 @@
+[package]
+name = "akarisub-harfbuzz-sys"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Raw FFI bindings for HarfBuzz used by AkariSub"
+
+[lib]
+name = "akarisub_harfbuzz_sys"
+
+[dependencies]
+akarisub-freetype-sys = { path = "../freetype-sys" }
+
+[build-dependencies]
+akarisub-build-support = { path = "../build-support" }
+cc.workspace = true

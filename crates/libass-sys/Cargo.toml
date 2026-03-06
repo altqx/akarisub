@@ -1,0 +1,21 @@
+[package]
+name = "akarisub-libass-sys"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Raw FFI bindings for libass used by AkariSub"
+
+[lib]
+name = "akarisub_libass_sys"
+
+[dependencies]
+akarisub-fontconfig-sys = { path = "../fontconfig-sys" }
+akarisub-freetype-sys = { path = "../freetype-sys" }
+akarisub-fribidi-sys = { path = "../fribidi-sys" }
+akarisub-harfbuzz-sys = { path = "../harfbuzz-sys" }
+
+[build-dependencies]
+akarisub-build-support = { path = "../build-support" }
+cc.workspace = true

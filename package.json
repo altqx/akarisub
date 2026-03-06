@@ -1,0 +1,40 @@
+{
+  "name": "akarisub",
+  "version": "0.1.0",
+  "author": "altqx",
+  "license": "MIT",
+  "description": "AkariSub",
+  "type": "module",
+  "main": "dist/index.js",
+  "module": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "require": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    },
+    "./pkg": {
+      "import": "./pkg/akarisub.js",
+      "types": "./pkg/akarisub.d.ts"
+    }
+  },
+  "files": [
+    "dist",
+    "pkg",
+    "src/wrapper.ts"
+  ],
+  "scripts": {
+    "build:wasm": "wasm-pack build --target web --out-dir pkg",
+    "build:wasm:release": "wasm-pack build --release --target web --out-dir pkg",
+    "build:ts": "tsc",
+    "build": "bun run build:wasm:release && bun run build:ts",
+    "clean": "rm -rf dist pkg target",
+    "test": "cargo test",
+    "format": "cargo fmt && prettier . --write"
+  },
+  "devDependencies": {
+    "prettier": "^3.8.1",
+    "typescript": "^5.9.3"
+  }
+}

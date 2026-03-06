@@ -1,0 +1,60 @@
+[workspace]
+members = [
+	".",
+	"crates/akarisub-native",
+	"crates/build-support",
+	"crates/brotli-sys",
+	"crates/expat-sys",
+	"crates/fontconfig-sys",
+	"crates/freetype-sys",
+	"crates/fribidi-sys",
+	"crates/harfbuzz-sys",
+	"crates/libass-sys"
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["altqx"]
+license = "MIT"
+repository = "https://github.com/altqx/akari"
+
+[workspace.dependencies]
+wasm-bindgen = "0.2.111"
+js-sys = "0.3.88"
+web-sys = { version = "0.3.88", features = ["console"] }
+console_error_panic_hook = "0.1.7"
+cc = "1.2.29"
+
+
+[package]
+name = "akarisub"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Rust wasm-pack migration target for AkariSub"
+keywords = ["subtitle", "ass", "libass", "wasm", "rust"]
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = ["console_error_panic_hook"]
+
+[dependencies]
+akarisub-native = { path = "crates/akarisub-native" }
+console_error_panic_hook = { workspace = true, optional = true }
+js-sys.workspace = true
+wasm-bindgen.workspace = true
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = ["-O4", "--enable-simd"]

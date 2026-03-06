@@ -1,0 +1,15 @@
+[package]
+name = "akarisub-freetype-sys"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Raw FFI bindings for FreeType used by AkariSub"
+
+[lib]
+name = "akarisub_freetype_sys"
+
+[build-dependencies]
+akarisub-build-support = { path = "../build-support" }
+cc.workspace = true

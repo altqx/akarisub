@@ -1,0 +1,48 @@
+[tools]
+bun = 'latest'
+rust = 'stable'
+'cargo:wasm-pack' = 'latest'
+emsdk = '5.0.2'
+
+[env]
+RUSTUP_TOOLCHAIN = 'stable'
+
+[tasks.install]
+description = 'Install package dependencies'
+run = 'bun install'
+
+[tasks.setup]
+description = 'Prepare the Rust wasm targets used by akarisub-rs'
+run = 'rustup target add wasm32-unknown-unknown wasm32-wasip1'
+
+[tasks.doctor]
+description = 'Show the active toolchain versions'
+run = 'bun --version && rustc --version && cargo --version && wasm-pack --version && emcc --version'
+
+[tasks.build]
+description = 'Build WASM and TypeScript outputs'
+run = 'bun run build'
+
+[tasks."build:wasm"]
+description = 'Build the wasm package'
+run = 'bun run build:wasm'
+
+[tasks."build:wasm:release"]
+description = 'Build the wasm package in release mode'
+run = 'bun run build:wasm:release'
+
+[tasks."build:ts"]
+description = 'Build TypeScript outputs'
+run = 'bun run build:ts'
+
+[tasks.clean]
+description = 'Remove build artifacts'
+run = 'bun run clean'
+
+[tasks.format]
+description = 'Format Rust and TypeScript sources'
+run = 'bun run format'
+
+[tasks.test]
+description = 'Run Rust tests'
+run = 'cargo test'
