@@ -1530,24 +1530,22 @@ self.init = async (data: any): Promise<void> => {
       if (debug) console.warn('[AkariSub] Prewarm render failed, continuing:', e)
     }
 
+    try {
+      await prewarmEntireTrack()
+    } catch (e) {
+      if (debug) console.warn('[AkariSub] Full track warmup failed, continuing:', e)
+    }
+
+    try {
+      prewarmRenderer(getCurrentTime())
+    } catch (e) {
+      if (debug) console.warn('[AkariSub] Post-warmup re-prime failed, continuing:', e)
+    }
+
     forceNextDemandRender = true
 
     postMessage({ target: 'ready' })
     postMessage({ target: 'verifyColorSpace', subtitleColorSpace })
-
-    void (async () => {
-      try {
-        await prewarmEntireTrack()
-      } catch (e) {
-        if (debug) console.warn('[AkariSub] Full track warmup failed, continuing:', e)
-      }
-
-      try {
-        prewarmRenderer(getCurrentTime())
-      } catch (e) {
-        if (debug) console.warn('[AkariSub] Post-warmup re-prime failed, continuing:', e)
-      }
-    })()
   }
 
   loadWasm(data.wasmUrl).then(onWasmLoaded).catch((e) => {
