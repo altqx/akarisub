@@ -164,6 +164,9 @@ const PREWARM_MAX_IMAGES = RENDER_COLLECT_MAX_IMAGES
 const WARMUP_AHEAD_SECONDS = 30
 const WARMUP_STEP_SECONDS = 0.5
 const WARMUP_TICK_MS = 40
+const FULL_WARMUP_CAP_SECONDS = 30
+const FULL_WARMUP_STEP_SECONDS = 1
+const FULL_WARMUP_YIELD_EVERY = 120
 const imagePool: RenderResultItem[] = new Array(MAX_POOLED_IMAGES)
 let poolInitialized = false
 const RR_META_STRIDE = 6
@@ -183,6 +186,8 @@ let warmupCursorTime = 0
 let warmupEndTime = 0
 let warmupEnabled = false
 let firstTrackEventStartTime: number | null = null
+
+const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
 
 interface RenderResultItem {
   w: number
@@ -290,6 +295,60 @@ const getFirstEventStartTime = (): number | null => {
 
   if (!Number.isFinite(firstStart)) return null
   return Math.max(0, firstStart)
+}
+
+const getTrackEventTimeRange = (): { start: number; end: number } | null => {
+  if (!akariSubHandle) return null
+
+  const api = requireApi()
+  const handle = requireHandle()
+  const count = api.getEventCount(handle)
+  if (count <= 0) return null
+
+  let start = Number.POSITIVE_INFINITY
+  let end = 0
+
+  for (let i = 0; i < count; i++) {
+    const eventStart = api.eventGetInt(handle, i, EVENT_INT_FIELDS.Start)
+    const eventDuration = Math.max(0, api.eventGetInt(handle, i, EVENT_INT_FIELDS.Duration))
+
+    if (!Number.isFinite(eventStart)) continue
+
+    const eventEnd = eventStart + eventDuration
+    if (eventStart < start) start = eventStart
+    if (eventEnd > end) end = eventEnd
+  }
+
+  if (!Number.isFinite(start)) return null
+  if (end < start) end = start
+
+  return {
+    start: Math.max(0, start),
+    end: Math.max(0, end)
+  }
+}
+
+const prewarmEntireTrack = async (): Promise<void> => {
+  if (!akariSubHandle) return
+
+  const range = getTrackEventTimeRange()
+  if (!range) return
+
+  const cappedEnd = Math.min(range.end, range.start + FULL_WARMUP_CAP_SECONDS)
+
+  let ticks = 0
+
+  for (let time = range.start; time <= cappedEnd; time += FULL_WARMUP_STEP_SECONDS) {
+    if (!akariSubHandle) return
+    prewarmRenderer(time)
+    ticks++
+
+    if (ticks % FULL_WARMUP_YIELD_EVERY === 0) {
+      await sleep(0)
+    }
+  }
+
+  prewarmRenderer(cappedEnd)
 }
 
 const getWarmupAnchorTime = (fallbackTime: number): number => {
@@ -1407,6 +1466,12 @@ self.init = async (data: any): Promise<void> => {
       prewarmRenderer(lastCurrentTime)
     } catch (e) {
       if (debug) console.warn('[AkariSub] Prewarm render failed, continuing:', e)
+    }
+
+    try {
+      await prewarmEntireTrack()
+    } catch (e) {
+      if (debug) console.warn('[AkariSub] Full track warmup failed, continuing:', e)
     }
 
     startWarmupWindow(getWarmupAnchorTime(lastCurrentTime))
