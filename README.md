@@ -5,9 +5,7 @@
   JavaScript SSA/ASS Subtitle Renderer.
 </p>
 
-> **Note:** This is a fork of [ThaUnknown's JASSUB](https://github.com/ThaUnknown/jassub) legacy version with hyper optimizations, intelligent caching, and many quality-of-life improvements.
-
-AkariSub is a JS wrapper for <a href="https://github.com/libass/libass">libass</a>, which renders <a href="https://en.wikipedia.org/wiki/SubStation_Alpha">SSA/ASS subtitles</a> directly in your browser. It uses Emscripten to compile libass' C++ code to WASM.
+AkariSub is a JS wrapper around a Rust-powered <a href="https://github.com/libass/libass">libass</a> runtime, which renders <a href="https://en.wikipedia.org/wiki/SubStation_Alpha">SSA/ASS subtitles</a> directly in your browser. It uses WebAssembly for rendering, worker offload, and GPU-friendly browser integration.
 
 ## Features
 
@@ -22,80 +20,108 @@ AkariSub is a JS wrapper for <a href="https://github.com/libass/libass">libass</
 - Benefits from hardware acceleration (uses hardware accelerated canvas API's)
 - Doesn't manipulate the DOM to render subtitles
 - Easy to use - just connect it to video element
+- Supports Canvas2D, WebGL2, and WebGPU rendering backends with automatic fallback
+- Supports OffscreenCanvas worker rendering when available
+- Provides event/style editing, style override, and runtime font management APIs
+- Includes built-in statistics reporting for performance monitoring
+- Ships first-class TypeScript definitions
 
-### Fork Enhancements
+## Installation
 
-- **WebGPU Support** - Hardware-accelerated rendering using the modern WebGPU API [(on browsers which support it)](https://caniuse.com/webgpu)
-- **Hyper Optimizations** - Performance improvements and intelligent caching for smoother playback
-- **Proper Fontconfig Implementation** - add Fontconfig support with multiple fallback fonts supported
-- **Statistics Reporting** - Built-in statistics and performance metrics for debugging and monitoring
-- **TypeScript Support** - Full TypeScript definitions and type safety
-- **Updated Dependencies** - All dependencies updated to their latest versions, including libass
+**npm / bun**
+
+```bash
+npm install akarisub
+# or
+bun add akarisub
+```
 
 ## Usage
 
-By default all you need to do is copy the files from the `dist/` folder of the repository into the same folder as where your JS runs, then do:
+### High-Level API (Video Integration)
 
-```js
-import AkariSub from './akarisub.es.js'
+The high-level API handles video synchronization, canvas overlay creation, resize handling, and subtitle loading for you.
 
-const renderer = new AkariSub({
-  video: document.querySelector('video'),
-  subUrl: './tracks/sub.ass'
-})
-```
-
-`Note:` while the `dist/` folder includes a UMD dist it still uses modern syntax. If you want backwards compatibility with older browsers I recommend you run it tru babel.
-
-If you use a bundler like Vite, you can instead do:
-
-```js
+```typescript
 import AkariSub from 'akarisub'
-import workerUrl from 'akarisub/dist/akarisub-worker.js?url'
-import wasmUrl from 'akarisub/dist/akarisub-worker.wasm?url'
 
 const renderer = new AkariSub({
-  video: document.querySelector('video'),
-  subContent: subtitleString,
-  workerUrl, // you can also use: `new URL('akarisub/dist/akarisub-worker.js', import.meta.url)` instead of importing it as an url
-  wasmUrl
+  video: videoElement,
+  subUrl: '/subtitles/movie.ass',
+  renderer: 'auto',
+  onCanvasFallback: () => {
+    console.log('GPU renderer unavailable, using Canvas2D')
+  }
+})
+
+renderer.addEventListener('ready', () => {
+  console.log('Subtitles ready')
+})
+
+renderer.addEventListener('error', (event) => {
+  console.error('Subtitle error:', (event as CustomEvent<Error>).detail)
+})
+
+// When done:
+renderer.destroy()
+```
+
+You can also load subtitles directly from a string:
+
+```typescript
+import AkariSub from 'akarisub'
+
+const response = await fetch('/subtitles/movie.ass')
+const subtitleText = await response.text()
+
+const renderer = new AkariSub({
+  video: videoElement,
+  subContent: subtitleText
 })
 ```
 
-## Using only with canvas
+### Canvas-Only Usage
 
-You're also able to use it without any video. However, that requires you to set the time the subtitles should render at yourself:
+If you are rendering without a bound video element, provide a canvas and drive subtitle timing manually:
 
-```js
-import AkariSub from './akarisub.es.js'
+```typescript
+import AkariSub from 'akarisub'
 
 const renderer = new AkariSub({
-  canvas: document.querySelector('canvas'),
-  subUrl: './tracks/sub.ass'
+  canvas: canvasElement,
+  subUrl: '/subtitles/movie.ass'
 })
 
-renderer.setCurrentTime(15)
+renderer.setCurrentTime(false, 15)
+renderer.setRate(1)
 ```
 
-## Changing subtitles
+### Runtime Track Updates
 
-You're not limited to only display the subtitle file you referenced in your options. You're able to dynamically change subtitles on the fly. There's three methods that you can use for this specifically:
+You can replace or clear subtitle tracks at runtime:
 
-- `setTrackByUrl(url):` works the same as the `subUrl` option. It will set the subtitle to display by its URL.
-- `setTrack(content):` works the same as the `subContent` option. It will set the subtitle to display by its content.
-- `freeTrack():` this simply removes the subtitles. You can use the two methods above to set a new subtitle file to be displayed.
-
-```js
-renderer.setTrackByUrl('/newsub.ass')
+```typescript
+renderer.setTrackByUrl('/subtitles/alternate.ass')
+renderer.setTrack(assSubtitleString)
+renderer.freeTrack()
 ```
 
-## Cleaning up the object
+### Optional WASM Initialization
 
-After you're finished with rendering the subtitles. You need to call the `destroy()` method to correctly destroy the object.
+The high-level renderer initializes the WASM runtime automatically. If you are using the lower-level exports directly, you can initialize it yourself:
 
-```js
+```typescript
+import { initWasm } from 'akarisub'
+
+await initWasm('/akarisub/pkg/akarisub_bg.wasm')
+```
+
+## Lifecycle
+
+Destroy the renderer when you are finished with it:
+
+```typescript
 const renderer = new AkariSub(options)
-// After you've finished using it...
 renderer.destroy()
 ```
 
@@ -154,9 +180,9 @@ console.log(`Events: ${eventCount}, Styles: ${styleCount}`)
 | `cacheHits` | number | Number of cache hits (unchanged frames) |
 | `cacheMisses` | number | Number of cache misses (rendered frames) |
 
-## WebGPU Rendering
+## Renderer Selection
 
-AkariSub automatically uses WebGPU for GPU-accelerated rendering when available, with automatic fallback to Canvas2D:
+AkariSub automatically prefers the fastest available renderer in this order: WebGPU, WebGL2, then Canvas2D. You can also force a specific renderer and listen for canvas fallback:
 
 ```typescript
 import AkariSub from 'akarisub'
@@ -164,15 +190,15 @@ import AkariSub from 'akarisub'
 const renderer = new AkariSub({
   video: document.querySelector('video'),
   subUrl: './tracks/sub.ass',
-  preferWebGPU: true, // Enable WebGPU (default: true)
-  onWebGPUFallback: () => {
-    console.log('WebGPU unavailable, using Canvas2D fallback')
+  renderer: 'webgpu',
+  onCanvasFallback: () => {
+    console.log('Requested GPU renderer unavailable, using Canvas2D fallback')
   }
 })
 
-// Check if WebGPU is being used
-if (renderer.isUsingWebGPU) {
-  console.log('GPU-accelerated rendering enabled!')
+// Check the active renderer
+if (renderer.rendererType === 'webgpu') {
+  console.log('WebGPU rendering enabled!')
 }
 ```
 
@@ -184,8 +210,8 @@ The default options are best, and automatically fallback to the next fastest opt
 |--------|------|---------|-------------|
 | `video` | HTMLVideoElement | - | Video to use as target for rendering and event listeners |
 | `canvas` | HTMLCanvasElement | - | Canvas to use for manual handling (optional if video is provided) |
-| `blendMode` | `'js'` \| `'wasm'` | `'wasm'` | Image blending mode. WASM is better for low-end devices, JS for hardware acceleration |
-| `asyncRender` | boolean | `true` | Use async rendering with ImageBitmap for GPU offloading |
+| `blendMode` | `'js'` \| `'wasm'` | - | Deprecated compatibility option. Ignored by the Rust runtime wrapper |
+| `asyncRender` | boolean | - | Deprecated compatibility option. Ignored by the Rust runtime wrapper |
 | `offscreenRender` | boolean | `true` | Render fully on the worker, greatly reduces CPU usage |
 | `onDemandRender` | boolean | `true` | Render subtitles as the video player renders frames |
 | `targetFps` | number | `24` | Target FPS when not using onDemandRender |
@@ -197,18 +223,18 @@ The default options are best, and automatically fallback to the next fastest opt
 | `dropAllAnimations` | boolean | `false` | Discard all animated tags for performance |
 | `dropAllBlur` | boolean | `false` | Drop all blur effects (~10x performance gain) |
 | `clampPos` | boolean | `false` | Clamp `\pos` values to script resolution |
-| `workerUrl` | string | `'akarisub-worker.js'` | URL to the worker script |
-| `wasmUrl` | string | `'akarisub-worker.wasm'` | URL to the WASM binary |
+| `workerUrl` | string \/ URL | internal bundled worker | Optional URL for the worker module, for example `/akarisub/dist/ts/worker.js` |
+| `wasmUrl` | string \/ URL | package-resolved WASM | Optional URL for the WASM binary, for example `/akarisub/pkg/akarisub_bg.wasm` |
 | `subUrl` | string | - | URL of the subtitle file to play |
 | `subContent` | string | - | Content of the subtitle file to play |
 | `fonts` | (string \| Uint8Array)[] | - | Array of font URLs or Uint8Arrays to force load |
 | `availableFonts` | Record<string, string \| Uint8Array> | `{'liberation sans': './default.woff2'}` | Available fonts map (lowercase name → URL/data) |
-| `fallbackFont` | string | `'liberation sans'` | Fallback font family key |
+| `fallbackFonts` | string[] | - | Ordered list of fallback font family names |
 | `useLocalFonts` | boolean | `false` | Use Local Font Access API if available |
 | `libassMemoryLimit` | number | - | libass bitmap cache memory limit in MiB |
 | `libassGlyphLimit` | number | - | libass glyph cache limit |
-| `preferWebGPU` | boolean | `true` | Prefer WebGPU renderer if available |
-| `onWebGPUFallback` | function | - | Callback when WebGPU is unavailable |
+| `renderer` | `'auto' \| 'canvas2d' \| 'webgl2' \| 'webgpu'` | `'auto'` | Preferred renderer backend |
+| `onCanvasFallback` | function | - | Callback fired when a requested GPU renderer falls back to Canvas2D |
 
 ## Methods
 
@@ -226,14 +252,14 @@ The default options are best, and automatically fallback to the next fastest opt
 |--------|------------|-------------|
 | `setIsPaused(isPaused)` | `isPaused: boolean` | Set playback pause state |
 | `setRate(rate)` | `rate: number` | Set playback rate (speed multiplier) |
-| `setCurrentTime(isPaused?, currentTime?, rate?)` | `isPaused?: boolean, currentTime?: number, rate?: number` | Set current time, playback state and rate |
+| `setCurrentTime(isPaused?, currentTime?, rate?)` | `isPaused?: boolean, currentTime?: number, rate?: number` | Set current time, optionally request an immediate paused render, and update playback rate |
 
 ### Video & Canvas
 
 | Method | Parameters | Description |
 |--------|------------|-------------|
 | `setVideo(video)` | `video: HTMLVideoElement` | Change target video element |
-| `resize(width?, height?, top?, left?, force?)` | `width?: number, height?: number, top?: number, left?: number, force?: boolean` | Resize the canvas |
+| `resize()` | - | Re-sync the overlay canvas to the current video/canvas size and force a render |
 
 ### Event Management
 
@@ -268,18 +294,17 @@ The default options are best, and automatically fallback to the next fastest opt
 
 | Method | Parameters | Returns | Description |
 |--------|------------|---------|-------------|
-| `getStats()` | - | `Promise<PerformanceStats>` | Get performance statistics |
+| `getStats()` | - | `Promise<BrowserRendererPerformanceStats>` | Get performance statistics |
 | `resetStats()` | - | `Promise<void>` | Reset statistics counters |
 | `getEventCount()` | - | `Promise<number>` | Get event count (lightweight) |
 | `getStyleCount()` | - | `Promise<number>` | Get style count (lightweight) |
-| `runBenchmark()` | - | `void` | Run a benchmark on the worker |
+| `runBenchmark()` | - | `void` | Deprecated compatibility stub. Currently logs a warning |
 
 ### Lifecycle
 
 | Method | Parameters | Description |
 |--------|------------|-------------|
 | `destroy(err?)` | `err?: Error \| string` | Destroy the renderer and cleanup |
-| `sendMessage(target, data?, transferable?)` | `target: string, data?: Record<string, any>, transferable?: Transferable[]` | Send data to worker |
 
 ## Properties
 
@@ -291,7 +316,9 @@ The default options are best, and automatically fallback to the next fastest opt
 | `maxRenderHeight` | number | Maximum render height |
 | `timeOffset` | number | Subtitle time offset in seconds |
 | `busy` | boolean | Whether the renderer is currently busy |
-| `isUsingWebGPU` | boolean | Whether WebGPU renderer is active (read-only) |
+| `renderAhead` | number | Render-ahead offset in seconds |
+| `rendererType` | `'canvas2d' \| 'webgl2' \| 'webgpu'` | Active renderer backend (read-only) |
+| `offscreenRender` | boolean | Whether OffscreenCanvas rendering is active (read-only) |
 
 ## Type Definitions
 
@@ -343,46 +370,45 @@ The default options are best, and automatically fallback to the next fastest opt
 | `Blur` | number | Blur amount |
 | `Justify` | number | Text justification |
 
-# How to build?
+## Build
 
-## Dependencies
+### Get the Source
 
-- git
-- emscripten (Configure the enviroment)
-- make
-- python3
-- cmake
-- pkgconfig
-- patch
-- libtool
-- autotools (autoconf, automake, autopoint)
-- gettext
-- ragel - Required by Harfbuzz
-- itstool - Required by Fontconfig
-- gperf - Required by Fontconfig
-- licensecheck
+```
+git clone --recursive https://github.com/altqx/akarisub.git
+```
 
-## Get the Source
+### Prerequisites
 
-Run git clone --recursive https://github.com/altqx/akarisub.git
+- Rust toolchain with `cargo`
+- `wasm-pack`
+- Bun
 
-## Build inside a Container
+### Install Dependencies
 
-### Docker
+```bash
+bun install
+```
 
-1. Install Docker
-2. ./run-docker-build.sh
-3. Artifacts are in /dist/js
+### Build
 
-### Buildah
+```bash
+bun run build
+```
 
-1. Install Buildah and a suitable backend for buildah run like crun or runc
-2. ./run-buildah-build.sh
-3. Artifacts are in /dist/js
+This runs the release WebAssembly build and then generates the TypeScript wrapper output.
 
-## Build without Containers
+### Development Builds
 
-1. Install the dependency packages listed above
-2. make
-   - If on macOS with libtool from brew, LIBTOOLIZE=glibtoolize make
-3. Artifacts are in /dist/js
+```bash
+bun run build:wasm
+bun run build:ts
+```
+
+### Other Useful Commands
+
+```bash
+bun run clean
+bun run test
+bun run format
+```
