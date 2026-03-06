@@ -365,10 +365,9 @@ fn fontconfig_sources(src_dir: &Path) -> Vec<PathBuf> {
   .collect()
 }
 
-fn fontconfig_defines() -> [(&'static str, Option<&'static str>); 9] {
+fn fontconfig_defines() -> [(&'static str, Option<&'static str>); 8] {
   [
     ("HAVE_CONFIG_H", Some("1")),
-    ("BINDGEN_IGNORE_VISIBILITY", Some("1")),
     ("FC_NO_MT", Some("1")),
     ("FC_CACHEDIR", Some("\"\"")),
     ("CONFIGDIR", Some("\"\"")),

@@ -65,7 +65,7 @@ const applyInit = (activeRenderer: AkariSubRenderer, data: WorkerInitMessage): v
 const handleMessage = async (data: AkariSubWorkerInboundMessage): Promise<void> => {
   switch (data.type) {
     case 'init': {
-      renderer = await AkariSubRenderer.create()
+      renderer = await AkariSubRenderer.createWithWasmUrl(data.wasmUrl)
       applyInit(renderer, data)
       post({
         type: 'ready',
@@ -122,6 +122,81 @@ const handleMessage = async (data: AkariSubWorkerInboundMessage): Promise<void> 
       const activeRenderer = ensureRenderer()
       activeRenderer.loadTrackFromUtf8(data.subtitleData)
       postAck('load-track')
+      return
+    }
+
+    case 'set-default-font': {
+      const activeRenderer = ensureRenderer()
+      activeRenderer.setDefaultFont(data.font)
+      postAck('set-default-font')
+      return
+    }
+
+    case 'create-event': {
+      const activeRenderer = ensureRenderer()
+      const index = activeRenderer.createEvent(data.event)
+      post({ type: 'created-event', index })
+      return
+    }
+
+    case 'set-event': {
+      const activeRenderer = ensureRenderer()
+      activeRenderer.setEvent(data.index, data.event)
+      postAck('set-event')
+      return
+    }
+
+    case 'remove-event': {
+      const activeRenderer = ensureRenderer()
+      activeRenderer.removeEvent(data.index)
+      postAck('remove-event')
+      return
+    }
+
+    case 'get-events': {
+      const activeRenderer = ensureRenderer()
+      post({ type: 'events', events: activeRenderer.getEvents() })
+      return
+    }
+
+    case 'create-style': {
+      const activeRenderer = ensureRenderer()
+      const index = activeRenderer.createStyle(data.style)
+      post({ type: 'created-style', index })
+      return
+    }
+
+    case 'set-style': {
+      const activeRenderer = ensureRenderer()
+      activeRenderer.setStyle(data.index, data.style)
+      postAck('set-style')
+      return
+    }
+
+    case 'remove-style': {
+      const activeRenderer = ensureRenderer()
+      activeRenderer.removeStyle(data.index)
+      postAck('remove-style')
+      return
+    }
+
+    case 'get-styles': {
+      const activeRenderer = ensureRenderer()
+      post({ type: 'styles', styles: activeRenderer.getStyles() })
+      return
+    }
+
+    case 'style-override': {
+      const activeRenderer = ensureRenderer()
+      activeRenderer.styleOverride(data.index)
+      postAck('style-override')
+      return
+    }
+
+    case 'disable-style-override': {
+      const activeRenderer = ensureRenderer()
+      activeRenderer.disableStyleOverride()
+      postAck('disable-style-override')
       return
     }
 

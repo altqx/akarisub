@@ -1,13 +1,19 @@
 import type {
+  ASSEvent,
+  ASSStyle,
   AkariSubWorkerInboundMessage,
   AkariSubWorkerOutboundMessage,
   WorkerAckMessage,
   WorkerAttachOffscreenCanvasMessage,
+  WorkerCreatedEventMessage,
+  WorkerCreatedStyleMessage,
   WorkerConfigureCanvasMessage,
+  WorkerEventsMessage,
   WorkerInitMessage,
   WorkerRenderedCompositedFrameMessage,
   WorkerRenderedImageSlicesMessage,
   WorkerRenderedOffscreenFrameMessage,
+  WorkerStylesMessage,
 } from './worker-types'
 import type { FontConfig, FrameMargins, FrameSize, ImageSliceFrameResult, CompositedFrameResult } from './renderer'
 
@@ -90,6 +96,78 @@ export class AkariSubWorkerClient {
 
   loadTrack(subtitleData: string): Promise<WorkerAckMessage> {
     return this.waitForAck({ type: 'load-track', subtitleData }, 'load-track')
+  }
+
+  setDefaultFont(font: string | null): Promise<WorkerAckMessage> {
+    return this.waitForAck({ type: 'set-default-font', font }, 'set-default-font')
+  }
+
+  createEvent(event: Partial<ASSEvent>): Promise<number> {
+    return this.enqueue(async () => {
+      const response = await this.sendAndWait(
+        { type: 'create-event', event },
+        (outbound): outbound is WorkerCreatedEventMessage => outbound.type === 'created-event'
+      )
+
+      return response.index
+    })
+  }
+
+  setEvent(index: number, event: Partial<ASSEvent>): Promise<WorkerAckMessage> {
+    return this.waitForAck({ type: 'set-event', index, event }, 'set-event')
+  }
+
+  removeEvent(index: number): Promise<WorkerAckMessage> {
+    return this.waitForAck({ type: 'remove-event', index }, 'remove-event')
+  }
+
+  getEvents(): Promise<ASSEvent[]> {
+    return this.enqueue(async () => {
+      const response = await this.sendAndWait(
+        { type: 'get-events' },
+        (outbound): outbound is WorkerEventsMessage => outbound.type === 'events'
+      )
+
+      return response.events
+    })
+  }
+
+  createStyle(style: Partial<ASSStyle>): Promise<number> {
+    return this.enqueue(async () => {
+      const response = await this.sendAndWait(
+        { type: 'create-style', style },
+        (outbound): outbound is WorkerCreatedStyleMessage => outbound.type === 'created-style'
+      )
+
+      return response.index
+    })
+  }
+
+  setStyle(index: number, style: Partial<ASSStyle>): Promise<WorkerAckMessage> {
+    return this.waitForAck({ type: 'set-style', index, style }, 'set-style')
+  }
+
+  removeStyle(index: number): Promise<WorkerAckMessage> {
+    return this.waitForAck({ type: 'remove-style', index }, 'remove-style')
+  }
+
+  getStyles(): Promise<ASSStyle[]> {
+    return this.enqueue(async () => {
+      const response = await this.sendAndWait(
+        { type: 'get-styles' },
+        (outbound): outbound is WorkerStylesMessage => outbound.type === 'styles'
+      )
+
+      return response.styles
+    })
+  }
+
+  styleOverride(index: number): Promise<WorkerAckMessage> {
+    return this.waitForAck({ type: 'style-override', index }, 'style-override')
+  }
+
+  disableStyleOverride(): Promise<WorkerAckMessage> {
+    return this.waitForAck({ type: 'disable-style-override' }, 'disable-style-override')
   }
 
   clearTrack(): Promise<WorkerAckMessage> {

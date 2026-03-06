@@ -1,5 +1,6 @@
 import { AkariSubAsyncRenderer, type AsyncRendererCreateOptions } from './async-renderer'
 import type { FontConfig, FrameMargins, FrameSize, RenderImageSlice } from './renderer'
+import type { ASSEvent, ASSStyle } from './worker-types'
 import { WebGL2Renderer, isWebGL2Supported } from './webgl2-renderer'
 import { WebGPURenderer, isWebGPUSupported } from './webgpu-renderer'
 
@@ -19,6 +20,11 @@ export interface BrowserRendererOptions {
   cacheLimits?: AsyncRendererCreateOptions['cacheLimits']
   workerOptions?: Omit<AsyncRendererCreateOptions, 'frame' | 'storage' | 'margins' | 'fonts' | 'cacheLimits'>
   autoRender?: boolean
+  onDemandRender?: boolean
+  targetFps?: number
+  prescaleFactor?: number
+  prescaleHeightLimit?: number
+  maxRenderHeight?: number
   renderer?: BrowserRendererType | 'auto'
   offscreenRender?: boolean
   onCanvasFallback?: () => void
@@ -75,6 +81,12 @@ export class AkariSubCanvasRenderer {
   private readonly rendererTypeValue: BrowserRendererType
   private readonly usesOffscreenCanvasValue: boolean
   private readonly gpuRenderer: GpuRenderer | null
+  private readonly useVideoFrameCallback: boolean
+  private readonly targetFrameIntervalMs: number
+  private readonly prescaleFactor: number
+  private readonly prescaleHeightLimit: number
+  private readonly maxRenderHeight: number
+  private fontConfig: FontConfig
   private pendingRenders = 0
   private framesRendered = 0
   private framesDropped = 0
@@ -90,6 +102,7 @@ export class AkariSubCanvasRenderer {
   private destroyed = false
   private rendering = false
   private autoRenderEnabled: boolean
+  private nextAnimationFrameAt = 0
 
   private constructor(
     renderer: AkariSubAsyncRenderer,
@@ -101,7 +114,13 @@ export class AkariSubCanvasRenderer {
     autoRender = true,
     rendererType: BrowserRendererType = 'canvas2d',
     usesOffscreenCanvas = false,
-    gpuRenderer: GpuRenderer | null = null
+    gpuRenderer: GpuRenderer | null = null,
+    fontConfig: FontConfig = {},
+    onDemandRender = true,
+    targetFps = 24,
+    prescaleFactor = 1,
+    prescaleHeightLimit = 1080,
+    maxRenderHeight = 0
   ) {
     this.renderer = renderer
     this.canvas = canvas
@@ -113,6 +132,12 @@ export class AkariSubCanvasRenderer {
     this.rendererTypeValue = rendererType
     this.usesOffscreenCanvasValue = usesOffscreenCanvas
     this.gpuRenderer = gpuRenderer
+    this.fontConfig = { ...fontConfig }
+    this.useVideoFrameCallback = onDemandRender && Boolean(video?.requestVideoFrameCallback)
+    this.targetFrameIntervalMs = targetFps > 0 ? 1000 / targetFps : 0
+    this.prescaleFactor = prescaleFactor
+    this.prescaleHeightLimit = prescaleHeightLimit
+    this.maxRenderHeight = maxRenderHeight
   }
 
   static async create(options: BrowserRendererOptions): Promise<AkariSubCanvasRenderer> {
@@ -181,7 +206,13 @@ export class AkariSubCanvasRenderer {
       options.autoRender ?? true,
       selection.rendererType,
       usesOffscreenCanvas,
-      gpuRenderer
+      gpuRenderer,
+      options.fonts,
+      options.onDemandRender ?? true,
+      options.targetFps ?? 24,
+      options.prescaleFactor ?? 1,
+      options.prescaleHeightLimit ?? 1080,
+      options.maxRenderHeight ?? 0
     )
 
     if (resizeObserver && options.video) {
@@ -245,7 +276,7 @@ export class AkariSubCanvasRenderer {
       renderFps: this.framesRendered / (elapsedMs / 1000),
       usingWorker: true,
       offscreenRender: this.usesOffscreenCanvasValue,
-      onDemandRender: Boolean(this.video?.requestVideoFrameCallback),
+      onDemandRender: this.useVideoFrameCallback,
       pendingRenders: this.pendingRenders,
       totalEvents: this.eventCount,
       cacheHits: this.cacheHits,
@@ -268,11 +299,66 @@ export class AkariSubCanvasRenderer {
   }
 
   async setFonts(fonts: FontConfig): Promise<void> {
+    this.fontConfig = { ...fonts }
     await this.renderer.setFonts(fonts)
+  }
+
+  async setDefaultFont(font: string | null): Promise<void> {
+    this.fontConfig = {
+      ...this.fontConfig,
+      defaultFont: font,
+    }
+    await this.renderer.setDefaultFont(font)
   }
 
   async addFont(name: string, data: Uint8Array): Promise<void> {
     await this.renderer.addFont(name, data)
+  }
+
+  createEvent(event: Partial<ASSEvent>): Promise<number> {
+    return this.renderer.createEvent(event)
+  }
+
+  async setEvent(index: number, event: Partial<ASSEvent>): Promise<void> {
+    await this.renderer.setEvent(index, event)
+    await this.renderCurrentFrame(true)
+  }
+
+  async removeEvent(index: number): Promise<void> {
+    await this.renderer.removeEvent(index)
+    await this.renderCurrentFrame(true)
+  }
+
+  getEvents(): Promise<ASSEvent[]> {
+    return this.renderer.getEvents()
+  }
+
+  createStyle(style: Partial<ASSStyle>): Promise<number> {
+    return this.renderer.createStyle(style)
+  }
+
+  async setStyle(index: number, style: Partial<ASSStyle>): Promise<void> {
+    await this.renderer.setStyle(index, style)
+    await this.renderCurrentFrame(true)
+  }
+
+  async removeStyle(index: number): Promise<void> {
+    await this.renderer.removeStyle(index)
+    await this.renderCurrentFrame(true)
+  }
+
+  getStyles(): Promise<ASSStyle[]> {
+    return this.renderer.getStyles()
+  }
+
+  async styleOverride(index: number): Promise<void> {
+    await this.renderer.styleOverride(index)
+    await this.renderCurrentFrame(true)
+  }
+
+  async disableStyleOverride(): Promise<void> {
+    await this.renderer.disableStyleOverride()
+    await this.renderCurrentFrame(true)
   }
 
   async clearTrack(): Promise<void> {
@@ -296,7 +382,29 @@ export class AkariSubCanvasRenderer {
     this.cancelScheduledFrame()
   }
 
+  async renderAt(timestampMs: number, force = false): Promise<void> {
+    await this.renderFrameAt(timestampMs, force)
+  }
+
+  resetStats(): void {
+    this.pendingRenders = 0
+    this.framesRendered = 0
+    this.framesDropped = 0
+    this.totalRenderTime = 0
+    this.maxRenderTime = 0
+    this.minRenderTime = Number.POSITIVE_INFINITY
+    this.lastRenderTime = 0
+    this.cacheHits = 0
+    this.cacheMisses = 0
+    this.nextAnimationFrameAt = 0
+  }
+
   async renderCurrentFrame(force = false): Promise<void> {
+    const timestampMs = this.video ? Math.round(this.video.currentTime * 1000) : 0
+    await this.renderFrameAt(timestampMs, force)
+  }
+
+  private async renderFrameAt(timestampMs: number, force = false): Promise<void> {
     if (this.destroyed) return
 
     if (this.pendingRenders > 0 && !force) {
@@ -308,8 +416,6 @@ export class AkariSubCanvasRenderer {
     this.pendingRenders++
 
     try {
-      const timestampMs = this.video ? Math.round(this.video.currentTime * 1000) : 0
-
       if (this.rendererTypeValue === 'canvas2d') {
         if (this.usesOffscreenCanvasValue) {
           const frame = await this.renderer.renderOffscreenFrame(timestampMs, force)
@@ -379,7 +485,7 @@ export class AkariSubCanvasRenderer {
   private scheduleNextFrame(): void {
     if (!this.rendering || this.destroyed) return
 
-    if (this.video?.requestVideoFrameCallback) {
+    if (this.useVideoFrameCallback && this.video?.requestVideoFrameCallback) {
       this.rvfcId = this.video.requestVideoFrameCallback(async () => {
         this.rvfcId = null
         await this.renderCurrentFrame(false)
@@ -388,8 +494,15 @@ export class AkariSubCanvasRenderer {
       return
     }
 
-    this.rafId = requestAnimationFrame(async () => {
+    this.rafId = requestAnimationFrame(async (now) => {
       this.rafId = null
+
+      if (this.targetFrameIntervalMs > 0 && now < this.nextAnimationFrameAt) {
+        this.scheduleNextFrame()
+        return
+      }
+
+      this.nextAnimationFrameAt = now + this.targetFrameIntervalMs
       await this.renderCurrentFrame(false)
       this.scheduleNextFrame()
     })

@@ -1,4 +1,5 @@
 import { createEngine, type WasmEngineModule } from './wasm'
+import type { ASSEvent, ASSStyle } from './worker-types'
 
 export interface FrameSize {
   width: number
@@ -54,6 +55,11 @@ export class AkariSubRenderer {
     return new AkariSubRenderer(engine)
   }
 
+  static async createWithWasmUrl(wasmUrl?: string): Promise<AkariSubRenderer> {
+    const engine = await createEngine(wasmUrl)
+    return new AkariSubRenderer(engine)
+  }
+
   get runtimeVersion(): string {
     return this.engine.version()
   }
@@ -95,6 +101,10 @@ export class AkariSubRenderer {
     this.engine.setFonts(config.defaultFont ?? null, config.fallbackFonts?.join(',') ?? null, config.fontConfigPath ?? null)
   }
 
+  setDefaultFont(font: string | null): void {
+    this.engine.setDefaultFont(font)
+  }
+
   addFont(name: string, data: Uint8Array): void {
     this.engine.addFont(name, data)
   }
@@ -109,6 +119,46 @@ export class AkariSubRenderer {
 
   clearTrack(): void {
     this.engine.clearTrack()
+  }
+
+  createEvent(event: Partial<ASSEvent>): number {
+    return this.engine.createEvent(event)
+  }
+
+  setEvent(index: number, event: Partial<ASSEvent>): void {
+    this.engine.setEvent(index, event)
+  }
+
+  removeEvent(index: number): void {
+    this.engine.removeEvent(index)
+  }
+
+  getEvents(): ASSEvent[] {
+    return this.engine.getEvents() as ASSEvent[]
+  }
+
+  createStyle(style: Partial<ASSStyle>): number {
+    return this.engine.createStyle(style)
+  }
+
+  setStyle(index: number, style: Partial<ASSStyle>): void {
+    this.engine.setStyle(index, style)
+  }
+
+  removeStyle(index: number): void {
+    this.engine.removeStyle(index)
+  }
+
+  getStyles(): ASSStyle[] {
+    return this.engine.getStyles() as ASSStyle[]
+  }
+
+  styleOverride(index: number): void {
+    this.engine.styleOverride(index)
+  }
+
+  disableStyleOverride(): void {
+    this.engine.disableStyleOverride()
   }
 
   renderImageSlices(timestampMs: number, force = false): ImageSliceFrameResult | null {

@@ -6,12 +6,14 @@ import type {
   ImageSliceFrameResult,
 } from './renderer'
 import { AkariSubWorkerClient, type WorkerClientCreateOptions } from './worker-client'
+import type { ASSEvent, ASSStyle } from './worker-types'
 
 export interface AsyncRendererCreateOptions extends WorkerClientCreateOptions {
   frame: FrameSize
   storage?: FrameSize
   margins?: FrameMargins
   fonts?: FontConfig
+  wasmUrl?: string
   cacheLimits?: {
     glyphLimit: number
     bitmapCacheLimit: number
@@ -44,6 +46,7 @@ export class AkariSubAsyncRenderer {
       storage: options.storage,
       margins: options.margins,
       fonts: options.fonts,
+      wasmUrl: options.wasmUrl,
       cacheLimits: options.cacheLimits,
     })
 
@@ -108,6 +111,69 @@ export class AkariSubAsyncRenderer {
 
   async loadTrackFromUtf8(subtitleData: string): Promise<void> {
     const ack = await this.client.loadTrack(subtitleData)
+    this.applyAck(ack)
+  }
+
+  async setDefaultFont(font: string | null): Promise<void> {
+    const ack = await this.client.setDefaultFont(font)
+    this.applyAck(ack)
+  }
+
+  async createEvent(event: Partial<ASSEvent>): Promise<number> {
+    const index = await this.client.createEvent(event)
+    this.state = {
+      ...this.state,
+      hasTrack: true,
+      eventCount: Math.max(this.state.eventCount, index + 1),
+    }
+    return index
+  }
+
+  async setEvent(index: number, event: Partial<ASSEvent>): Promise<void> {
+    const ack = await this.client.setEvent(index, event)
+    this.applyAck(ack)
+  }
+
+  async removeEvent(index: number): Promise<void> {
+    const ack = await this.client.removeEvent(index)
+    this.applyAck(ack)
+  }
+
+  getEvents(): Promise<ASSEvent[]> {
+    return this.client.getEvents()
+  }
+
+  async createStyle(style: Partial<ASSStyle>): Promise<number> {
+    const index = await this.client.createStyle(style)
+    this.state = {
+      ...this.state,
+      hasTrack: true,
+      styleCount: Math.max(this.state.styleCount, index + 1),
+    }
+    return index
+  }
+
+  async setStyle(index: number, style: Partial<ASSStyle>): Promise<void> {
+    const ack = await this.client.setStyle(index, style)
+    this.applyAck(ack)
+  }
+
+  async removeStyle(index: number): Promise<void> {
+    const ack = await this.client.removeStyle(index)
+    this.applyAck(ack)
+  }
+
+  getStyles(): Promise<ASSStyle[]> {
+    return this.client.getStyles()
+  }
+
+  async styleOverride(index: number): Promise<void> {
+    const ack = await this.client.styleOverride(index)
+    this.applyAck(ack)
+  }
+
+  async disableStyleOverride(): Promise<void> {
+    const ack = await this.client.disableStyleOverride()
     this.applyAck(ack)
   }
 

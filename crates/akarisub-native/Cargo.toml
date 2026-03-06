@@ -15,3 +15,4 @@ akarisub-freetype-sys = { path = "../freetype-sys" }
 akarisub-fribidi-sys = { path = "../fribidi-sys" }
 akarisub-harfbuzz-sys = { path = "../harfbuzz-sys" }
 akarisub-libass-sys = { path = "../libass-sys" }
+libc = "0.2"

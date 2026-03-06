@@ -162,6 +162,7 @@ pub mod ffi {
       config: *const c_char,
       update: i32,
     );
+    pub fn ass_set_font_scale(renderer: *mut ASS_Renderer, font_scale: f64);
     pub fn ass_set_cache_limits(renderer: *mut ASS_Renderer, glyph_max: i32, bitmap_max_size: i32);
     pub fn ass_render_frame(
       renderer: *mut ASS_Renderer,
@@ -184,5 +185,7 @@ pub mod ffi {
     ) -> *mut ASS_Track;
     pub fn ass_add_font(library: *mut ASS_Library, name: *const c_char, data: *const c_char, data_size: i32);
     pub fn ass_clear_fonts(library: *mut ASS_Library);
+    pub fn ass_set_selective_style_override_enabled(renderer: *mut ASS_Renderer, bits: i32);
+    pub fn ass_set_selective_style_override(renderer: *mut ASS_Renderer, style: *mut ASS_Style);
   }
 }

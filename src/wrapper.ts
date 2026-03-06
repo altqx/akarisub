@@ -17,6 +17,7 @@ export {
   type BrowserRendererSupport,
   type BrowserRendererType,
 } from './ts/browser-renderer'
+export type { ASSEvent, ASSStyle } from './ts/worker-types'
 export { AkariSubWorkerClient, type WorkerClientCreateOptions } from './ts/worker-client'
 export {
   AkariSubAsyncRenderer,
@@ -30,11 +31,15 @@ export type {
   TransferableCompositedFrameResult,
   TransferableRenderImageSlice,
   WorkerAckMessage,
+  WorkerCreatedEventMessage,
+  WorkerCreatedStyleMessage,
   WorkerErrorMessage,
+  WorkerEventsMessage,
   WorkerInitMessage,
   WorkerReadyMessage,
   WorkerRenderedCompositedFrameMessage,
   WorkerRenderedImageSlicesMessage,
+  WorkerStylesMessage,
 } from './ts/worker-types'
 
 export type AkariSubRuntime = {
@@ -51,8 +56,19 @@ export type AkariSubRuntime = {
   setFonts(defaultFont?: string | null, fallbackFontsCsv?: string | null, fontConfigPath?: string | null): void
   addFont(name: string, data: Uint8Array | number[]): void
   clearFonts(): void
+  setDefaultFont(font?: string | null): void
   loadTrackFromUtf8(subtitleData: string): void
   clearTrack(): void
+  createEvent(event: unknown): number
+  setEvent(index: number, event: unknown): void
+  removeEvent(index: number): void
+  getEvents(): unknown[]
+  createStyle(style: unknown): number
+  setStyle(index: number, style: unknown): void
+  removeStyle(index: number): void
+  getStyles(): unknown[]
+  styleOverride(index: number): void
+  disableStyleOverride(): void
   renderFrame(timestampMs: number, force: boolean): {
     changed: number
     timestamp_ms: number

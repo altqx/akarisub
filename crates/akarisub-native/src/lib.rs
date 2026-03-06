@@ -1,10 +1,107 @@
-use std::ffi::{CString, NulError};
+use std::ffi::{CStr, CString, NulError};
 use std::ptr::NonNull;
 use std::slice;
 
 use akarisub_libass_sys::ffi::{
   self, ASS_DefaultFontProvider, ASS_Image, ASS_Library, ASS_Renderer, ASS_Track, ASS_YCbCrMatrix,
 };
+
+unsafe extern "C" {
+  fn free(ptr: *mut core::ffi::c_void);
+}
+
+const ASS_OVERRIDE_BIT_STYLE: i32 = 1 << 0;
+const ASS_OVERRIDE_BIT_SELECTIVE_FONT_SCALE: i32 = 1 << 1;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AssEventData {
+  pub start: i64,
+  pub duration: i64,
+  pub style: String,
+  pub name: String,
+  pub margin_l: i32,
+  pub margin_r: i32,
+  pub margin_v: i32,
+  pub effect: String,
+  pub text: String,
+  pub read_order: i32,
+  pub layer: i32,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AssEventPatch {
+  pub start: Option<i64>,
+  pub duration: Option<i64>,
+  pub style: Option<String>,
+  pub name: Option<String>,
+  pub margin_l: Option<i32>,
+  pub margin_r: Option<i32>,
+  pub margin_v: Option<i32>,
+  pub effect: Option<String>,
+  pub text: Option<String>,
+  pub read_order: Option<i32>,
+  pub layer: Option<i32>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct AssStyleData {
+  pub name: String,
+  pub font_name: String,
+  pub font_size: f64,
+  pub primary_colour: u32,
+  pub secondary_colour: u32,
+  pub outline_colour: u32,
+  pub back_colour: u32,
+  pub bold: i32,
+  pub italic: i32,
+  pub underline: i32,
+  pub strike_out: i32,
+  pub scale_x: f64,
+  pub scale_y: f64,
+  pub spacing: f64,
+  pub angle: f64,
+  pub border_style: i32,
+  pub outline: f64,
+  pub shadow: f64,
+  pub alignment: i32,
+  pub margin_l: i32,
+  pub margin_r: i32,
+  pub margin_v: i32,
+  pub encoding: i32,
+  pub treat_fontname_as_pattern: i32,
+  pub blur: f64,
+  pub justify: i32,
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct AssStylePatch {
+  pub name: Option<String>,
+  pub font_name: Option<String>,
+  pub font_size: Option<f64>,
+  pub primary_colour: Option<u32>,
+  pub secondary_colour: Option<u32>,
+  pub outline_colour: Option<u32>,
+  pub back_colour: Option<u32>,
+  pub bold: Option<i32>,
+  pub italic: Option<i32>,
+  pub underline: Option<i32>,
+  pub strike_out: Option<i32>,
+  pub scale_x: Option<f64>,
+  pub scale_y: Option<f64>,
+  pub spacing: Option<f64>,
+  pub angle: Option<f64>,
+  pub border_style: Option<i32>,
+  pub outline: Option<f64>,
+  pub shadow: Option<f64>,
+  pub alignment: Option<i32>,
+  pub margin_l: Option<i32>,
+  pub margin_r: Option<i32>,
+  pub margin_v: Option<i32>,
+  pub encoding: Option<i32>,
+  pub treat_fontname_as_pattern: Option<i32>,
+  pub blur: Option<f64>,
+  pub justify: Option<i32>,
+}
 
 #[derive(Debug)]
 pub enum AkariSubNativeError {
@@ -183,6 +280,13 @@ impl AkariSubNative {
     Ok(())
   }
 
+  pub fn set_default_font(&mut self, default_font: Option<&str>) -> Result<(), AkariSubNativeError> {
+    let font_config_path = self.font_config_path.as_ref().map(|path| path.to_string_lossy().into_owned());
+    let fallback_fonts_owned = self.fallback_fonts.clone();
+    let fallback_fonts = fallback_fonts_owned.iter().map(String::as_str).collect::<Vec<_>>();
+    self.set_fonts(default_font, &fallback_fonts, font_config_path.as_deref())
+  }
+
   pub fn add_font(&mut self, name: &str, data: &[u8]) -> Result<(), AkariSubNativeError> {
     let name = CString::new(name)?;
     unsafe {
@@ -241,6 +345,268 @@ impl AkariSubNative {
 
   pub fn style_count(&self) -> usize {
     self.track.map_or(0, |track| unsafe { track.as_ref().n_styles.max(0) as usize })
+  }
+
+  pub fn events(&self) -> Vec<AssEventData> {
+    let Some(track) = self.track else {
+      return Vec::new();
+    };
+
+    let track = unsafe { track.as_ref() };
+    let count = track.n_events.max(0) as usize;
+    (0..count).filter_map(|index| self.event(index)).collect()
+  }
+
+  pub fn event(&self, index: usize) -> Option<AssEventData> {
+    let event = self.get_event_ptr(index)?;
+    let event = unsafe { event.as_ref() };
+
+    Some(AssEventData {
+      start: event.start,
+      duration: event.duration,
+      style: event.style.to_string(),
+      name: read_c_string(event.name),
+      margin_l: event.margin_l,
+      margin_r: event.margin_r,
+      margin_v: event.margin_v,
+      effect: read_c_string(event.effect),
+      text: read_c_string(event.text),
+      read_order: event.read_order,
+      layer: event.layer,
+    })
+  }
+
+  pub fn create_event(&mut self, patch: &AssEventPatch) -> Option<i32> {
+    let index = self.alloc_event()?;
+    self.update_event(index as usize, patch).ok()?;
+    Some(index)
+  }
+
+  pub fn update_event(&mut self, index: usize, patch: &AssEventPatch) -> Result<(), AkariSubNativeError> {
+    let Some(mut event) = self.get_event_ptr(index) else {
+      return Ok(());
+    };
+
+    let event = unsafe { event.as_mut() };
+
+    if let Some(value) = patch.start {
+      event.start = value;
+    }
+    if let Some(value) = patch.duration {
+      event.duration = value;
+    }
+    if let Some(value) = patch.style.as_deref() {
+      event.style = self.resolve_style_reference(value);
+    }
+    if let Some(value) = patch.name.as_deref() {
+      replace_c_string(&mut event.name, value)?;
+    }
+    if let Some(value) = patch.margin_l {
+      event.margin_l = value;
+    }
+    if let Some(value) = patch.margin_r {
+      event.margin_r = value;
+    }
+    if let Some(value) = patch.margin_v {
+      event.margin_v = value;
+    }
+    if let Some(value) = patch.effect.as_deref() {
+      replace_c_string(&mut event.effect, value)?;
+    }
+    if let Some(value) = patch.text.as_deref() {
+      replace_c_string(&mut event.text, value)?;
+    }
+    if let Some(value) = patch.read_order {
+      event.read_order = value;
+    }
+    if let Some(value) = patch.layer {
+      event.layer = value;
+    }
+
+    self.clear_cached_frames();
+    Ok(())
+  }
+
+  pub fn remove_event(&mut self, index: i32) {
+    if let Some(track) = self.track {
+      unsafe {
+        ffi::ass_free_event(track.as_ptr(), index);
+      }
+      self.clear_cached_frames();
+    }
+  }
+
+  pub fn styles(&self) -> Vec<AssStyleData> {
+    let Some(track) = self.track else {
+      return Vec::new();
+    };
+
+    let track = unsafe { track.as_ref() };
+    let count = track.n_styles.max(0) as usize;
+    (0..count).filter_map(|index| self.style(index)).collect()
+  }
+
+  pub fn style(&self, index: usize) -> Option<AssStyleData> {
+    let style = self.get_style_ptr(index)?;
+    let style = unsafe { style.as_ref() };
+
+    Some(AssStyleData {
+      name: read_c_string(style.name),
+      font_name: read_c_string(style.font_name),
+      font_size: style.font_size,
+      primary_colour: style.primary_colour,
+      secondary_colour: style.secondary_colour,
+      outline_colour: style.outline_colour,
+      back_colour: style.back_colour,
+      bold: style.bold,
+      italic: style.italic,
+      underline: style.underline,
+      strike_out: style.strike_out,
+      scale_x: style.scale_x,
+      scale_y: style.scale_y,
+      spacing: style.spacing,
+      angle: style.angle,
+      border_style: style.border_style,
+      outline: style.outline,
+      shadow: style.shadow,
+      alignment: style.alignment,
+      margin_l: style.margin_l,
+      margin_r: style.margin_r,
+      margin_v: style.margin_v,
+      encoding: style.encoding,
+      treat_fontname_as_pattern: style.treat_fontname_as_pattern,
+      blur: style.blur,
+      justify: style.justify,
+    })
+  }
+
+  pub fn create_style(&mut self, patch: &AssStylePatch) -> Option<i32> {
+    let index = self.alloc_style()?;
+    self.update_style(index as usize, patch).ok()?;
+    Some(index)
+  }
+
+  pub fn update_style(&mut self, index: usize, patch: &AssStylePatch) -> Result<(), AkariSubNativeError> {
+    let Some(mut style) = self.get_style_ptr(index) else {
+      return Ok(());
+    };
+
+    let style = unsafe { style.as_mut() };
+
+    if let Some(value) = patch.name.as_deref() {
+      replace_c_string(&mut style.name, value)?;
+    }
+    if let Some(value) = patch.font_name.as_deref() {
+      replace_c_string(&mut style.font_name, value)?;
+    }
+    if let Some(value) = patch.font_size {
+      style.font_size = value;
+    }
+    if let Some(value) = patch.primary_colour {
+      style.primary_colour = value;
+    }
+    if let Some(value) = patch.secondary_colour {
+      style.secondary_colour = value;
+    }
+    if let Some(value) = patch.outline_colour {
+      style.outline_colour = value;
+    }
+    if let Some(value) = patch.back_colour {
+      style.back_colour = value;
+    }
+    if let Some(value) = patch.bold {
+      style.bold = value;
+    }
+    if let Some(value) = patch.italic {
+      style.italic = value;
+    }
+    if let Some(value) = patch.underline {
+      style.underline = value;
+    }
+    if let Some(value) = patch.strike_out {
+      style.strike_out = value;
+    }
+    if let Some(value) = patch.scale_x {
+      style.scale_x = value;
+    }
+    if let Some(value) = patch.scale_y {
+      style.scale_y = value;
+    }
+    if let Some(value) = patch.spacing {
+      style.spacing = value;
+    }
+    if let Some(value) = patch.angle {
+      style.angle = value;
+    }
+    if let Some(value) = patch.border_style {
+      style.border_style = value;
+    }
+    if let Some(value) = patch.outline {
+      style.outline = value;
+    }
+    if let Some(value) = patch.shadow {
+      style.shadow = value;
+    }
+    if let Some(value) = patch.alignment {
+      style.alignment = value;
+    }
+    if let Some(value) = patch.margin_l {
+      style.margin_l = value;
+    }
+    if let Some(value) = patch.margin_r {
+      style.margin_r = value;
+    }
+    if let Some(value) = patch.margin_v {
+      style.margin_v = value;
+    }
+    if let Some(value) = patch.encoding {
+      style.encoding = value;
+    }
+    if let Some(value) = patch.treat_fontname_as_pattern {
+      style.treat_fontname_as_pattern = value;
+    }
+    if let Some(value) = patch.blur {
+      style.blur = value;
+    }
+    if let Some(value) = patch.justify {
+      style.justify = value;
+    }
+
+    self.clear_cached_frames();
+    Ok(())
+  }
+
+  pub fn remove_style(&mut self, index: i32) {
+    if let Some(track) = self.track {
+      unsafe {
+        ffi::ass_free_style(track.as_ptr(), index);
+      }
+      self.clear_cached_frames();
+    }
+  }
+
+  pub fn style_override(&mut self, index: usize) {
+    let Some(style) = self.get_style_ptr(index) else {
+      return;
+    };
+
+    unsafe {
+      ffi::ass_set_selective_style_override_enabled(
+        self.renderer.as_ptr(),
+        ASS_OVERRIDE_BIT_STYLE | ASS_OVERRIDE_BIT_SELECTIVE_FONT_SCALE,
+      );
+      ffi::ass_set_selective_style_override(self.renderer.as_ptr(), style.as_ptr());
+      ffi::ass_set_font_scale(self.renderer.as_ptr(), 0.3);
+    }
+    self.clear_cached_frames();
+  }
+
+  pub fn disable_style_override(&mut self) {
+    unsafe {
+      ffi::ass_set_selective_style_override_enabled(self.renderer.as_ptr(), 0);
+      ffi::ass_set_font_scale(self.renderer.as_ptr(), 1.0);
+    }
+    self.clear_cached_frames();
   }
 
   pub fn alloc_event(&mut self) -> Option<i32> {
@@ -308,6 +674,44 @@ impl AkariSubNative {
   fn clear_cached_frames(&mut self) {
     self.last_render = None;
     self.last_composited = None;
+  }
+
+  fn get_event_ptr(&self, index: usize) -> Option<NonNull<ffi::ASS_Event>> {
+    let track = self.track?;
+    let track = unsafe { track.as_ref() };
+    if index >= track.n_events.max(0) as usize {
+      return None;
+    }
+
+    NonNull::new(unsafe { track.events.add(index) })
+  }
+
+  fn get_style_ptr(&self, index: usize) -> Option<NonNull<ffi::ASS_Style>> {
+    let track = self.track?;
+    let track = unsafe { track.as_ref() };
+    if index >= track.n_styles.max(0) as usize {
+      return None;
+    }
+
+    NonNull::new(unsafe { track.styles.add(index) })
+  }
+
+  fn resolve_style_reference(&self, value: &str) -> i32 {
+    value
+      .trim()
+      .parse::<i32>()
+      .ok()
+      .or_else(|| self.find_style_index_by_name(value))
+      .unwrap_or_default()
+  }
+
+  fn find_style_index_by_name(&self, value: &str) -> Option<i32> {
+    let target = value.trim();
+    self
+      .styles()
+      .iter()
+      .position(|style| style.name == target)
+      .map(|index| index as i32)
   }
 }
 
@@ -384,6 +788,27 @@ fn decode_bitmap(image: &ASS_Image) -> Vec<u8> {
   }
 
   out
+}
+
+fn read_c_string(ptr: *mut i8) -> String {
+  if ptr.is_null() {
+    String::new()
+  } else {
+    unsafe { CStr::from_ptr(ptr) }.to_string_lossy().into_owned()
+  }
+}
+
+fn replace_c_string(slot: &mut *mut i8, value: &str) -> Result<(), AkariSubNativeError> {
+  let next = CString::new(value)?;
+
+  if !(*slot).is_null() {
+    unsafe {
+      free((*slot).cast());
+    }
+  }
+
+  *slot = next.into_raw();
+  Ok(())
 }
 
 fn composite_frame(frame: &RenderedFrame, canvas_size: CanvasSize) -> CompositedFrame {
