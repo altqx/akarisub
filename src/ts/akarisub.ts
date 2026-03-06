@@ -410,6 +410,11 @@ export default class AkariSub extends EventTarget {
     this._canvas.style.top = top + 'px'
     this._canvas.style.left = left + 'px'
 
+    if (width > 0 && height > 0) {
+      this._canvasctrl.width = width
+      this._canvasctrl.height = height
+    }
+
     // Update GPU renderer size if using a GPU renderer
     if (this._gpuRenderer && width > 0 && height > 0) {
       this._gpuRenderer.updateSize(width, height)

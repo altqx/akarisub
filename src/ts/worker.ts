@@ -190,6 +190,7 @@ let warmupCursorTime = 0
 let warmupEndTime = 0
 let warmupEnabled = false
 let firstTrackEventStartTime: number | null = null
+let fullTrackWarmupPromise: Promise<void> | null = null
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
 
@@ -373,6 +374,30 @@ const stopWarmup = (): void => {
     clearTimeout(warmupTimer)
     warmupTimer = null
   }
+}
+
+const scheduleFullTrackWarmup = (): void => {
+  if (fullTrackWarmupPromise || !akariSubHandle) return
+
+  fullTrackWarmupPromise = (async () => {
+    await sleep(0)
+
+    try {
+      await prewarmEntireTrack()
+    } catch (e) {
+      if (debug) console.warn('[AkariSub] Full track warmup failed, continuing:', e)
+    }
+
+    try {
+      if (akariSubHandle) {
+        prewarmRenderer(getCurrentTime())
+      }
+    } catch (e) {
+      if (debug) console.warn('[AkariSub] Post-warmup re-prime failed, continuing:', e)
+    }
+  })().finally(() => {
+    fullTrackWarmupPromise = null
+  })
 }
 
 const scheduleWarmupTick = (): void => {
@@ -741,6 +766,7 @@ const readAsync = (url: string, load: (data: ArrayBuffer) => void, err: (e: any)
 
 self.setTrack = ({ content }: { content: string }): void => {
   stopWarmup()
+  fullTrackWarmupPromise = null
 
   processAvailableFonts(content)
 
@@ -764,6 +790,7 @@ self.getColorSpace = (): void => {
 
 self.freeTrack = (): void => {
   stopWarmup()
+  fullTrackWarmupPromise = null
   firstTrackEventStartTime = null
   const api = requireApi()
   const handle = requireHandle()
@@ -1530,22 +1557,11 @@ self.init = async (data: any): Promise<void> => {
       if (debug) console.warn('[AkariSub] Prewarm render failed, continuing:', e)
     }
 
-    try {
-      await prewarmEntireTrack()
-    } catch (e) {
-      if (debug) console.warn('[AkariSub] Full track warmup failed, continuing:', e)
-    }
-
-    try {
-      prewarmRenderer(getCurrentTime())
-    } catch (e) {
-      if (debug) console.warn('[AkariSub] Post-warmup re-prime failed, continuing:', e)
-    }
-
     forceNextDemandRender = true
 
     postMessage({ target: 'ready' })
     postMessage({ target: 'verifyColorSpace', subtitleColorSpace })
+    scheduleFullTrackWarmup()
   }
 
   loadWasm(data.wasmUrl).then(onWasmLoaded).catch((e) => {
@@ -1610,6 +1626,7 @@ self.video = ({
 
 self.destroy = (): void => {
   stopWarmup()
+  fullTrackWarmupPromise = null
   firstTrackEventStartTime = null
 
   if (_Module) {
