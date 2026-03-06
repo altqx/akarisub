@@ -161,6 +161,9 @@ let akariSubApi: AkariSubApi | null = null
 const MAX_POOLED_IMAGES = 128
 const RENDER_COLLECT_MAX_IMAGES = Math.max(MAX_POOLED_IMAGES, 4096)
 const PREWARM_MAX_IMAGES = RENDER_COLLECT_MAX_IMAGES
+const WARMUP_AHEAD_SECONDS = 30
+const WARMUP_STEP_SECONDS = 0.5
+const WARMUP_TICK_MS = 40
 const imagePool: RenderResultItem[] = new Array(MAX_POOLED_IMAGES)
 let poolInitialized = false
 const RR_META_STRIDE = 6
@@ -175,6 +178,11 @@ let rrcBufCapacity = 0
 const frameImages: RenderResultItem[] = []
 const frameArrayBuffers: ArrayBuffer[] = []
 const frameBitmapPromises: Promise<ImageBitmap>[] = []
+let warmupTimer: ReturnType<typeof setTimeout> | null = null
+let warmupCursorTime = 0
+let warmupEndTime = 0
+let warmupEnabled = false
+let firstTrackEventStartTime: number | null = null
 
 interface RenderResultItem {
   w: number
@@ -261,6 +269,88 @@ const prewarmRenderer = (time: number): void => {
   } else {
     api.renderImageCollect(handle, time, 0, rrcBufPtr, rrcBufCapacity)
   }
+}
+
+const getFirstEventStartTime = (): number | null => {
+  if (!akariSubHandle) return null
+
+  const api = requireApi()
+  const handle = requireHandle()
+  const count = api.getEventCount(handle)
+  if (count <= 0) return null
+
+  let firstStart = Number.POSITIVE_INFINITY
+
+  for (let i = 0; i < count; i++) {
+    const start = api.eventGetInt(handle, i, EVENT_INT_FIELDS.Start)
+    if (Number.isFinite(start) && start < firstStart) {
+      firstStart = start
+    }
+  }
+
+  if (!Number.isFinite(firstStart)) return null
+  return Math.max(0, firstStart)
+}
+
+const getWarmupAnchorTime = (fallbackTime: number): number => {
+  if (firstTrackEventStartTime == null) return fallbackTime
+  if (fallbackTime < firstTrackEventStartTime) return firstTrackEventStartTime
+  return fallbackTime
+}
+
+const stopWarmup = (): void => {
+  warmupEnabled = false
+  if (warmupTimer) {
+    clearTimeout(warmupTimer)
+    warmupTimer = null
+  }
+}
+
+const scheduleWarmupTick = (): void => {
+  if (!warmupEnabled || warmupTimer) return
+  warmupTimer = setTimeout(runWarmupTick, WARMUP_TICK_MS)
+}
+
+const startWarmupWindow = (fromTime: number): void => {
+  if (!akariSubHandle || !Number.isFinite(fromTime)) return
+  warmupCursorTime = fromTime
+  warmupEndTime = fromTime + WARMUP_AHEAD_SECONDS
+  warmupEnabled = true
+  scheduleWarmupTick()
+}
+
+const runWarmupTick = (): void => {
+  warmupTimer = null
+
+  if (!warmupEnabled || !akariSubHandle) {
+    warmupEnabled = false
+    return
+  }
+
+  if (warmupCursorTime >= warmupEndTime) {
+    warmupEnabled = false
+    return
+  }
+
+  if (renderInFlight || queuedRenders.length > 0 || metrics.pendingRenders > 0) {
+    scheduleWarmupTick()
+    return
+  }
+
+  try {
+    const now = getCurrentTime()
+    if (warmupCursorTime < now) {
+      warmupCursorTime = now
+    }
+
+    prewarmRenderer(warmupCursorTime)
+    warmupCursorTime += WARMUP_STEP_SECONDS
+  } catch (e) {
+    if (debug) console.warn('[AkariSub] Warmup tick failed, continuing:', e)
+    warmupCursorTime += WARMUP_STEP_SECONDS
+  }
+
+  scheduleWarmupTick()
 }
 
 const EVENT_INT_FIELDS: Record<string, number> = {
@@ -580,6 +670,8 @@ const readAsync = (url: string, load: (data: ArrayBuffer) => void, err: (e: any)
 // =============================================================================
 
 self.setTrack = ({ content }: { content: string }): void => {
+  stopWarmup()
+
   processAvailableFonts(content)
 
   if (clampPos) content = fixPlayRes(content)
@@ -590,8 +682,10 @@ self.setTrack = ({ content }: { content: string }): void => {
   withCString(content, (contentPtr) => {
     api.createTrackMem(handle, contentPtr)
   })
+  firstTrackEventStartTime = getFirstEventStartTime()
   subtitleColorSpace = libassYCbCrMap[api.getTrackColorSpace(handle)]
   postMessage({ target: 'verifyColorSpace', subtitleColorSpace })
+  startWarmupWindow(getWarmupAnchorTime(lastCurrentTime))
 }
 
 self.getColorSpace = (): void => {
@@ -599,6 +693,8 @@ self.getColorSpace = (): void => {
 }
 
 self.freeTrack = (): void => {
+  stopWarmup()
+  firstTrackEventStartTime = null
   const api = requireApi()
   const handle = requireHandle()
   api.removeTrack(handle)
@@ -628,8 +724,14 @@ const getCurrentTime = (): number => {
 }
 
 const setCurrentTime = (currentTime: number): void => {
+  const timeJump = Math.abs(currentTime - lastCurrentTime)
   lastCurrentTime = currentTime
   lastCurrentTimeReceivedAt = Date.now()
+
+  if (timeJump > 0.5) {
+    startWarmupWindow(currentTime)
+  }
+
   if (!rafId) {
     if (nextIsRaf) {
       rafId = requestAnimationFrame(renderLoop)
@@ -672,6 +774,15 @@ interface RenderTimes {
 
 const flushQueuedRender = (): void => {
   if (renderInFlight || queuedRenders.length === 0) return
+
+  if (queuedRenders.length > 1) {
+    const dropped = queuedRenders.length - 1
+    metrics.framesDropped += dropped
+    const latest = queuedRenders[queuedRenders.length - 1]
+    queuedRenders.length = 0
+    queuedRenders.push(latest)
+  }
+
   const next = queuedRenders.shift()
   if (!next) return
   render(next.time, next.force)
@@ -1281,6 +1392,7 @@ self.init = async (data: any): Promise<void> => {
     withCString(subContent, (subPtr) => {
       requireApi().createTrackMem(requireHandle(), subPtr)
     })
+    firstTrackEventStartTime = getFirstEventStartTime()
     subtitleColorSpace = libassYCbCrMap[requireApi().getTrackColorSpace(requireHandle())]
     requireApi().setDropAnimations(requireHandle(), data.dropAllAnimations || 0)
 
@@ -1296,6 +1408,8 @@ self.init = async (data: any): Promise<void> => {
     } catch (e) {
       if (debug) console.warn('[AkariSub] Prewarm render failed, continuing:', e)
     }
+
+    startWarmupWindow(getWarmupAnchorTime(lastCurrentTime))
 
     postMessage({ target: 'ready' })
     postMessage({ target: 'verifyColorSpace', subtitleColorSpace })
@@ -1362,6 +1476,9 @@ self.video = ({
 }
 
 self.destroy = (): void => {
+  stopWarmup()
+  firstTrackEventStartTime = null
+
   if (_Module) {
     if (rrMetaPtr) {
       _Module._free(rrMetaPtr)

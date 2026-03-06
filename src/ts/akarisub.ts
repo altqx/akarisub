@@ -740,6 +740,12 @@ export default class AkariSub extends EventTarget {
 
   private _unbusy(): void {
     if (this._pendingDemandTimes.length > 0) {
+      if (this._pendingDemandTimes.length > 1) {
+        const latestDemand = this._pendingDemandTimes[this._pendingDemandTimes.length - 1]
+        this._pendingDemandTimes.length = 0
+        this._pendingDemandTimes.push(latestDemand)
+      }
+
       const nextDemand = this._pendingDemandTimes.shift()
       if (nextDemand) {
         this._demandRender(nextDemand)
