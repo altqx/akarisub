@@ -36,14 +36,20 @@ npm install akarisub
 bun add akarisub
 ```
 
-### Setup for Web Workers
+### Setup for Browser Assets
 
 ```bash
 # For Next.js, Vite, or similar frameworks
 mkdir -p public/akarisub
-cp node_modules/akarisub/pkg/akarisub_bg.wasm public/akarisub/
-cp node_modules/akarisub/pkg/akarisub.js public/akarisub/
+cp node_modules/akarisub/dist/ts/worker.js public/akarisub/
+cp node_modules/akarisub/dist/ts/renderer.js public/akarisub/
+cp node_modules/akarisub/dist/ts/wasm.js public/akarisub/
+cp node_modules/akarisub/pkg-bundler/akarisub.js public/akarisub/
+cp node_modules/akarisub/pkg-bundler/akarisub_bg.js public/akarisub/
+cp node_modules/akarisub/pkg-bundler/akarisub_bg.wasm public/akarisub/
 ```
+
+The default browser runtime expects these files at `/akarisub/*`. If you publish them under a different path, pass `workerUrl` and `wasmUrl` explicitly.
 
 ## Usage
 
@@ -57,6 +63,8 @@ import AkariSub from 'akarisub'
 const renderer = new AkariSub({
   video: videoElement,
   subUrl: '/subtitles/movie.ass',
+  workerUrl: '/akarisub/worker.js',
+  wasmUrl: '/akarisub/akarisub_bg.wasm',
   renderer: 'auto',
   onCanvasFallback: () => {
     console.log('GPU renderer unavailable, using Canvas2D')
@@ -85,6 +93,8 @@ const subtitleText = await response.text()
 
 const renderer = new AkariSub({
   video: videoElement,
+  workerUrl: '/akarisub/worker.js',
+  wasmUrl: '/akarisub/akarisub_bg.wasm',
   subContent: subtitleText
 })
 ```
@@ -98,6 +108,8 @@ import AkariSub from 'akarisub'
 
 const renderer = new AkariSub({
   canvas: canvasElement,
+  workerUrl: '/akarisub/worker.js',
+  wasmUrl: '/akarisub/akarisub_bg.wasm',
   subUrl: '/subtitles/movie.ass'
 })
 
@@ -122,7 +134,7 @@ The high-level renderer initializes the WASM runtime automatically. If you are u
 ```typescript
 import { initWasm } from 'akarisub'
 
-await initWasm('/akarisub/pkg/akarisub_bg.wasm')
+await initWasm('/akarisub/akarisub_bg.wasm')
 ```
 
 ## Lifecycle
@@ -232,8 +244,8 @@ The default options are best, and automatically fallback to the next fastest opt
 | `dropAllAnimations` | boolean | `false` | Discard all animated tags for performance |
 | `dropAllBlur` | boolean | `false` | Drop all blur effects (~10x performance gain) |
 | `clampPos` | boolean | `false` | Clamp `\pos` values to script resolution |
-| `workerUrl` | string \/ URL | internal bundled worker | Optional URL for the worker module, for example `/akarisub/dist/ts/worker.js` |
-| `wasmUrl` | string \/ URL | package-resolved WASM | Optional URL for the WASM binary, for example `/akarisub/pkg/akarisub_bg.wasm` |
+| `workerUrl` | string \/ URL | `/akarisub/worker.js` in browsers | Optional URL for the worker module when assets are hosted elsewhere |
+| `wasmUrl` | string \/ URL | `/akarisub/akarisub_bg.wasm` in browsers | Optional URL for the WASM binary when assets are hosted elsewhere |
 | `subUrl` | string | - | URL of the subtitle file to play |
 | `subContent` | string | - | Content of the subtitle file to play |
 | `fonts` | (string \| Uint8Array)[] | - | Array of font URLs or Uint8Arrays to force load |
