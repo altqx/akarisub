@@ -74,6 +74,14 @@ fn gperf_executable() -> PathBuf {
   env::var("GPERF").map(PathBuf::from).unwrap_or_else(|_| PathBuf::from("gperf"))
 }
 
+fn tool_exists(tool: &Path, probe_arg: &str) -> bool {
+  Command::new(tool)
+    .arg(probe_arg)
+    .status()
+    .map(|status| status.success() || status.code().is_some())
+    .unwrap_or(false)
+}
+
 fn generate_public_header(ctx: &NativeBuildContext, vendor: &Path, public_include_dir: &Path) {
   let template = vendor.join("fontconfig/fontconfig.h.in");
   let output = public_include_dir.join("fontconfig.h");
@@ -215,6 +223,14 @@ fn generate_fcobjshash_h(
 
   let gperf = gperf_executable();
   let output = generated_dir.join("fcobjshash.h");
+
+  if !tool_exists(&gperf, "--version") {
+    let fallback = render_fcobjshash_fallback(&vendor.join("src/fcobjs.h"));
+    ctx.write_generated_file(&output, &fallback);
+    println!("cargo:warning=gperf not found; using fallback fcobjshash.h generator");
+    return;
+  }
+
   let status = Command::new(&gperf)
     .arg("--pic")
     .arg("-m")
@@ -236,18 +252,18 @@ fn preprocess_fcobjshash(
   defines: &[(&str, Option<&str>)],
   output: &Path,
 ) {
-  let tool = cc::Build::new().cargo_metadata(false).get_compiler();
-  let mut command = tool.to_command();
-
-  if ctx.is_wasm32_unknown_unknown() {
+  let mut command = if ctx.is_wasm32_unknown_unknown() {
     let emsdk = env::var("EMSDK").expect("EMSDK must be set for fontconfig wasm preprocessing");
     let sysroot = PathBuf::from(&emsdk).join("upstream/emscripten/cache/sysroot");
     let compiler = PathBuf::from(&emsdk).join("upstream/bin/clang");
 
-    command = Command::new(&compiler);
+    let mut command = Command::new(&compiler);
     command.arg("--target=wasm32-unknown-unknown");
     command.arg(format!("--sysroot={}", sysroot.display()));
-  }
+    command
+  } else {
+    cc::Build::new().cargo_metadata(false).get_compiler().to_command()
+  };
 
   command.arg("-E");
   command.arg("-P");
@@ -275,6 +291,47 @@ fn preprocess_fcobjshash(
   }
 
   fs::write(output, result.stdout).expect("failed to write preprocessed fcobjshash input");
+}
+
+fn render_fcobjshash_fallback(fcobjs_h: &Path) -> String {
+  let entries = parse_fc_objects(fcobjs_h);
+  let table_entries = entries
+    .iter()
+    .map(|(name, id)| format!("    {{\"{name}\", {id}}}"))
+    .collect::<Vec<_>>()
+    .join(",\n");
+
+  format!(
+    "struct FcObjectTypeInfo {{\n  const char *name;\n  int id;\n}};\n#include <string.h>\n\nstatic unsigned int\nFcObjectTypeHash (register const char *str, register FC_GPERF_SIZE_T len)\n{{\n  (void)str;\n  return (unsigned int)len;\n}}\n\nconst struct FcObjectTypeInfo *\nFcObjectTypeLookup (register const char *str, register FC_GPERF_SIZE_T len)\n{{\n  static const struct FcObjectTypeInfo wordlist[] = {{\n{table_entries}\n  }};\n\n  for (size_t index = 0; index < sizeof (wordlist) / sizeof (wordlist[0]); index++) {{\n    const struct FcObjectTypeInfo *entry = &wordlist[index];\n\n    if (strlen (entry->name) != len)\n      continue;\n\n    if (*str == *entry->name && !strcmp (str + 1, entry->name + 1))\n      return entry;\n  }}\n\n  return (struct FcObjectTypeInfo *) 0;\n}}\n"
+  )
+}
+
+fn parse_fc_objects(fcobjs_h: &Path) -> Vec<(String, String)> {
+  fs::read_to_string(fcobjs_h)
+    .expect("failed to read fcobjs.h for fallback generator")
+    .lines()
+    .filter_map(parse_fc_object_line)
+    .collect()
+}
+
+fn parse_fc_object_line(line: &str) -> Option<(String, String)> {
+  let line = line.trim();
+  if !line.starts_with("FC_OBJECT (") {
+    return None;
+  }
+
+  let body = line
+    .strip_prefix("FC_OBJECT (")?
+    .split_once(')')?
+    .0;
+  let name = body.split(',').next()?.trim();
+  if name.is_empty() {
+    return None;
+  }
+
+  let lookup_name = name.replace('_', "").to_ascii_lowercase();
+  let object_id = format!("FC_{name}_OBJECT");
+  Some((lookup_name, object_id))
 }
 
 fn run_python(python: &Path, args: &[&Path]) {
