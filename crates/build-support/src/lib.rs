@@ -130,8 +130,8 @@ impl NativeBuildContext {
     build.cargo_metadata(false);
     build.warnings(false);
     build.pic(false);
-    build.flag_if_supported("-std=c99");
     self.configure_cc_toolchain(&mut build, false);
+    build.flag("-std=c99");
 
     for include_dir in spec.include_dirs {
       build.include(include_dir);
@@ -158,8 +158,8 @@ impl NativeBuildContext {
     build.cargo_metadata(false);
     build.warnings(false);
     build.pic(false);
-    build.flag_if_supported(&format!("-std={}", spec.cpp_std));
     self.configure_cc_toolchain(&mut build, true);
+    build.flag(&format!("-std={}", spec.cpp_std));
 
     for include_dir in spec.include_dirs {
       build.include(include_dir);
