@@ -6,6 +6,7 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Raw FFI bindings for Expat used by AkariSub"
+links = "akarisub_expat"
 
 [lib]
 name = "akarisub_expat_sys"

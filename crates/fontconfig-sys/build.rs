@@ -56,6 +56,7 @@ fn main() {
     flags: &[],
   });
 
+  ctx.emit_out_dir();
   ctx.emit_link_search();
   ctx.emit_static_link("fontconfig");
   if env::var("CARGO_CFG_TARGET_OS").unwrap_or_default() != "windows" && !ctx.is_wasm32_unknown_unknown() {

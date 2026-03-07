@@ -6,6 +6,7 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Raw FFI bindings for libass used by AkariSub"
+links = "akarisub_libass"
 
 [lib]
 name = "akarisub_libass_sys"

@@ -142,6 +142,7 @@ pub mod ffi {
     data: *mut c_void,
   );
 
+  #[link(name = "ass", kind = "static")]
   unsafe extern "C" {
     pub fn ass_library_version() -> i32;
     pub fn ass_library_init() -> *mut ASS_Library;

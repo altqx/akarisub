@@ -34,6 +34,7 @@ fn main() {
     flags: &["-std=gnu99", "-fno-math-errno"],
   });
 
+  ctx.emit_out_dir();
   ctx.emit_link_search();
   ctx.emit_static_link("ass");
   if env::var("CARGO_CFG_TARGET_OS").unwrap_or_default() != "windows" && !ctx.is_wasm32_unknown_unknown() {

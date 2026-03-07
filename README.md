@@ -36,6 +36,15 @@ npm install akarisub
 bun add akarisub
 ```
 
+### Setup for Web Workers
+
+```bash
+# For Next.js, Vite, or similar frameworks
+mkdir -p public/akarisub
+cp node_modules/akarisub/pkg/akarisub_bg.wasm public/akarisub/
+cp node_modules/akarisub/pkg/akarisub.js public/akarisub/
+```
+
 ## Usage
 
 ### High-Level API (Video Integration)

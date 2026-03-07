@@ -24,6 +24,7 @@ fn main() {
     cpp_std: "c++11",
   });
 
+  ctx.emit_out_dir();
   ctx.emit_link_search();
   ctx.emit_static_link("harfbuzz");
 }

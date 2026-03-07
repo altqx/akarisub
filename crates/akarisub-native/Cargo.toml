@@ -7,6 +7,9 @@ license.workspace = true
 repository.workspace = true
 description = "Project-specific native integration layer for AkariSub"
 
+[build-dependencies]
+akarisub-build-support = { path = "../build-support" }
+
 [dependencies]
 akarisub-brotli-sys = { path = "../brotli-sys" }
 akarisub-expat-sys = { path = "../expat-sys" }

@@ -87,6 +87,7 @@ name = "akarisub-native"
 version = "0.1.0"
 dependencies = [
  "akarisub-brotli-sys",
+ "akarisub-build-support",
  "akarisub-expat-sys",
  "akarisub-fontconfig-sys",
  "akarisub-freetype-sys",

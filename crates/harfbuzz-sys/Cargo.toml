@@ -6,6 +6,7 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Raw FFI bindings for HarfBuzz used by AkariSub"
+links = "akarisub_harfbuzz"
 
 [lib]
 name = "akarisub_harfbuzz_sys"

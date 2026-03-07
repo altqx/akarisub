@@ -42,6 +42,7 @@ fn main() {
     flags: &[],
   });
 
+  ctx.emit_out_dir();
   ctx.emit_link_search();
   ctx.emit_static_link("freetype");
 }

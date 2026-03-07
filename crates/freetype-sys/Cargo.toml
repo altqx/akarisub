@@ -6,6 +6,7 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Raw FFI bindings for FreeType used by AkariSub"
+links = "akarisub_freetype"
 
 [lib]
 name = "akarisub_freetype_sys"

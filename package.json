@@ -4,6 +4,16 @@
   "author": "altqx",
   "license": "MIT",
   "description": "AkariSub",
+  "keywords": [
+    "akarisub",
+    "ass",
+    "subtitle",
+    "wasm",
+    "rust",
+    "rendering",
+    "video",
+    "player"
+  ],
   "type": "module",
   "main": "dist/index.js",
   "module": "dist/index.js",
@@ -17,19 +27,25 @@
     "./pkg": {
       "import": "./pkg/akarisub.js",
       "types": "./pkg/akarisub.d.ts"
+    },
+    "./pkg-bundler": {
+      "import": "./pkg-bundler/akarisub.js",
+      "types": "./pkg-bundler/akarisub.d.ts"
     }
   },
   "files": [
     "dist",
     "pkg",
+    "pkg-bundler",
     "src/wrapper.ts"
   ],
   "scripts": {
     "build:wasm": "wasm-pack build --target web --out-dir pkg",
-    "build:wasm:release": "wasm-pack build --release --target web --out-dir pkg",
+    "build:wasm:bundler": "wasm-pack build --target bundler --out-dir pkg-bundler",
+    "build:wasm:release": "wasm-pack build --release --target web --out-dir pkg && wasm-pack build --release --target bundler --out-dir pkg-bundler",
     "build:ts": "tsgo",
     "build": "bun run build:wasm:release && bun run build:ts",
-    "clean": "rm -rf dist pkg target",
+    "clean": "rm -rf dist pkg pkg-bundler target",
     "test": "cargo test",
     "format": "cargo fmt && prettier . --write"
   },
@@ -38,5 +54,9 @@
     "@webgpu/types": "^0.1.69",
     "prettier": "^3.8.1",
     "typescript": "^5.9.3"
+  },
+  "peerDependencies": {},
+  "engines": {
+    "node": ">=18"
   }
 }

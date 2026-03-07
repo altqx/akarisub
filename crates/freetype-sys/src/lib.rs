@@ -8,6 +8,7 @@ pub mod ffi {
 
   pub type FT_Library = *mut FT_LibraryRec_;
 
+  #[link(name = "freetype", kind = "static")]
   unsafe extern "C" {
     pub fn FT_Init_FreeType(alibrary: *mut FT_Library) -> i32;
     pub fn FT_Done_FreeType(library: FT_Library) -> i32;

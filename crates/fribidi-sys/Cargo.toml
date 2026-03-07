@@ -6,6 +6,7 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Raw FFI bindings for FriBidi used by AkariSub"
+links = "akarisub_fribidi"
 
 [lib]
 name = "akarisub_fribidi_sys"

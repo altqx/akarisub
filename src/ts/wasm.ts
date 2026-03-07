@@ -1,8 +1,8 @@
-let wasmModule: typeof import('../../pkg/akarisub') | null = null
+let wasmModule: typeof import('../../pkg-bundler/akarisub') | null = null
 let wasmInitPromise: Promise<void> | null = null
 let wasmModulePath: string | URL | undefined
 
-export type WasmEngineModule = InstanceType<(typeof import('../../pkg/akarisub'))['AkariSubEngine']>
+export type WasmEngineModule = InstanceType<(typeof import('../../pkg-bundler/akarisub'))['AkariSubEngine']>
 
 export async function initWasm(moduleOrPath?: string | URL): Promise<void> {
   if (wasmModule) return
@@ -13,8 +13,13 @@ export async function initWasm(moduleOrPath?: string | URL): Promise<void> {
   }
 
   wasmInitPromise = (async () => {
-    const mod = await import('../../pkg/akarisub')
-    await mod.default(wasmModulePath)
+    const mod = await import('../../pkg-bundler/akarisub')
+    const init = resolveInit(mod)
+
+    if (init) {
+      await init(wasmModulePath)
+    }
+
     wasmModule = mod
   })()
 
@@ -32,4 +37,17 @@ export async function createEngine(moduleOrPath?: string | URL): Promise<WasmEng
   }
 
   return new wasmModule.AkariSubEngine()
+}
+
+function resolveInit(mod: typeof import('../../pkg-bundler/akarisub')): ((moduleOrPath?: string | URL) => Promise<void> | void) | null {
+  const defaultInit = (mod as typeof mod & { default?: unknown }).default
+  if (typeof defaultInit === 'function') {
+    return defaultInit as (moduleOrPath?: string | URL) => Promise<void> | void
+  }
+
+  if (typeof mod.init === 'function') {
+    return () => mod.init()
+  }
+
+  return null
 }

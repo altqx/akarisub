@@ -184,6 +184,10 @@ impl NativeBuildContext {
     println!("cargo:rustc-link-search=native={}", self.out_dir.display());
   }
 
+  pub fn emit_out_dir(&self) {
+    println!("cargo:out_dir={}", self.out_dir.display());
+  }
+
   pub fn emit_static_link(&self, name: &str) {
     println!("cargo:rustc-link-lib=static={name}");
   }

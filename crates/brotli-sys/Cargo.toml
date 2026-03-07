@@ -6,6 +6,7 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Raw FFI bindings for Brotli used by AkariSub"
+links = "akarisub_brotli"
 
 [lib]
 name = "akarisub_brotli_sys"
