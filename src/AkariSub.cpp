@@ -298,6 +298,29 @@ static char *copyString(const std::string &str) {
   return result;
 }
 
+static std::string getPrimaryFallbackFamily(const std::string &fonts) {
+  size_t start = 0;
+
+  while (start < fonts.size()) {
+    size_t end = fonts.find(',', start);
+    if (end == std::string::npos)
+      end = fonts.size();
+
+    size_t family_start = fonts.find_first_not_of(" \t\r\n", start);
+    if (family_start != std::string::npos && family_start < end) {
+      size_t family_end = fonts.find_last_not_of(" \t\r\n", end - 1);
+      if (family_end != std::string::npos && family_end >= family_start)
+        return fonts.substr(family_start, family_end - family_start + 1);
+    }
+
+    if (end == fonts.size())
+      break;
+    start = end + 1;
+  }
+
+  return std::string();
+}
+
 struct EventTimeEntry {
   int event_index;
   long long start_ms;
@@ -665,8 +688,11 @@ public:
   }
 
   void reloadFonts() {
-    // Use fallbackFonts if set, otherwise use defaultFont
-    const char *fontFamily = fallbackFonts.empty() ? defaultFont : fallbackFonts.c_str();
+    // libass expects a single fallback family here. Passing a comma-separated
+    // list makes fontconfig treat the whole string as the default family and
+    // can skew glyph metrics when no requested font matches.
+    std::string fontFamilyStorage = getPrimaryFallbackFamily(fallbackFonts);
+    const char *fontFamily = fontFamilyStorage.empty() ? defaultFont : fontFamilyStorage.c_str();
     ass_set_fonts(ass_renderer, NULL, fontFamily, ASS_FONTPROVIDER_FONTCONFIG, "/assets/fonts.conf", 1);
   }
 
