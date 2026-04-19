@@ -98,6 +98,9 @@ jobs:
       - name: Typecheck TypeScript
         run: bun run typecheck
 
+      - name: Build native dependencies
+        run: make
+
       - name: Build WASM and TypeScript bundles
         run: bun run build
 
