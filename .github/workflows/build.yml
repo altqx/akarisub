@@ -80,7 +80,7 @@ jobs:
       - name: Setup Emscripten
         uses: emscripten-core/setup-emsdk@v15
         with:
-          version: 5.0.4
+          version: 5.0.6
           actions-cache-folder: emsdk-cache
 
       - name: Cache Bun dependencies
