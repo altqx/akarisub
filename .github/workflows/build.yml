@@ -7,7 +7,6 @@ permissions:
 on:
   push:
     branches:
-      - feature
       - main
   workflow_dispatch:
 
@@ -150,7 +149,23 @@ jobs:
           writeFileSync('jsr.json', `${JSON.stringify(jsr, null, 2)}\n`)
           EOF
 
+      - name: Prepare JSR publish directory
+        run: |
+          rm -rf jsr-publish
+          mkdir -p jsr-publish/dist
+          cp jsr.json README.md LICENSE jsr-publish/
+          cp -r src jsr-publish/
+          cp \
+            dist/COPYRIGHT \
+            dist/akarisub-worker.js \
+            dist/akarisub-worker.wasm \
+            dist/akarisub.umd.js \
+            dist/default.woff2 \
+            dist/index.js \
+            jsr-publish/dist/
+
       - name: Publish to JSR
+        working-directory: jsr-publish
         run: deno publish --allow-dirty --no-check --sloppy-imports
 
       - name: Publish to npm

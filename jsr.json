@@ -4,6 +4,16 @@
   "license": "MIT",
   "exports": "./src/index.ts",
   "publish": {
-    "exclude": ["./.github/", "./.vscode/", "./build/", "./dist/js/", "./dist/libraries/", "./lib/", "./node_modules/"]
+    "include": [
+      "src/",
+      "dist/COPYRIGHT",
+      "dist/akarisub-worker.js",
+      "dist/akarisub-worker.wasm",
+      "dist/akarisub.umd.js",
+      "dist/default.woff2",
+      "dist/index.js",
+      "LICENSE",
+      "README.md"
+    ]
   }
 }
