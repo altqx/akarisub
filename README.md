@@ -32,6 +32,20 @@ AkariSub is a JS wrapper for <a href="https://github.com/libass/libass">libass</
 - **TypeScript Support** - Full TypeScript definitions and type safety
 - **Updated Dependencies** - All dependencies updated to their latest versions, including libass
 
+## Installation
+
+```bash
+npm install akarisub
+# or
+bun add akarisub
+```
+
+For JSR:
+
+```bash
+deno add jsr:@altq/akarisub
+```
+
 ## Usage
 
 By default all you need to do is copy the files from the `dist/` folder of the repository into the same folder as where your JS runs, then do:
