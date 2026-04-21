@@ -28,6 +28,24 @@ import { WebGL2Renderer, isWebGL2Supported } from './webgl2-renderer'
 
 type AnyGPURenderer = WebGPURenderer | WebGL2Renderer
 
+const DEFAULT_RENDER_AHEAD = 0.008
+const DEFAULT_PIPELINE_LATENCY_MS = DEFAULT_RENDER_AHEAD * 1000
+const DEFAULT_WEBKIT_PIPELINE_LATENCY_MS = 16
+
+const isLikelyWebKit = (): boolean => {
+  if (typeof navigator === 'undefined') return false
+
+  const userAgent = navigator.userAgent || ''
+  const vendor = navigator.vendor || ''
+
+  if (!/AppleWebKit/i.test(userAgent)) return false
+  if (/\b(Chrome|Chromium|CriOS|Edg|EdgiOS|OPR|OPiOS|SamsungBrowser|Firefox|FxiOS)\b/i.test(userAgent)) {
+    return false
+  }
+
+  return vendor.includes('Apple') || /\b(iPhone|iPad|iPod)\b/i.test(userAgent)
+}
+
 /**
  * AkariSub - JavaScript ASS/SSA Subtitle Renderer
  *
@@ -74,6 +92,9 @@ export default class AkariSub extends EventTarget {
   private _ro?: ResizeObserver
   private _worker: Worker
   private _pendingDemandTimes: Array<{ mediaTime: number; width: number; height: number }> = []
+  private readonly _isLikelyWebKit: boolean
+  private _activeDemandStartedAt: number = 0
+  private _smoothedDemandLatencyMs: number
 
   // Bound methods for event listeners
   private _boundResize: () => void
@@ -114,6 +135,11 @@ export default class AkariSub extends EventTarget {
       this._init = resolve
     })
 
+    this._isLikelyWebKit = isLikelyWebKit()
+    this._smoothedDemandLatencyMs = this._isLikelyWebKit
+      ? DEFAULT_WEBKIT_PIPELINE_LATENCY_MS
+      : DEFAULT_PIPELINE_LATENCY_MS
+
     // Run feature tests
     const test = AkariSub._test()
 
@@ -153,7 +179,7 @@ export default class AkariSub extends EventTarget {
     if (canUseGPURenderer) {
       this._initGPURenderer()
     } else if (!this._offscreenRender) {
-      this._ctx = this._canvas.getContext('2d')
+      this._ctx = this._canvas.getContext('2d', { alpha: true, desynchronized: true })
     }
 
     this._canvasctrl = this._offscreenRender
@@ -167,7 +193,7 @@ export default class AkariSub extends EventTarget {
     this.prescaleFactor = options.prescaleFactor || 1.0
     this.prescaleHeightLimit = options.prescaleHeightLimit || 1080
     this.maxRenderHeight = options.maxRenderHeight || 0
-    this.renderAhead = options.renderAhead ?? 0
+    this.renderAhead = options.renderAhead ?? DEFAULT_RENDER_AHEAD
 
     // Bind methods
     this._boundResize = this.resize.bind(this)
@@ -327,7 +353,7 @@ export default class AkariSub extends EventTarget {
 
     this._rendererType = 'canvas2d'
     if (!this._offscreenRender && !this._ctx) {
-      this._ctx = this._canvas.getContext('2d')
+      this._ctx = this._canvas.getContext('2d', { alpha: true, desynchronized: true })
     }
     this.sendMessage('setAsyncRender', { value: false })
     this._onCanvasFallback?.()
@@ -743,6 +769,8 @@ export default class AkariSub extends EventTarget {
   }
 
   private _unbusy(): void {
+    this._observeDemandCompletion()
+
     if (this._pendingDemandTimes.length > 0) {
       if (this._pendingDemandTimes.length > 1) {
         const latestDemand = this._pendingDemandTimes[this._pendingDemandTimes.length - 1]
@@ -758,6 +786,31 @@ export default class AkariSub extends EventTarget {
     }
 
     this.busy = false
+  }
+
+  private _markDemandDispatched(): void {
+    if (!this._onDemandRender) return
+    this._activeDemandStartedAt = performance.now()
+  }
+
+  private _observeDemandCompletion(): void {
+    if (!this._onDemandRender || this._activeDemandStartedAt === 0) return
+
+    const elapsed = performance.now() - this._activeDemandStartedAt
+    this._activeDemandStartedAt = 0
+
+    if (!Number.isFinite(elapsed) || elapsed <= 0) return
+
+    this._smoothedDemandLatencyMs = this._smoothedDemandLatencyMs <= 0
+      ? elapsed
+      : this._smoothedDemandLatencyMs * 0.75 + elapsed * 0.25
+  }
+
+  private _getDemandPipelineLeadSeconds(now: number, metadata: VideoFrameCallbackMetadata): number {
+    const expectedDisplayTime = metadata.expectedDisplayTime ?? metadata.presentationTime ?? now
+    const displayLeadSeconds = Math.max(0, expectedDisplayTime - now) / 1000
+
+    return Math.max(0, this._smoothedDemandLatencyMs / 1000 - displayLeadSeconds)
   }
 
   private _enqueueDemand(metadata: { mediaTime: number; width: number; height: number }): void {
@@ -782,7 +835,8 @@ export default class AkariSub extends EventTarget {
 
     // Get the video's playback rate to correctly scale time offsets
     const playbackRate = this._video?.playbackRate ?? 1
-    const renderTime = metadata.mediaTime + this.renderAhead * playbackRate
+    const pipelineLeadSeconds = this._getDemandPipelineLeadSeconds(now, metadata)
+    const renderTime = metadata.mediaTime + (pipelineLeadSeconds + this.renderAhead) * playbackRate
 
     const demandData = {
       mediaTime: renderTime,
@@ -813,6 +867,7 @@ export default class AkariSub extends EventTarget {
       this.resize()
     }
 
+    this._markDemandDispatched()
     this.sendMessage('demand', { time: metadata.mediaTime + this.timeOffset })
   }
 
@@ -822,9 +877,10 @@ export default class AkariSub extends EventTarget {
     this._canvas.remove()
     this._createCanvas()
     this._canvasctrl = this._canvas
-    this._ctx = this._canvasctrl.getContext('2d')
+    this._ctx = this._canvasctrl.getContext('2d', { alpha: true, desynchronized: true })
     this.sendMessage('detachOffscreen')
     this.busy = false
+    this._activeDemandStartedAt = 0
     this._pendingDemandTimes.length = 0
     this.resize(0, 0, 0, 0, true)
   }

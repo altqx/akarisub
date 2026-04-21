@@ -49,7 +49,8 @@ let lastCurrentTime = 0
 let rate = 1
 let rafId: number | null = null
 let nextIsRaf = false
-let lastCurrentTimeReceivedAt = Date.now()
+const nowMs = (): number => (typeof performance !== 'undefined' ? performance.now() : Date.now())
+let lastCurrentTimeReceivedAt = nowMs()
 let targetFps = 24
 let onDemandRenderMode = false
 let useLocalFonts = false
@@ -808,7 +809,7 @@ self.setTrackByUrl = ({ url }: { url: string }): void => {
 let _isPaused = true
 
 const getCurrentTime = (): number => {
-  const diff = (Date.now() - lastCurrentTimeReceivedAt) / 1000
+  const diff = (nowMs() - lastCurrentTimeReceivedAt) / 1000
   if (_isPaused) {
     return lastCurrentTime
   } else {
@@ -822,7 +823,7 @@ const getCurrentTime = (): number => {
 
 const setCurrentTime = (currentTime: number): void => {
   lastCurrentTime = currentTime
-  lastCurrentTimeReceivedAt = Date.now()
+  lastCurrentTimeReceivedAt = nowMs()
 
   if (onDemandRenderMode) {
     return
@@ -859,7 +860,7 @@ const setIsPaused = (isPaused: boolean): void => {
         rafId = null
       }
     } else {
-      lastCurrentTimeReceivedAt = Date.now()
+      lastCurrentTimeReceivedAt = nowMs()
       rafId = requestAnimationFrame(renderLoop)
     }
   }
@@ -1056,7 +1057,7 @@ const render = (time: number, force?: boolean | number): void => {
 
 self.demand = ({ time }: { time: number }): void => {
   lastCurrentTime = time
-  lastCurrentTimeReceivedAt = Date.now()
+  lastCurrentTimeReceivedAt = nowMs()
   const force = forceNextDemandRender ? 1 : 0
   forceNextDemandRender = false
   render(time, force)
@@ -1188,7 +1189,7 @@ const paintImages = ({
 const requestAnimationFrame = self.requestAnimationFrame ? self.requestAnimationFrame.bind(self) : ((): ((func: () => void) => number) => {
   let nextRAF = 0
   return (func: () => void): number => {
-    const now = Date.now()
+    const now = nowMs()
     if (nextRAF === 0) {
       nextRAF = now + 1000 / targetFps
     } else {
@@ -1576,9 +1577,9 @@ self.init = async (data: any): Promise<void> => {
 
 self.offscreenCanvas = ({ transferable }: { transferable: [OffscreenCanvas] }): void => {
   offCanvas = transferable[0]
-  offCanvasCtx = offCanvas.getContext('2d')
+  offCanvasCtx = offCanvas.getContext('2d', { desynchronized: true })
   if (!asyncRender) {
-    bufferCanvas = new OffscreenCanvas(self.height, self.width)
+    bufferCanvas = new OffscreenCanvas(self.width, self.height)
     bufferCtx = bufferCanvas.getContext('2d', { desynchronized: true })
   }
   offscreenRender = true
