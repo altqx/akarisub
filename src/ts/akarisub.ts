@@ -37,13 +37,16 @@ const isLikelyWebKit = (): boolean => {
 
   const userAgent = navigator.userAgent || ''
   const vendor = navigator.vendor || ''
+  const isIOSWebKit = /\b(iPhone|iPad|iPod)\b/i.test(userAgent)
 
   if (!/AppleWebKit/i.test(userAgent)) return false
-  if (/\b(Chrome|Chromium|CriOS|Edg|EdgiOS|OPR|OPiOS|SamsungBrowser|Firefox|FxiOS)\b/i.test(userAgent)) {
+  if (isIOSWebKit) return true
+
+  if (/\b(Chrome|Chromium|Edg|OPR|SamsungBrowser|Firefox)\b/i.test(userAgent)) {
     return false
   }
 
-  return vendor.includes('Apple') || /\b(iPhone|iPad|iPod)\b/i.test(userAgent)
+  return vendor.includes('Apple')
 }
 
 /**
@@ -147,7 +150,8 @@ export default class AkariSub extends EventTarget {
 
     this._onCanvasFallback = options.onCanvasFallback
 
-    const canUseGPURenderer = !options.canvas && (isWebGPUSupported() || isWebGL2Supported())
+    const canUseGPURenderer = !this._isLikelyWebKit && !options.canvas && (isWebGPUSupported() || isWebGL2Supported())
+    const shouldUseAsyncRender = typeof createImageBitmap !== 'undefined' && (options.asyncRender ?? !this._isLikelyWebKit)
 
     // Don't support offscreen rendering on custom canvases
     this._offscreenRender =
@@ -221,7 +225,7 @@ export default class AkariSub extends EventTarget {
       this._worker.postMessage({
         target: 'init',
         wasmUrl: options.wasmUrl ?? 'akarisub-worker.wasm',
-        asyncRender: typeof createImageBitmap !== 'undefined' && (options.asyncRender ?? true),
+        asyncRender: shouldUseAsyncRender,
         onDemandRender: this._onDemandRender,
         initialTime: (this._video?.currentTime ?? 0) + this.timeOffset,
         width: this._canvasctrl.width || 0,
@@ -934,80 +938,82 @@ export default class AkariSub extends EventTarget {
     height: number
     colorSpace: SubtitleColorSpace
   }): void {
-    this._unbusy()
+    try {
+      const dataWidth = data.width
+      const dataHeight = data.height
 
-    const dataWidth = data.width
-    const dataHeight = data.height
+      if (this.debug) {
+        data.times.IPCTime = Date.now() - (data.times.JSRenderTime || 0)
+      }
 
-    if (this.debug) {
-      data.times.IPCTime = Date.now() - (data.times.JSRenderTime || 0)
-    }
+      // Check if canvas size changed
+      const sizeChanged = this._canvasctrl.width !== dataWidth || this._canvasctrl.height !== dataHeight
+      if (sizeChanged) {
+        this._canvasctrl.width = dataWidth
+        this._canvasctrl.height = dataHeight
+        this._lastRenderWidth = dataWidth
+        this._lastRenderHeight = dataHeight
 
-    // Check if canvas size changed
-    const sizeChanged = this._canvasctrl.width !== dataWidth || this._canvasctrl.height !== dataHeight
-    if (sizeChanged) {
-      this._canvasctrl.width = dataWidth
-      this._canvasctrl.height = dataHeight
-      this._lastRenderWidth = dataWidth
-      this._lastRenderHeight = dataHeight
+        // Update GPU renderer size if canvas size changed
+        if (this._gpuRenderer) {
+          this._gpuRenderer.updateSize(dataWidth, dataHeight)
+        }
 
-      // Update GPU renderer size if canvas size changed
+        this._verifyColorSpace({ subtitleColorSpace: data.colorSpace })
+      }
+
+      // Use GPU renderer (WebGPU or WebGL2) if available
       if (this._gpuRenderer) {
-        this._gpuRenderer.updateSize(dataWidth, dataHeight)
+        this._renderGPU(data)
+        return
       }
 
-      this._verifyColorSpace({ subtitleColorSpace: data.colorSpace })
-    }
+      if (!this._ctx) return
 
-    // Use GPU renderer (WebGPU or WebGL2) if available
-    if (this._gpuRenderer) {
-      this._renderGPU(data)
-      return
-    }
+      const ctx = this._ctx
+      const images = data.images
+      const imageCount = images.length
 
-    if (!this._ctx) return
+      ctx.clearRect(0, 0, dataWidth, dataHeight)
 
-    const ctx = this._ctx
-    const images = data.images
-    const imageCount = images.length
+      if (data.asyncRender) {
+        for (let i = 0; i < imageCount; i++) {
+          const image = images[i]
+          if (image.image) {
+            ctx.drawImage(image.image as ImageBitmap, image.x, image.y)
+            ;(image.image as ImageBitmap).close()
+          }
+        }
+      } else {
+        const hasAlphaBug = AkariSub._hasAlphaBug ?? false
 
-    ctx.clearRect(0, 0, dataWidth, dataHeight)
+        for (let i = 0; i < imageCount; i++) {
+          const image = images[i]
+          if (image.image) {
+            const imgW = image.w
+            const imgH = image.h
 
-    if (data.asyncRender) {
-      for (let i = 0; i < imageCount; i++) {
-        const image = images[i]
-        if (image.image) {
-          ctx.drawImage(image.image as ImageBitmap, image.x, image.y)
-          ;(image.image as ImageBitmap).close()
+            const rawData = new Uint8ClampedArray(image.image as ArrayBuffer)
+            const fixedData = fixAlpha(rawData, hasAlphaBug)
+            ctx.putImageData(new ImageData(fixedData as Uint8ClampedArray<ArrayBuffer>, imgW, imgH), image.x, image.y)
+          }
         }
       }
-    } else {
-      const hasAlphaBug = AkariSub._hasAlphaBug ?? false
 
-      for (let i = 0; i < imageCount; i++) {
-        const image = images[i]
-        if (image.image) {
-          const imgW = image.w
-          const imgH = image.h
+      if (this.debug) {
+        data.times.JSRenderTime = Date.now() - (data.times.JSRenderTime || 0) - (data.times.IPCTime || 0)
+        let total = 0
+        const count = data.times.bitmaps || imageCount
+        delete data.times.bitmaps
 
-          const rawData = new Uint8ClampedArray(image.image as ArrayBuffer)
-          const fixedData = fixAlpha(rawData, hasAlphaBug)
-          ctx.putImageData(new ImageData(fixedData as Uint8ClampedArray<ArrayBuffer>, imgW, imgH), image.x, image.y)
+        for (const key in data.times) {
+          total += (data.times as any)[key] || 0
         }
+
+        console.log('Bitmaps: ' + count + ' Total: ' + (total | 0) + 'ms', data.times)
       }
-    }
-
-    if (this.debug) {
-      data.times.JSRenderTime = Date.now() - (data.times.JSRenderTime || 0) - (data.times.IPCTime || 0)
-      let total = 0
-      const count = data.times.bitmaps || imageCount
-      delete data.times.bitmaps
-
-      for (const key in data.times) {
-        total += (data.times as any)[key] || 0
-      }
-
-      console.log('Bitmaps: ' + count + ' Total: ' + (total | 0) + 'ms', data.times)
+    } finally {
+      this._unbusy()
     }
   }
 

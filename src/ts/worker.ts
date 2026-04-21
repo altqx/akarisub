@@ -1586,7 +1586,7 @@ self.offscreenCanvas = ({ transferable }: { transferable: [OffscreenCanvas] }): 
 }
 
 self.detachOffscreen = (): void => {
-  offCanvas = new OffscreenCanvas(self.height, self.width)
+  offCanvas = new OffscreenCanvas(self.width, self.height)
   offCanvasCtx = offCanvas.getContext('2d', { desynchronized: true })
   offscreenRender = 'hybrid'
 }
