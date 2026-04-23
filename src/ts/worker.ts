@@ -186,7 +186,7 @@ interface RenderResultItem {
   h: number
   x: number
   y: number
-  image: number | ImageBitmap | ArrayBuffer
+  image: number | ImageBitmap | Uint8ClampedArray
 }
 
 const initPool = (): void => {
@@ -1008,9 +1008,11 @@ const render = (time: number, force?: boolean | number): void => {
 
         if (!offCanvasCtx) {
           const imagePtr = item.image as number
-          const buf = self.wasmMemory.buffer.slice(imagePtr, imagePtr + item.w * item.h * 4)
-          buffers.push(buf)
-          item.image = buf
+          const byteLength = item.w * item.h * 4
+          const copiedData = new Uint8ClampedArray(byteLength)
+          copiedData.set(self.HEAPU8C.subarray(imagePtr, imagePtr + byteLength))
+          buffers.push(copiedData.buffer)
+          item.image = copiedData
         }
         images[i] = item
       }
@@ -1101,11 +1103,7 @@ const paintImages = ({
 
           bufferCtx!.putImageData(
             new ImageData(
-              new Uint8ClampedArray(
-                rawData.buffer,
-                rawData.byteOffset,
-                rawData.byteLength
-              ) as Uint8ClampedArray<ArrayBuffer>,
+              rawData as Uint8ClampedArray<ArrayBuffer>,
               imgW,
               imgH
             ),

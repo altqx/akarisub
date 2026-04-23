@@ -114,6 +114,14 @@ export function isWebGPUSupported(): boolean {
   return typeof navigator !== 'undefined' && 'gpu' in navigator
 }
 
+function toUint8View(data: ArrayBuffer | Uint8Array | Uint8ClampedArray): Uint8Array {
+  if (data instanceof ArrayBuffer) {
+    return new Uint8Array(data)
+  }
+
+  return new Uint8Array(data.buffer, data.byteOffset, data.byteLength)
+}
+
 /**
  * High-performance WebGPU subtitle renderer for AkariSub.
  */
@@ -577,7 +585,7 @@ export class WebGPURenderer {
             { texture: textureArray, origin: [0, 0, texIndex], premultipliedAlpha: false },
             { width: w, height: h }
           )
-        } else if (imgData instanceof ArrayBuffer) {
+        } else if (imgData instanceof ArrayBuffer || imgData instanceof Uint8Array || imgData instanceof Uint8ClampedArray) {
           this.uploadTextureData(texIndex, imgData, w, h, isBGRA)
         }
 
@@ -626,17 +634,17 @@ export class WebGPURenderer {
 
   private uploadTextureData(
     layerIndex: number,
-    rgbaBuffer: ArrayBuffer,
+    rgbaBuffer: ArrayBuffer | Uint8Array | Uint8ClampedArray,
     width: number,
     height: number,
     swapRB: boolean
   ): void {
     const size = width * height * 4
+    const src = toUint8View(rgbaBuffer)
 
     if (swapRB) {
       // Use reusable conversion buffer
       const uploadData = this.ensureConversionBuffer(size)
-      const src = new Uint8Array(rgbaBuffer)
 
       // Unrolled loop for better performance
       for (let j = 0; j < size; j += 4) {
@@ -655,7 +663,7 @@ export class WebGPURenderer {
     } else {
       this.device!.queue.writeTexture(
         { texture: this.textureArray!, origin: [0, 0, layerIndex] },
-        rgbaBuffer,
+        src,
         { bytesPerRow: width * 4 },
         { width, height }
       )

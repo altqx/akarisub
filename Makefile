@@ -275,7 +275,7 @@ dist/js/$(WORKER_NAME).js: src/AkariSub.cpp src/ts/worker.ts src/pre-worker.js s
 		$(PERFORMANCE_ARGS) \
 		$(SIZE_ARGS) \
 		$(COMPAT_ARGS) \
-		--closure=0 \
+		--closure=1 \
 		--pre-js src/pre-worker.js \
 		--post-js src/post-worker.js \
 		-s ENVIRONMENT=worker \

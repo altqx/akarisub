@@ -31,6 +31,22 @@ let asm = null
   }
 })()
 
+function readBinary(url) {
+  const xhr = new XMLHttpRequest()
+  xhr.open('GET', url, false)
+  xhr.responseType = 'arraybuffer'
+  if (xhr.overrideMimeType) {
+    xhr.overrideMimeType('text/plain; charset=x-user-defined')
+  }
+  xhr.send(null)
+
+  if (!((xhr.status >= 200 && xhr.status < 300) || xhr.status === 304 || xhr.status === 0)) {
+    throw new Error(`Failed to load ${url}: ${xhr.status}`)
+  }
+
+  return new Uint8Array(xhr.response || [])
+}
+
 // Suppress expected fontconfig warnings/errors in console
 out = (text) => {
   if (text === 'AkariSub: No usable fontconfig configuration file found, using fallback.' ||

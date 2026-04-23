@@ -213,7 +213,7 @@ export interface RenderImage {
   y: number
   w: number
   h: number
-  image: ImageBitmap | ArrayBuffer | number
+  image: ImageBitmap | ArrayBuffer | Uint8Array | Uint8ClampedArray | number
 }
 
 /** Render timing debug info */

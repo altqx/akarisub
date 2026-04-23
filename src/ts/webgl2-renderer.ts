@@ -75,6 +75,10 @@ export function isWebGL2Supported(): boolean {
   }
 }
 
+function isArrayBufferView(value: unknown): value is Uint8Array | Uint8ClampedArray {
+  return value instanceof Uint8Array || value instanceof Uint8ClampedArray
+}
+
 function compileShader(gl: WebGL2RenderingContext, type: number, source: string): WebGLShader {
   const shader = gl.createShader(type)!
   gl.shaderSource(shader, source)
@@ -362,8 +366,9 @@ export class WebGL2Renderer {
         const imgData = img.image
         if (imgData instanceof ImageBitmap) {
           gl.texSubImage3D(gl.TEXTURE_2D_ARRAY, 0, 0, 0, count, w, h, 1, gl.RGBA, gl.UNSIGNED_BYTE, imgData)
-        } else if (imgData instanceof ArrayBuffer) {
-          gl.texSubImage3D(gl.TEXTURE_2D_ARRAY, 0, 0, 0, count, w, h, 1, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array(imgData))
+        } else if (imgData instanceof ArrayBuffer || isArrayBufferView(imgData)) {
+          const uploadData = imgData instanceof ArrayBuffer ? new Uint8Array(imgData) : imgData
+          gl.texSubImage3D(gl.TEXTURE_2D_ARRAY, 0, 0, 0, count, w, h, 1, gl.RGBA, gl.UNSIGNED_BYTE, uploadData)
         }
         const off = count << 3
         instanceData[off] = img.x

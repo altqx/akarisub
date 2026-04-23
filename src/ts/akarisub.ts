@@ -995,7 +995,12 @@ export default class AkariSub extends EventTarget {
             const imgW = image.w
             const imgH = image.h
 
-            const rawData = new Uint8ClampedArray(image.image as ArrayBuffer)
+            const rawImage = image.image
+            const rawData = rawImage instanceof Uint8ClampedArray
+              ? rawImage
+              : rawImage instanceof Uint8Array
+                ? new Uint8ClampedArray(rawImage.buffer, rawImage.byteOffset, rawImage.byteLength)
+                : new Uint8ClampedArray(rawImage as ArrayBuffer)
             const fixedData = fixAlpha(rawData, hasAlphaBug)
             ctx.putImageData(new ImageData(fixedData as Uint8ClampedArray<ArrayBuffer>, imgW, imgH), image.x, image.y)
           }
