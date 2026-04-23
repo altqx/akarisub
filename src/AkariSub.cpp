@@ -1,5 +1,4 @@
 #include "../lib/libass/libass/ass.h"
-#include <algorithm>
 #include <cstdint>
 #include <stdarg.h>
 #include <stdio.h>
@@ -321,34 +320,6 @@ static std::string getPrimaryFallbackFamily(const std::string &fonts) {
   return std::string();
 }
 
-struct EventTimeEntry {
-  int event_index;
-  long long start_ms;
-  long long end_ms;
-};
-
-struct FrameCache {
-  long long time_ms;
-  int canvas_w;
-  int canvas_h;
-  bool valid;
-
-  FrameCache() : time_ms(-1), canvas_w(0), canvas_h(0), valid(false) {}
-
-  bool matches(long long tm, int w, int h) const {
-    return valid && time_ms == tm && canvas_w == w && canvas_h == h;
-  }
-
-  void update(long long tm, int w, int h) {
-    time_ms = tm;
-    canvas_w = w;
-    canvas_h = h;
-    valid = true;
-  }
-
-  void invalidate() { valid = false; }
-};
-
 class AkariSub {
 private:
   ReusableBuffer m_buffer;
@@ -367,11 +338,6 @@ private:
   const char *defaultFont;
   std::string fallbackFonts; // comma-separated list of fallback font families
 
-  EventTimeEntry *event_index;
-  int event_index_size;
-  bool event_index_valid;
-  FrameCache frame_cache;
-
 public:
   ASS_Track *track;
 
@@ -389,12 +355,6 @@ public:
     drop_animations = false;
     scanned_events = 0;
     this->debug = debug;
-
-    // Initialize event index
-    event_index = NULL;
-    event_index_size = 0;
-    event_index_valid = false;
-
     defaultFont = copyString(df);
     ass_library = ass_library_init();
     if (!ass_library) {
@@ -438,73 +398,6 @@ public:
     scanned_events = i;
   }
 
-  void buildEventIndex() {
-    freeEventIndex();
-
-    if (!track || track->n_events == 0)
-      return;
-
-    event_index_size = track->n_events;
-    event_index = new EventTimeEntry[event_index_size];
-
-    for (int i = 0; i < event_index_size; i++) {
-      ASS_Event *ev = &track->events[i];
-      event_index[i].event_index = i;
-      event_index[i].start_ms = ev->Start;
-      event_index[i].end_ms = ev->Start + ev->Duration;
-    }
-
-    std::sort(event_index, event_index + event_index_size,
-              [](const EventTimeEntry &a, const EventTimeEntry &b) {
-                return a.start_ms < b.start_ms;
-              });
-
-    event_index_valid = true;
-    if (debug) {
-      printf("AkariSub: Built event index with %d entries\n", event_index_size);
-    }
-  }
-
-  void freeEventIndex() {
-    if (event_index) {
-      delete[] event_index;
-      event_index = NULL;
-    }
-    event_index_size = 0;
-    event_index_valid = false;
-  }
-
-  /*
-   * \brief Find first event index that may be active at given time
-   * Returns -1 if no events could be active.
-   */
-  int findFirstActiveEvent(long long time_ms) const {
-    if (!event_index_valid || event_index_size == 0)
-      return 0;
-
-    // Binary search for first event that ends after time_ms
-    int left = 0, right = event_index_size - 1;
-    int result = -1;
-
-    while (left <= right) {
-      int mid = (left + right) / 2;
-      if (event_index[mid].end_ms > time_ms) {
-        result = mid;
-        right = mid - 1;
-      } else {
-        left = mid + 1;
-      }
-    }
-
-    if (result > 0) {
-      while (result > 0 && event_index[result - 1].end_ms > time_ms) {
-        result--;
-      }
-    }
-
-    return result >= 0 ? result : 0;
-  }
-
   /* TRACK */
   void createTrackMem(std::string buf) {
     removeTrack();
@@ -521,10 +414,6 @@ public:
       scanned_events = 0;
     }
 
-    buildEventIndex();
-
-    frame_cache.invalidate();
-
     trackColorSpace = track->YCbCrMatrix;
   }
 
@@ -533,8 +422,6 @@ public:
       ass_free_track(track);
       track = NULL;
     }
-    freeEventIndex();
-    frame_cache.invalidate();
   }
   /* TRACK */
 
@@ -544,7 +431,6 @@ public:
     ass_set_frame_size(ass_renderer, canvas_w, canvas_h);
     this->canvas_h = canvas_h;
     this->canvas_w = canvas_w;
-    frame_cache.invalidate();
   }
   int getBufferSize(ASS_Image *img) {
     int size = 0;
@@ -708,14 +594,10 @@ public:
   int getEventCount() const { return track->n_events; }
 
   int allocEvent() {
-    event_index_valid = false;
-    frame_cache.invalidate();
     return ass_alloc_event(track);
   }
 
   void removeEvent(int eid) {
-    event_index_valid = false;
-    frame_cache.invalidate();
     ass_free_event(track, eid);
   }
 
@@ -726,8 +608,6 @@ public:
   void removeStyle(int sid) { ass_free_style(track, sid); }
 
   void removeAllEvents() {
-    freeEventIndex();
-    frame_cache.invalidate();
     ass_flush_events(track);
   }
 

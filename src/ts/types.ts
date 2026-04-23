@@ -186,6 +186,8 @@ export interface AkariSubOptions {
   onCanvasFallback?: () => void
   /** Additional time in seconds to render subtitles ahead for pipeline latency compensation (default: 0.008) */
   renderAhead?: number
+  /** Pre-render early track windows after load to warm libass caches (default: false) */
+  fullTrackWarmup?: boolean
 }
 
 // =============================================================================
@@ -255,6 +257,7 @@ export interface WorkerInitMessage {
   target: 'init'
   wasmUrl: string
   asyncRender: boolean
+  fullTrackWarmup: boolean
   onDemandRender: boolean
   initialTime: number
   width: number
@@ -363,11 +366,6 @@ export interface AkariSubModule extends EmscriptenModule {
   _akarisub_remove_style: (handle: number, index: number) => void
   _akarisub_style_override_index: (handle: number, index: number) => void
   _akarisub_disable_style_override: (handle: number) => void
-  _akarisub_render_blend: (handle: number, time: number, force: number) => number
-  _akarisub_render_image: (handle: number, time: number, force: number) => number
-  _akarisub_get_changed: (handle: number) => number
-  _akarisub_get_count: (handle: number) => number
-  _akarisub_get_time: (handle: number) => number
   _akarisub_get_track_color_space: (handle: number) => number
   _akarisub_event_get_int: (handle: number, index: number, field: number) => number
   _akarisub_event_set_int: (handle: number, index: number, field: number, value: number) => void
@@ -377,13 +375,6 @@ export interface AkariSubModule extends EmscriptenModule {
   _akarisub_style_set_num: (handle: number, index: number, field: number, value: number) => void
   _akarisub_style_get_str: (handle: number, index: number, field: number) => number
   _akarisub_style_set_str: (handle: number, index: number, field: number, valuePtr: number) => void
-  _akarisub_render_result_x: (resultPtr: number) => number
-  _akarisub_render_result_y: (resultPtr: number) => number
-  _akarisub_render_result_w: (resultPtr: number) => number
-  _akarisub_render_result_h: (resultPtr: number) => number
-  _akarisub_render_result_image: (resultPtr: number) => number
-  _akarisub_render_result_next: (resultPtr: number) => number
-  _akarisub_render_result_collect: (resultPtr: number, outPtr: number, maxItems: number) => number
   _akarisub_render_blend_collect: (handle: number, time: number, force: number, outPtr: number, maxItems: number) => number
   _akarisub_render_image_collect: (handle: number, time: number, force: number, outPtr: number, maxItems: number) => number
   FS_createPath: (parent: string, path: string, canRead: boolean, canWrite: boolean) => void

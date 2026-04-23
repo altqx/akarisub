@@ -76,11 +76,6 @@ if (__akarisub_ready) {
     Module._akarisub_remove_style = _akarisub_remove_style
     Module._akarisub_style_override_index = _akarisub_style_override_index
     Module._akarisub_disable_style_override = _akarisub_disable_style_override
-    Module._akarisub_render_blend = _akarisub_render_blend
-    Module._akarisub_render_image = _akarisub_render_image
-    Module._akarisub_get_changed = _akarisub_get_changed
-    Module._akarisub_get_count = _akarisub_get_count
-    Module._akarisub_get_time = _akarisub_get_time
     Module._akarisub_get_track_color_space = _akarisub_get_track_color_space
     Module._akarisub_event_get_int = _akarisub_event_get_int
     Module._akarisub_event_set_int = _akarisub_event_set_int
@@ -90,13 +85,6 @@ if (__akarisub_ready) {
     Module._akarisub_style_set_num = _akarisub_style_set_num
     Module._akarisub_style_get_str = _akarisub_style_get_str
     Module._akarisub_style_set_str = _akarisub_style_set_str
-    Module._akarisub_render_result_x = _akarisub_render_result_x
-    Module._akarisub_render_result_y = _akarisub_render_result_y
-    Module._akarisub_render_result_w = _akarisub_render_result_w
-    Module._akarisub_render_result_h = _akarisub_render_result_h
-    Module._akarisub_render_result_image = _akarisub_render_result_image
-    Module._akarisub_render_result_next = _akarisub_render_result_next
-    Module._akarisub_render_result_collect = _akarisub_render_result_collect
     Module._akarisub_render_blend_collect = _akarisub_render_blend_collect
     Module._akarisub_render_image_collect = _akarisub_render_image_collect
     if (typeof FS !== 'undefined') {

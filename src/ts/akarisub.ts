@@ -114,6 +114,7 @@ export default class AkariSub extends EventTarget {
   // Cached render data to reduce allocations
   private _lastRenderWidth: number = 0
   private _lastRenderHeight: number = 0
+  private _gpuBitmapImages: Array<{ image: ImageBitmap; x: number; y: number }> = []
 
   // Public properties
   public timeOffset: number
@@ -226,6 +227,7 @@ export default class AkariSub extends EventTarget {
         target: 'init',
         wasmUrl: options.wasmUrl ?? 'akarisub-worker.wasm',
         asyncRender: shouldUseAsyncRender,
+        fullTrackWarmup: options.fullTrackWarmup ?? false,
         onDemandRender: this._onDemandRender,
         initialTime: (this._video?.currentTime ?? 0) + this.timeOffset,
         width: this._canvasctrl.width || 0,
@@ -1028,13 +1030,21 @@ export default class AkariSub extends EventTarget {
 
     if (data.asyncRender) {
       // For async render mode with ImageBitmaps
-      const bitmapImages = data.images
-        .filter((img) => img.image instanceof ImageBitmap)
-        .map((img) => ({
-          image: img.image as ImageBitmap,
-          x: img.x,
-          y: img.y
-        }))
+      const bitmapImages = this._gpuBitmapImages
+      let bitmapCount = 0
+
+      for (let i = 0; i < data.images.length; i++) {
+        const img = data.images[i]
+        if (!(img.image instanceof ImageBitmap)) continue
+
+        const target = bitmapImages[bitmapCount] || (bitmapImages[bitmapCount] = { image: img.image, x: 0, y: 0 })
+        target.image = img.image
+        target.x = img.x
+        target.y = img.y
+        bitmapCount++
+      }
+
+      bitmapImages.length = bitmapCount
 
       renderer.renderBitmaps(bitmapImages, this._canvasctrl.width, this._canvasctrl.height)
 

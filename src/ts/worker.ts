@@ -106,6 +106,7 @@ let bufferCtx: OffscreenCanvasRenderingContext2D | null = null
 let akariSubHandle = 0
 let subtitleColorSpace: SubtitleColorSpace = null
 let dropAllBlur = false
+let fullTrackWarmupEnabled = false
 let hasBitmapBug = false
 let _Module: AkariSubModule | null = null
 let forceNextDemandRender = false
@@ -133,11 +134,6 @@ interface AkariSubApi {
   removeStyle: (handle: number, index: number) => void
   styleOverrideIndex: (handle: number, index: number) => void
   disableStyleOverride: (handle: number) => void
-  renderBlend: (handle: number, time: number, force: number) => number
-  renderImage: (handle: number, time: number, force: number) => number
-  getChanged: (handle: number) => number
-  getCount: (handle: number) => number
-  getTime: (handle: number) => number
   getTrackColorSpace: (handle: number) => number
   eventGetInt: (handle: number, index: number, field: number) => number
   eventSetInt: (handle: number, index: number, field: number, value: number) => void
@@ -147,13 +143,6 @@ interface AkariSubApi {
   styleSetNum: (handle: number, index: number, field: number, value: number) => void
   styleGetStr: (handle: number, index: number, field: number) => number
   styleSetStr: (handle: number, index: number, field: number, valuePtr: number) => void
-  rrX: (ptr: number) => number
-  rrY: (ptr: number) => number
-  rrW: (ptr: number) => number
-  rrH: (ptr: number) => number
-  rrImage: (ptr: number) => number
-  rrNext: (ptr: number) => number
-  rrCollect: (resultPtr: number, outPtr: number, maxItems: number) => number
   renderBlendCollect: (handle: number, time: number, force: number, outPtr: number, maxItems: number) => number
   renderImageCollect: (handle: number, time: number, force: number, outPtr: number, maxItems: number) => number
 }
@@ -174,12 +163,9 @@ const FULL_WARMUP_YIELD_EVERY = 24
 const ASS_TIME_SCALE = 1000
 const imagePool: RenderResultItem[] = new Array(MAX_POOLED_IMAGES)
 let poolInitialized = false
-const RR_META_STRIDE = 6
 // Batch render-collect buffer: 3 header ints (changed, count, time) + 5 ints per image (x, y, w, h, image_ptr)
 const RRC_HEADER_INTS = 3
 const RRC_IMG_STRIDE = 5
-let rrMetaPtr = 0
-let rrMetaCapacity = 0
 // Pre-allocated buffer for batch render-collect calls
 let rrcBufPtr = 0
 let rrcBufCapacity = 0
@@ -216,28 +202,6 @@ const getPooledItem = (index: number): RenderResultItem => {
     return imagePool[index]
   }
   return { w: 0, h: 0, x: 0, y: 0, image: 0 }
-}
-
-const ensureRenderMetaBuffer = (imageCount: number): void => {
-  if (!_Module || imageCount <= 0) return
-  if (rrMetaCapacity >= imageCount && rrMetaPtr) return
-
-  const nextCapacity = Math.max(imageCount, rrMetaCapacity * 2 || 64)
-  const nextSizeBytes = nextCapacity * RR_META_STRIDE * Int32Array.BYTES_PER_ELEMENT
-
-  if (rrMetaPtr) {
-    _Module._free(rrMetaPtr)
-    rrMetaPtr = 0
-    rrMetaCapacity = 0
-  }
-
-  rrMetaPtr = _Module._malloc(nextSizeBytes)
-  if (!rrMetaPtr) {
-    rrMetaCapacity = 0
-    throw new Error('Failed to allocate render metadata buffer')
-  }
-
-  rrMetaCapacity = nextCapacity
 }
 
 /**
@@ -280,6 +244,10 @@ const prewarmRenderer = (time: number): void => {
   } else {
     api.renderImageCollect(handle, time, 0, rrcBufPtr, rrcBufCapacity)
   }
+}
+
+const syncTotalEventsMetric = (): void => {
+  metrics.totalEvents = akariSubHandle ? requireApi().getEventCount(akariSubHandle) : 0
 }
 
 const getFirstEventStartTime = (): number | null => {
@@ -378,7 +346,7 @@ const stopWarmup = (): void => {
 }
 
 const scheduleFullTrackWarmup = (): void => {
-  if (fullTrackWarmupPromise || !akariSubHandle) return
+  if (!fullTrackWarmupEnabled || fullTrackWarmupPromise || !akariSubHandle) return
 
   fullTrackWarmupPromise = (async () => {
     await sleep(0)
@@ -779,6 +747,7 @@ self.setTrack = ({ content }: { content: string }): void => {
   withCString(content, (contentPtr) => {
     api.createTrackMem(handle, contentPtr)
   })
+  syncTotalEventsMetric()
   firstTrackEventStartTime = getFirstEventStartTime()
   subtitleColorSpace = libassYCbCrMap[api.getTrackColorSpace(handle)]
   forceNextDemandRender = true
@@ -796,6 +765,7 @@ self.freeTrack = (): void => {
   const api = requireApi()
   const handle = requireHandle()
   api.removeTrack(handle)
+  syncTotalEventsMetric()
 }
 
 self.setTrackByUrl = ({ url }: { url: string }): void => {
@@ -961,8 +931,6 @@ const render = (time: number, force?: boolean | number): void => {
     metrics.cacheHits++
   }
 
-  metrics.totalEvents = api.getEventCount(handle)
-
   if (debug) {
     const decodeEndTime = performance.now()
     const renderEndTimeWasm = headerView[2]
@@ -999,7 +967,7 @@ const render = (time: number, force?: boolean | number): void => {
 
         const pointer = meta[metaOffset + 4]
         const byteLength = item.w * item.h * 4
-        const rawData = self.HEAPU8C.slice(pointer, pointer + byteLength)
+        const rawData = new Uint8ClampedArray(self.wasmMemory.buffer, pointer, byteLength)
 
         const imageData = new ImageData(rawData as Uint8ClampedArray<ArrayBuffer>, item.w, item.h)
 
@@ -1210,6 +1178,7 @@ const cancelAnimationFrame = self.cancelAnimationFrame ? self.cancelAnimationFra
 
 self.init = async (data: any): Promise<void> => {
   hasBitmapBug = data.hasBitmapBug
+  fullTrackWarmupEnabled = !!data.fullTrackWarmup
   if (typeof data.initialTime === 'number' && Number.isFinite(data.initialTime)) {
     lastCurrentTime = data.initialTime
   }
@@ -1255,11 +1224,6 @@ self.init = async (data: any): Promise<void> => {
       removeStyle: Module._akarisub_remove_style,
       styleOverrideIndex: Module._akarisub_style_override_index,
       disableStyleOverride: Module._akarisub_disable_style_override,
-      renderBlend: Module._akarisub_render_blend,
-      renderImage: Module._akarisub_render_image,
-      getChanged: Module._akarisub_get_changed,
-      getCount: Module._akarisub_get_count,
-      getTime: Module._akarisub_get_time,
       getTrackColorSpace: Module._akarisub_get_track_color_space,
       eventGetInt: Module._akarisub_event_get_int,
       eventSetInt: Module._akarisub_event_set_int,
@@ -1269,13 +1233,6 @@ self.init = async (data: any): Promise<void> => {
       styleSetNum: Module._akarisub_style_set_num,
       styleGetStr: Module._akarisub_style_get_str,
       styleSetStr: Module._akarisub_style_set_str,
-      rrX: Module._akarisub_render_result_x,
-      rrY: Module._akarisub_render_result_y,
-      rrW: Module._akarisub_render_result_w,
-      rrH: Module._akarisub_render_result_h,
-      rrImage: Module._akarisub_render_result_image,
-      rrNext: Module._akarisub_render_result_next,
-      rrCollect: Module._akarisub_render_result_collect,
       renderBlendCollect: Module._akarisub_render_blend_collect,
       renderImageCollect: Module._akarisub_render_image_collect
     }
@@ -1536,11 +1493,10 @@ self.init = async (data: any): Promise<void> => {
       if (debug) console.log('[AkariSub] Font reload complete')
     }
 
-    processAvailableFonts(subContent)
-
     withCString(subContent, (subPtr) => {
       requireApi().createTrackMem(requireHandle(), subPtr)
     })
+    syncTotalEventsMetric()
     firstTrackEventStartTime = getFirstEventStartTime()
     subtitleColorSpace = libassYCbCrMap[requireApi().getTrackColorSpace(requireHandle())]
     requireApi().setDropAnimations(requireHandle(), data.dropAllAnimations || 0)
@@ -1631,11 +1587,6 @@ self.destroy = (): void => {
   firstTrackEventStartTime = null
 
   if (_Module) {
-    if (rrMetaPtr) {
-      _Module._free(rrMetaPtr)
-      rrMetaPtr = 0
-      rrMetaCapacity = 0
-    }
     if (rrcBufPtr) {
       _Module._free(rrcBufPtr)
       rrcBufPtr = 0
@@ -1646,6 +1597,7 @@ self.destroy = (): void => {
     requireApi().destroy(akariSubHandle)
     akariSubHandle = 0
   }
+  metrics.totalEvents = 0
 }
 
 self.setAsyncRender = ({ value }: { value: boolean }): void => {
@@ -1750,6 +1702,7 @@ const readStyle = (index: number): ASSStyle => {
 self.createEvent = ({ event }: { event: Partial<ASSEvent> }): void => {
   const index = requireApi().allocEvent(requireHandle())
   if (index >= 0) applyEventFields(index, event)
+  syncTotalEventsMetric()
 }
 
 self.getEvents = (): void => {
@@ -1768,6 +1721,7 @@ self.setEvent = ({ event, index }: { event: Partial<ASSEvent>; index: number }):
 
 self.removeEvent = ({ index }: { index: number }): void => {
   requireApi().removeEvent(requireHandle(), index)
+  syncTotalEventsMetric()
 }
 
 // =============================================================================
