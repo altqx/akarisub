@@ -1309,7 +1309,7 @@ self.init = async (data: any): Promise<void> => {
         if (!shaderApi?.hbGpuShaderSource) return ''
         const ptr = shaderApi.hbGpuShaderSource(family, stage, lang)
         if (!ptr) return ''
-        return (Module as any).UTF8ToString(ptr)
+        return readCString(ptr)
       }
 
       postMessage({
