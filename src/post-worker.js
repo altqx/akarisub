@@ -87,7 +87,9 @@ if (__akarisub_ready) {
       '_akarisub_style_get_str': _akarisub_style_get_str,
       '_akarisub_style_set_str': _akarisub_style_set_str,
       '_akarisub_render_blend_collect': _akarisub_render_blend_collect,
-      '_akarisub_render_image_collect': _akarisub_render_image_collect
+      '_akarisub_render_image_collect': _akarisub_render_image_collect,
+      '_akarisub_render_hb_gpu_collect': _akarisub_render_hb_gpu_collect,
+      '_akarisub_hb_gpu_shader_source': _akarisub_hb_gpu_shader_source
     })
     if (typeof FS !== 'undefined') {
       Module['FS_createPath'] = FS.createPath
