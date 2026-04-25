@@ -136,8 +136,13 @@ export interface AkariSubOptions {
   video?: HTMLVideoElement
   /** Custom canvas element (optional if video is provided) */
   canvas?: HTMLCanvasElement
-  /** Image blending mode: 'js' for hardware acceleration, 'wasm' for software */
-  blendMode?: 'js' | 'wasm'
+  /**
+   * Image blending mode:
+   * - 'js': libass image tiles composited in JS/GPU renderer
+   * - 'wasm': libass pre-blended tiles composited in JS/GPU renderer
+    * - 'hb-gpu': experimental HarfBuzz GPU-blob path
+   */
+  blendMode?: 'js' | 'wasm' | 'hb-gpu'
   /** Use async rendering with ImageBitmap (default: true) */
   asyncRender?: boolean
   /** Use offscreen canvas rendering (default: true) */
@@ -237,6 +242,32 @@ export interface RenderMessage {
   colorSpace: string | null
 }
 
+export interface HbGpuShaderMessage {
+  target: 'hbGpuShaders'
+  wgsl: {
+    vertex: string
+    fragment: string
+    drawFragment: string
+    paintFragment: string
+  }
+  glsl: {
+    vertex: string
+    fragment: string
+    drawFragment: string
+    paintFragment: string
+  }
+}
+
+export interface HbGpuRenderMessage {
+  target: 'renderHbGpu'
+  glyphData: ArrayBuffer
+  atlasData: ArrayBuffer
+  times: RenderTimes
+  width: number
+  height: number
+  colorSpace: string | null
+}
+
 /** Worker -> Main thread messages */
 export type WorkerOutboundMessage =
   | { target: 'ready' }
@@ -250,6 +281,8 @@ export type WorkerOutboundMessage =
   | { target: 'resetStats'; success: boolean }
   | { target: 'getEventCount'; count: number }
   | { target: 'getStyleCount'; count: number }
+  | HbGpuShaderMessage
+  | HbGpuRenderMessage
   | RenderMessage
 
 /** Main thread -> Worker init message */
@@ -262,7 +295,7 @@ export interface WorkerInitMessage {
   initialTime: number
   width: number
   height: number
-  blendMode: 'js' | 'wasm'
+  blendMode: 'js' | 'wasm' | 'hb-gpu'
   subUrl?: string
   subContent?: string | null
   fonts: (string | Uint8Array)[]
@@ -377,6 +410,8 @@ export interface AkariSubModule extends EmscriptenModule {
   _akarisub_style_set_str: (handle: number, index: number, field: number, valuePtr: number) => void
   _akarisub_render_blend_collect: (handle: number, time: number, force: number, outPtr: number, maxItems: number) => number
   _akarisub_render_image_collect: (handle: number, time: number, force: number, outPtr: number, maxItems: number) => number
+  _akarisub_render_hb_gpu_collect: (handle: number, time: number, force: number, outPtr: number, maxItems: number) => number
+  _akarisub_hb_gpu_shader_source: (family: number, stage: number, lang: number) => number
   FS_createPath: (parent: string, path: string, canRead: boolean, canWrite: boolean) => void
   FS_createDataFile: (parent: string, name: string | null, data: Uint8Array, canRead: boolean, canWrite: boolean, canOwn?: boolean) => void
 }

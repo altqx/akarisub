@@ -221,6 +221,9 @@ LIBASS_DEPS = \
 	$(DIST_DIR)/lib/libbrotlidec.a \
 	$(DIST_DIR)/lib/libfreetype.a \
 	$(DIST_DIR)/lib/libharfbuzz.a \
+	$(DIST_DIR)/lib/libharfbuzz-raster.a \
+	$(DIST_DIR)/lib/libharfbuzz-vector.a \
+	$(DIST_DIR)/lib/libharfbuzz-gpu.a \
 	$(DIST_DIR)/lib/libexpat.a \
 	$(DIST_DIR)/lib/libfontconfig.a \
 	$(DIST_DIR)/lib/libass.a
@@ -259,7 +262,7 @@ SIZE_ARGS = \
 # args that are required for this to even work at all
 # Modern browser targets: Chrome 114+, Safari 16.4+ (for all WASM features)
 COMPAT_ARGS = \
-		-s EXPORTED_FUNCTIONS="['_malloc','_free','_akarisub_create','_akarisub_destroy','_akarisub_set_drop_animations','_akarisub_create_track_mem','_akarisub_remove_track','_akarisub_resize_canvas','_akarisub_add_font','_akarisub_reload_fonts','_akarisub_set_default_font','_akarisub_set_fallback_fonts','_akarisub_set_memory_limits','_akarisub_get_event_count','_akarisub_alloc_event','_akarisub_remove_event','_akarisub_get_style_count','_akarisub_alloc_style','_akarisub_remove_style','_akarisub_style_override_index','_akarisub_disable_style_override','_akarisub_get_track_color_space','_akarisub_event_get_int','_akarisub_event_set_int','_akarisub_event_get_str','_akarisub_event_set_str','_akarisub_style_get_num','_akarisub_style_set_num','_akarisub_style_get_str','_akarisub_style_set_str','_akarisub_render_blend_collect','_akarisub_render_image_collect']" \
+		-s EXPORTED_FUNCTIONS="['_malloc','_free','_akarisub_create','_akarisub_destroy','_akarisub_set_drop_animations','_akarisub_create_track_mem','_akarisub_remove_track','_akarisub_resize_canvas','_akarisub_add_font','_akarisub_reload_fonts','_akarisub_set_default_font','_akarisub_set_fallback_fonts','_akarisub_set_memory_limits','_akarisub_get_event_count','_akarisub_alloc_event','_akarisub_remove_event','_akarisub_get_style_count','_akarisub_alloc_style','_akarisub_remove_style','_akarisub_style_override_index','_akarisub_disable_style_override','_akarisub_get_track_color_space','_akarisub_event_get_int','_akarisub_event_set_int','_akarisub_event_get_str','_akarisub_event_set_str','_akarisub_style_get_num','_akarisub_style_set_num','_akarisub_style_get_str','_akarisub_style_set_str','_akarisub_render_blend_collect','_akarisub_render_image_collect','_akarisub_render_hb_gpu_collect','_akarisub_hb_gpu_shader_source']" \
 		-s EXPORTED_RUNTIME_METHODS="['FS_createPath', 'FS_createDataFile']" \
 		-s IMPORTED_MEMORY=1 \
 		-s MIN_CHROME_VERSION=114 \

@@ -28,6 +28,21 @@ import { WebGL2Renderer, isWebGL2Supported } from './webgl2-renderer'
 
 type AnyGPURenderer = WebGPURenderer | WebGL2Renderer
 
+interface HbGpuShaderBundle {
+  wgsl: {
+    vertex: string
+    fragment: string
+    drawFragment: string
+    paintFragment: string
+  }
+  glsl: {
+    vertex: string
+    fragment: string
+    drawFragment: string
+    paintFragment: string
+  }
+}
+
 const DEFAULT_RENDER_AHEAD = 0.008
 const DEFAULT_PIPELINE_LATENCY_MS = DEFAULT_RENDER_AHEAD * 1000
 const DEFAULT_WEBKIT_PIPELINE_LATENCY_MS = 16
@@ -115,6 +130,7 @@ export default class AkariSub extends EventTarget {
   private _lastRenderWidth: number = 0
   private _lastRenderHeight: number = 0
   private _gpuBitmapImages: Array<{ image: ImageBitmap; x: number; y: number }> = []
+  private _hbGpuShaderBundle: HbGpuShaderBundle | null = null
 
   // Public properties
   public timeOffset: number
@@ -334,6 +350,9 @@ export default class AkariSub extends EventTarget {
         if (!this._canvas) return
         await renderer.setCanvas(this._canvas, Math.max(1, this._canvas.width || 1), Math.max(1, this._canvas.height || 1))
         this._gpuRenderer = renderer
+        if (this._hbGpuShaderBundle && (renderer as any).setHbGpuShaders) {
+          ;(renderer as any).setHbGpuShaders(this._hbGpuShaderBundle)
+        }
         this._rendererType = 'webgpu'
         console.log('[AkariSub] Using WebGPU renderer')
         return
@@ -349,6 +368,9 @@ export default class AkariSub extends EventTarget {
         if (!this._canvas) return
         await renderer.setCanvas(this._canvas, Math.max(1, this._canvas.width || 1), Math.max(1, this._canvas.height || 1))
         this._gpuRenderer = renderer
+        if (this._hbGpuShaderBundle && (renderer as any).setHbGpuShaders) {
+          ;(renderer as any).setHbGpuShaders(this._hbGpuShaderBundle)
+        }
         this._rendererType = 'webgl2'
         console.log('[AkariSub] Using WebGL2 renderer')
         return
@@ -1075,6 +1097,61 @@ export default class AkariSub extends EventTarget {
       }
 
       console.log(`[${this._rendererType.toUpperCase()}] Bitmaps: ` + count + ' Total: ' + (total | 0) + 'ms', data.times)
+    }
+  }
+
+  private _hbGpuShaders(data: HbGpuShaderBundle & { target: 'hbGpuShaders' }): void {
+    this._hbGpuShaderBundle = {
+      wgsl: data.wgsl,
+      glsl: data.glsl
+    }
+
+    const renderer = this._gpuRenderer as any
+    if (renderer?.setHbGpuShaders) {
+      renderer.setHbGpuShaders(this._hbGpuShaderBundle)
+    }
+  }
+
+  private _renderHbGpu(data: {
+    glyphData: ArrayBuffer
+    atlasData: ArrayBuffer
+    times: RenderTimes
+    width: number
+    height: number
+    colorSpace: SubtitleColorSpace
+  }): void {
+    try {
+      const dataWidth = data.width
+      const dataHeight = data.height
+
+      if (this.debug) {
+        data.times.IPCTime = Date.now() - (data.times.JSRenderTime || 0)
+      }
+
+      const sizeChanged = this._canvasctrl.width !== dataWidth || this._canvasctrl.height !== dataHeight
+      if (sizeChanged) {
+        this._canvasctrl.width = dataWidth
+        this._canvasctrl.height = dataHeight
+
+        if (this._gpuRenderer) {
+          this._gpuRenderer.updateSize(dataWidth, dataHeight)
+        }
+
+        this._verifyColorSpace({ subtitleColorSpace: data.colorSpace })
+      }
+
+      const renderer = this._gpuRenderer as any
+      if (!renderer?.renderHbGpuBlobs) {
+        return
+      }
+
+      if (this._hbGpuShaderBundle && renderer?.setHbGpuShaders) {
+        renderer.setHbGpuShaders(this._hbGpuShaderBundle)
+      }
+
+      renderer.renderHbGpuBlobs(data.glyphData, data.atlasData, this._canvasctrl.width, this._canvasctrl.height)
+    } finally {
+      this._unbusy()
     }
   }
 

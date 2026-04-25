@@ -1,10 +1,12 @@
 #include "../lib/libass/libass/ass.h"
+#include "../lib/harfbuzz/src/hb-gpu.h"
 #include <cstdint>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <string>
+#include <vector>
 
 #include <emscripten.h>
 
@@ -320,6 +322,15 @@ static std::string getPrimaryFallbackFamily(const std::string &fonts) {
   return std::string();
 }
 
+static inline int32_t floatToBits(float value) {
+  union {
+    float f;
+    int32_t i;
+  } bits;
+  bits.f = value;
+  return bits.i;
+}
+
 class AkariSub {
 private:
   ReusableBuffer m_buffer;
@@ -328,12 +339,17 @@ private:
   int scanned_events; // next unscanned event index
   ASS_Library *ass_library;
   ASS_Renderer *ass_renderer;
+  hb_gpu_draw_t *hb_draw;
   bool debug;
 
   int canvas_w;
   int canvas_h;
 
   int status;
+
+  ReusableBuffer m_hbGpuPayload;
+  std::vector<int32_t> hb_gpu_meta;
+  std::vector<uint8_t> hb_gpu_atlas;
 
   const char *defaultFont;
   std::string fallbackFonts; // comma-separated list of fallback font families
@@ -349,6 +365,7 @@ public:
     status = 0;
     ass_library = NULL;
     ass_renderer = NULL;
+    hb_draw = NULL;
     track = NULL;
     this->canvas_w = canvas_w;
     this->canvas_h = canvas_h;
@@ -370,6 +387,8 @@ public:
       exit(3);
     }
     ass_set_extract_fonts(ass_library, true);
+
+    hb_draw = hb_gpu_draw_create_or_fail();
 
     resizeCanvas(canvas_w, canvas_h, canvas_w, canvas_h);
 
@@ -540,11 +559,141 @@ public:
     return processImages(imgs);
   }
 
+  static void hbGlyphRunCallback(void *user_data, const ASS_Event *event,
+                                 int glyph_index, const void *font_handle,
+                                 int face_index, int glyph_id, int x, int y,
+                                 int advance_x, int advance_y,
+                                 uint32_t primary_color_rgba) {
+    (void)event;
+    (void)glyph_index;
+    AkariSub *instance = static_cast<AkariSub *>(user_data);
+    if (!instance)
+      return;
+    instance->collectHbGpuGlyph(font_handle, face_index, glyph_id, x, y,
+                                advance_x, advance_y, primary_color_rgba);
+  }
+
+  void collectHbGpuGlyph(const void *font_handle, int face_index, int glyph_id,
+                         int x, int y, int advance_x, int advance_y,
+                         uint32_t primary_color_rgba) {
+    if (!hb_draw || !font_handle)
+      return;
+
+    (void)face_index;
+    hb_font_t *hb_font = (hb_font_t *)font_handle;
+    if (!hb_font)
+      return;
+
+    if (!hb_gpu_draw_glyph_or_fail(hb_draw, hb_font, (hb_codepoint_t)glyph_id))
+      return;
+
+    hb_glyph_extents_t extents;
+    hb_blob_t *blob = hb_gpu_draw_encode(hb_draw, &extents);
+    if (!blob)
+      return;
+
+    unsigned int blob_len = 0;
+    const char *blob_data = hb_blob_get_data(blob, &blob_len);
+
+    int atlas_offset = (int)hb_gpu_atlas.size();
+    if (blob_len > 0 && blob_data)
+      hb_gpu_atlas.insert(hb_gpu_atlas.end(), blob_data, blob_data + blob_len);
+
+    hb_face_t *hb_face = hb_font_get_face(hb_font);
+    unsigned upem = hb_face ? hb_face_get_upem(hb_face) : 0;
+
+    int ext_min_x = extents.x_bearing;
+    int ext_max_x = extents.x_bearing + extents.width;
+    int ext_min_y = extents.y_bearing + extents.height;
+    int ext_max_y = extents.y_bearing;
+
+    uint32_t packed_advance =
+        (((uint32_t)(uint16_t)advance_x) << 16) | (uint16_t)advance_y;
+
+    hb_gpu_meta.push_back(atlas_offset);
+    hb_gpu_meta.push_back((int)blob_len);
+    hb_gpu_meta.push_back(floatToBits((float)x));
+    hb_gpu_meta.push_back(floatToBits((float)y));
+    hb_gpu_meta.push_back(ext_min_x);
+    hb_gpu_meta.push_back(ext_max_x);
+    hb_gpu_meta.push_back(ext_min_y);
+    hb_gpu_meta.push_back(ext_max_y);
+    hb_gpu_meta.push_back((int)packed_advance);
+    hb_gpu_meta.push_back((int)primary_color_rgba);
+    hb_gpu_meta.push_back((int)upem);
+    hb_gpu_meta.push_back(blob_len == 0 ? 1 : 0);
+
+    hb_blob_destroy(blob);
+  }
+
+  int renderHbGpuCollect(double tm, int force, int *payload_ptr,
+                         int *payload_size) {
+    if (!payload_ptr || !payload_size) {
+      return 0;
+    }
+
+    *payload_ptr = 0;
+    *payload_size = 0;
+
+    time = 0;
+    count = 0;
+    hb_gpu_meta.clear();
+    hb_gpu_atlas.clear();
+
+    if (!hb_draw || !track)
+      return 0;
+
+    ass_set_glyph_run_callback(ass_renderer, hbGlyphRunCallback, this);
+    ASS_Image *imgs =
+        ass_render_frame(ass_renderer, track, (int)(tm * 1000), &changed);
+    ass_set_glyph_run_callback(ass_renderer, NULL, NULL);
+
+    if (imgs == NULL || (changed == 0 && !force))
+      return 0;
+
+    if (debug)
+      time = emscripten_get_now();
+
+    count = hb_gpu_meta.size() / 12;
+    if (count <= 0)
+      return 0;
+
+    int header_ints = 3;
+    int meta_ints = count * 12;
+    int atlas_bytes = hb_gpu_atlas.size();
+    size_t payload_len =
+        (size_t)(header_ints + meta_ints) * sizeof(int32_t) + atlas_bytes;
+
+    uint8_t *payload = (uint8_t *)m_hbGpuPayload.take(payload_len);
+    if (!payload)
+      return 0;
+
+    int32_t *header = (int32_t *)payload;
+    header[0] = changed;
+    header[1] = count;
+    header[2] = atlas_bytes;
+
+    int32_t *meta = header + header_ints;
+    memcpy(meta, hb_gpu_meta.data(), meta_ints * sizeof(int32_t));
+
+    if (atlas_bytes > 0)
+      memcpy((uint8_t *)(meta + meta_ints), hb_gpu_atlas.data(), atlas_bytes);
+
+    *payload_ptr = (int)(uintptr_t)payload;
+    *payload_size = (int)payload_len;
+    return count;
+  }
+
   void quitLibrary() {
     removeTrack();
+    if (hb_draw) {
+      hb_gpu_draw_destroy(hb_draw);
+      hb_draw = NULL;
+    }
     ass_renderer_done(ass_renderer);
     ass_library_done(ass_library);
     m_buffer.clear();
+    m_hbGpuPayload.clear();
   }
 
   void setDefaultFont(const std::string &name) {
@@ -1499,6 +1648,49 @@ EMSCRIPTEN_KEEPALIVE int akarisub_render_image_collect(
   }
 
   return written;
+}
+
+EMSCRIPTEN_KEEPALIVE int akarisub_render_hb_gpu_collect(
+    AkariSub *instance, double tm, int force, int *out, int max_items) {
+  if (!instance || !out || max_items < 5)
+    return 0;
+
+  int payload_ptr = 0;
+  int payload_size = 0;
+  int written = instance->renderHbGpuCollect(tm, force, &payload_ptr, &payload_size);
+
+  out[0] = instance->changed;
+  out[1] = instance->count;
+  out[2] = instance->time;
+  out[3] = payload_ptr;
+  out[4] = payload_size;
+  return written;
+}
+
+EMSCRIPTEN_KEEPALIVE const char *akarisub_hb_gpu_shader_source(
+    int family, int stage, int lang) {
+  hb_gpu_shader_stage_t shader_stage =
+      (hb_gpu_shader_stage_t)stage;
+  hb_gpu_shader_lang_t shader_lang =
+      (hb_gpu_shader_lang_t)lang;
+
+  const char *source = NULL;
+  switch (family) {
+  case 0:
+    source = hb_gpu_shader_source(shader_stage, shader_lang);
+    break;
+  case 1:
+    source = hb_gpu_draw_shader_source(shader_stage, shader_lang);
+    break;
+  case 2:
+    source = hb_gpu_paint_shader_source(shader_stage, shader_lang);
+    break;
+  default:
+    source = NULL;
+    break;
+  }
+
+  return source ? source : "";
 }
 
 }

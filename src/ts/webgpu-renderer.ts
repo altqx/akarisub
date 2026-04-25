@@ -165,6 +165,23 @@ export class WebGPURenderer {
   private _initPromise: Promise<void> | null = null
   private _initialized = false
 
+  private hbGpuShaders: {
+    wgsl: {
+      vertex: string
+      fragment: string
+      drawFragment: string
+      paintFragment: string
+    }
+  } | null = null
+  private hbPipeline: GPURenderPipeline | null = null
+  private hbBindGroupLayout: GPUBindGroupLayout | null = null
+  private hbBindGroup: GPUBindGroup | null = null
+  private hbVertexBuffer: GPUBuffer | null = null
+  private hbAtlasBuffer: GPUBuffer | null = null
+  private hbVertexCapacity = 0
+  private hbAtlasCapacity = 0
+
+
   constructor() {
     // Pre-allocate buffer for max images (8 floats per image: destRect + texInfo)
     this.imageDataArray = new Float32Array(MAX_IMAGES_PER_BATCH * 8)
@@ -732,5 +749,249 @@ export class WebGPURenderer {
     this._canvas = null
     this._initialized = false
     this._initPromise = null
+  }
+
+  setHbGpuShaders(shaders: {
+    wgsl: { vertex: string; fragment: string; drawFragment: string; paintFragment: string }
+  }): void {
+    this.hbGpuShaders = shaders
+    this.hbPipeline = null
+    this.hbBindGroup = null
+  }
+
+  private ensureHbPipeline(): void {
+    if (!this.device || this.hbPipeline) return
+    if (!this.hbGpuShaders) return
+
+    const vertexCode = `${this.hbGpuShaders.wgsl.vertex}
+struct Uniforms { resolution: vec2f }
+@group(0) @binding(0) var<uniform> uniforms: Uniforms;
+
+struct VertexIn {
+  @location(0) position: vec2f,
+  @location(1) renderCoord: vec2f,
+  @location(2) glyphLoc: f32,
+  @location(3) color: vec4f,
+}
+
+struct VertexOut {
+  @builtin(position) position: vec4f,
+  @location(0) renderCoord: vec2f,
+  @location(1) glyphLoc: f32,
+  @location(2) color: vec4f,
+}
+
+@vertex
+fn vsMain(input: VertexIn) -> VertexOut {
+  var out: VertexOut;
+  var clip = (input.position / uniforms.resolution) * 2.0 - 1.0;
+  clip.y = -clip.y;
+  out.position = vec4f(clip, 0.0, 1.0);
+  out.renderCoord = input.renderCoord;
+  out.glyphLoc = input.glyphLoc;
+  out.color = input.color;
+  return out;
+}`
+
+    const fragmentCode = `${this.hbGpuShaders.wgsl.fragment}
+${this.hbGpuShaders.wgsl.drawFragment}
+@group(0) @binding(1) var<storage, read> hb_gpu_atlas: array<vec4<i32>>;
+
+struct FragIn {
+  @location(0) renderCoord: vec2f,
+  @location(1) glyphLoc: f32,
+  @location(2) color: vec4f,
+}
+
+@fragment
+fn fsMain(input: FragIn) -> @location(0) vec4f {
+  let cov = hb_gpu_draw(input.renderCoord, u32(max(input.glyphLoc, 0.0)), &hb_gpu_atlas);
+  return vec4f(input.color.rgb * cov, input.color.a * cov);
+}`
+
+    const vertexModule = this.device.createShaderModule({ code: vertexCode })
+    const fragmentModule = this.device.createShaderModule({ code: fragmentCode })
+
+    this.hbBindGroupLayout = this.device.createBindGroupLayout({
+      entries: [
+        { binding: 0, visibility: GPUShaderStage.VERTEX, buffer: { type: 'uniform' } },
+        { binding: 1, visibility: GPUShaderStage.FRAGMENT, buffer: { type: 'read-only-storage' } }
+      ]
+    })
+
+    const pipelineLayout = this.device.createPipelineLayout({ bindGroupLayouts: [this.hbBindGroupLayout] })
+
+    this.hbPipeline = this.device.createRenderPipeline({
+      layout: pipelineLayout,
+      vertex: {
+        module: vertexModule,
+        entryPoint: 'vsMain',
+        buffers: [
+          {
+            arrayStride: 36,
+            stepMode: 'vertex',
+            attributes: [
+              { shaderLocation: 0, offset: 0, format: 'float32x2' },
+              { shaderLocation: 1, offset: 8, format: 'float32x2' },
+              { shaderLocation: 2, offset: 16, format: 'float32' },
+              { shaderLocation: 3, offset: 20, format: 'float32x4' }
+            ]
+          }
+        ]
+      },
+      fragment: {
+        module: fragmentModule,
+        entryPoint: 'fsMain',
+        targets: [
+          {
+            format: this.format,
+            blend: {
+              color: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+              alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' }
+            }
+          }
+        ]
+      },
+      primitive: { topology: 'triangle-list' }
+    })
+  }
+
+  renderHbGpuBlobs(glyphData: ArrayBuffer, atlasData: ArrayBuffer, width: number, height: number): void {
+    if (!this.device || !this.context) return
+    if (!glyphData.byteLength || !atlasData.byteLength) {
+      this.clear()
+      return
+    }
+
+    this.updateSize(width, height)
+    this.ensureHbPipeline()
+    if (!this.hbPipeline || !this.hbBindGroupLayout) return
+
+    const meta = new Int32Array(glyphData)
+    const glyphCount = (meta.length / 12) | 0
+    if (glyphCount <= 0) {
+      this.clear()
+      return
+    }
+
+    const raw16 = new Int16Array(atlasData)
+    const atlasI32 = new Int32Array(raw16.length)
+    for (let i = 0; i < raw16.length; i++) atlasI32[i] = raw16[i]
+
+    const vertexData = new Float32Array(glyphCount * 6 * 9)
+    let vertexOffset = 0
+
+    const bitsToFloat = (bits: number): number => {
+      const v = new DataView(new ArrayBuffer(4))
+      v.setInt32(0, bits, true)
+      return v.getFloat32(0, true)
+    }
+
+    const decodeColor = (packed: number): [number, number, number, number] => {
+      const r = ((packed >>> 24) & 0xff) / 255
+      const g = ((packed >>> 16) & 0xff) / 255
+      const b = ((packed >>> 8) & 0xff) / 255
+      const a = (255 - (packed & 0xff)) / 255
+      return [r, g, b, a]
+    }
+
+    const pushVertex = (
+      px: number,
+      py: number,
+      tx: number,
+      ty: number,
+      glyphLoc: number,
+      color: [number, number, number, number]
+    ): void => {
+      vertexData[vertexOffset++] = px
+      vertexData[vertexOffset++] = py
+      vertexData[vertexOffset++] = tx
+      vertexData[vertexOffset++] = ty
+      vertexData[vertexOffset++] = glyphLoc
+      vertexData[vertexOffset++] = color[0]
+      vertexData[vertexOffset++] = color[1]
+      vertexData[vertexOffset++] = color[2]
+      vertexData[vertexOffset++] = color[3]
+    }
+
+    for (let i = 0; i < glyphCount; i++) {
+      const o = i * 12
+      const atlasOffsetBytes = meta[o]
+      const penX = bitsToFloat(meta[o + 2])
+      const penY = bitsToFloat(meta[o + 3])
+      const extMinX = meta[o + 4]
+      const extMaxX = meta[o + 5]
+      const extMinY = meta[o + 6]
+      const extMaxY = meta[o + 7]
+      const glyphLoc = atlasOffsetBytes / 8
+      const color = decodeColor(meta[o + 9])
+
+      const x0 = penX + extMinX
+      const y0 = penY + extMinY
+      const x1 = penX + extMaxX
+      const y1 = penY + extMaxY
+
+      pushVertex(x0, y0, extMinX, extMinY, glyphLoc, color)
+      pushVertex(x1, y0, extMaxX, extMinY, glyphLoc, color)
+      pushVertex(x0, y1, extMinX, extMaxY, glyphLoc, color)
+      pushVertex(x1, y0, extMaxX, extMinY, glyphLoc, color)
+      pushVertex(x1, y1, extMaxX, extMaxY, glyphLoc, color)
+      pushVertex(x0, y1, extMinX, extMaxY, glyphLoc, color)
+    }
+
+    const vertexByteLen = vertexData.byteLength
+    if (!this.hbVertexBuffer || this.hbVertexCapacity < vertexByteLen) {
+      this.hbVertexBuffer?.destroy()
+      this.hbVertexCapacity = Math.max(vertexByteLen, this.hbVertexCapacity * 2, 4096)
+      this.hbVertexBuffer = this.device.createBuffer({
+        size: this.hbVertexCapacity,
+        usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST
+      })
+    }
+
+    const atlasByteLen = atlasI32.byteLength
+    if (!this.hbAtlasBuffer || this.hbAtlasCapacity < atlasByteLen) {
+      this.hbAtlasBuffer?.destroy()
+      this.hbAtlasCapacity = Math.max(atlasByteLen, this.hbAtlasCapacity * 2, 4096)
+      this.hbAtlasBuffer = this.device.createBuffer({
+        size: this.hbAtlasCapacity,
+        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
+      })
+      this.hbBindGroup = null
+    }
+
+    this.device.queue.writeBuffer(this.hbVertexBuffer, 0, vertexData)
+    this.device.queue.writeBuffer(this.hbAtlasBuffer, 0, atlasI32)
+
+    if (!this.hbBindGroup) {
+      this.hbBindGroup = this.device.createBindGroup({
+        layout: this.hbBindGroupLayout,
+        entries: [
+          { binding: 0, resource: { buffer: this.uniformBuffer! } },
+          { binding: 1, resource: { buffer: this.hbAtlasBuffer } }
+        ]
+      })
+    }
+
+    const currentTexture = this.context.getCurrentTexture()
+    const commandEncoder = this.device.createCommandEncoder()
+    const pass = commandEncoder.beginRenderPass({
+      colorAttachments: [
+        {
+          view: currentTexture.createView(),
+          clearValue: { r: 0, g: 0, b: 0, a: 0 },
+          loadOp: 'clear',
+          storeOp: 'store'
+        }
+      ]
+    })
+
+    pass.setPipeline(this.hbPipeline)
+    pass.setBindGroup(0, this.hbBindGroup)
+    pass.setVertexBuffer(0, this.hbVertexBuffer)
+    pass.draw(glyphCount * 6, 1, 0, 0)
+    pass.end()
+
+    this.device.queue.submit([commandEncoder.finish()])
   }
 }
