@@ -145,8 +145,8 @@ interface AkariSubApi {
   styleSetStr: (handle: number, index: number, field: number, valuePtr: number) => void
   renderBlendCollect: (handle: number, time: number, force: number, outPtr: number, maxItems: number) => number
   renderImageCollect: (handle: number, time: number, force: number, outPtr: number, maxItems: number) => number
-  renderHbGpuCollect: (handle: number, time: number, force: number, outPtr: number, maxItems: number) => number
-  hbGpuShaderSource: (family: number, stage: number, lang: number) => number
+  renderHbGpuCollect?: (handle: number, time: number, force: number, outPtr: number, maxItems: number) => number
+  hbGpuShaderSource?: (family: number, stage: number, lang: number) => number
 }
 
 let akariSubApi: AkariSubApi | null = null
@@ -247,8 +247,11 @@ const prewarmRenderer = (time: number): void => {
   if (blendMode === 'wasm') {
     api.renderBlendCollect(handle, time, 0, rrcBufPtr, rrcBufCapacity)
   } else if (blendMode === 'hb-gpu') {
-    // Experimental path currently shares the image collect ABI until GPU blob transport lands.
-    api.renderHbGpuCollect(handle, time, 0, rrcBufPtr, rrcBufCapacity)
+    if (api.renderHbGpuCollect) {
+      api.renderHbGpuCollect(handle, time, 0, rrcBufPtr, rrcBufCapacity)
+    } else {
+      api.renderBlendCollect(handle, time, 0, rrcBufPtr, rrcBufCapacity)
+    }
   } else {
     api.renderImageCollect(handle, time, 0, rrcBufPtr, rrcBufCapacity)
   }
@@ -917,7 +920,9 @@ const render = (time: number, force?: boolean | number): void => {
     blendMode === 'wasm'
       ? api.renderBlendCollect(handle, time, forceInt, rrcBufPtr, rrcBufCapacity)
       : blendMode === 'hb-gpu'
-        ? api.renderHbGpuCollect(handle, time, forceInt, rrcBufPtr, rrcBufCapacity)
+        ? (api.renderHbGpuCollect
+            ? api.renderHbGpuCollect(handle, time, forceInt, rrcBufPtr, rrcBufCapacity)
+            : api.renderBlendCollect(handle, time, forceInt, rrcBufPtr, rrcBufCapacity))
         : api.renderImageCollect(handle, time, forceInt, rrcBufPtr, rrcBufCapacity)
 
   const headerView = new Int32Array(self.wasmMemory.buffer, rrcBufPtr, RRC_HEADER_INTS)
@@ -1298,9 +1303,10 @@ self.init = async (data: any): Promise<void> => {
       hbGpuShaderSource: Module._akarisub_hb_gpu_shader_source
     }
 
-    if (!hbGpuShadersPosted) {
-      const shaderApi = akariSubApi!
+    if (!hbGpuShadersPosted && akariSubApi.hbGpuShaderSource) {
+      const shaderApi = akariSubApi
       const getSource = (family: number, stage: number, lang: number): string => {
+        if (!shaderApi?.hbGpuShaderSource) return ''
         const ptr = shaderApi.hbGpuShaderSource(family, stage, lang)
         if (!ptr) return ''
         return (Module as any).UTF8ToString(ptr)
@@ -1398,6 +1404,10 @@ self.init = async (data: any): Promise<void> => {
     self.height = data.height
     onDemandRenderMode = !!data.onDemandRender
     blendMode = data.blendMode
+    if (blendMode === 'hb-gpu' && (!akariSubApi.renderHbGpuCollect || !akariSubApi.hbGpuShaderSource)) {
+      console.warn('[AkariSub] hb-gpu exports missing in loaded WASM, falling back to wasm blend mode')
+      blendMode = 'wasm'
+    }
     asyncRender = data.asyncRender
 
     if (asyncRender && typeof createImageBitmap === 'undefined') {
