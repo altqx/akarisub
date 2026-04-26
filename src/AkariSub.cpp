@@ -331,6 +331,27 @@ static inline int32_t floatToBits(float value) {
   return bits.i;
 }
 
+static inline int assColorVisibleAlpha(uint32_t color_rgba) {
+  return 255 - (int)(color_rgba & 0xff);
+}
+
+static inline uint32_t assColorScaleAlpha(uint32_t color_rgba, float scale) {
+  if (scale <= 0.f)
+    return (color_rgba & 0xffffff00u) | 0xffu;
+  if (scale >= 1.f)
+    return color_rgba;
+
+  int visible = assColorVisibleAlpha(color_rgba);
+  int scaled = (int)lrint((double)visible * (double)scale);
+  if (scaled < 0)
+    scaled = 0;
+  if (scaled > 255)
+    scaled = 255;
+
+  uint32_t encoded_alpha = (uint32_t)(255 - scaled);
+  return (color_rgba & 0xffffff00u) | encoded_alpha;
+}
+
 class AkariSub {
 private:
   ReusableBuffer m_buffer;
@@ -561,21 +582,35 @@ public:
 
   static void hbGlyphRunCallback(void *user_data, const ASS_Event *event,
                                  int glyph_index, const void *font_handle,
-                                 int face_index, int glyph_id, int x, int y,
-                                 int advance_x, int advance_y,
-                                 uint32_t primary_color_rgba) {
+                                 int face_index, int glyph_id, double x,
+                                 double y, double advance_x,
+                                 double advance_y,
+                                 uint32_t primary_color_rgba,
+                                 uint32_t outline_color_rgba,
+                                 uint32_t shadow_color_rgba,
+                                 double border_x, double border_y,
+                                 double shadow_x, double shadow_y,
+                                 double blur) {
     (void)event;
     (void)glyph_index;
     AkariSub *instance = static_cast<AkariSub *>(user_data);
     if (!instance)
       return;
     instance->collectHbGpuGlyph(font_handle, face_index, glyph_id, x, y,
-                                advance_x, advance_y, primary_color_rgba);
+                                advance_x, advance_y, primary_color_rgba,
+                                outline_color_rgba, shadow_color_rgba,
+                                border_x, border_y, shadow_x, shadow_y, blur);
   }
 
   void collectHbGpuGlyph(const void *font_handle, int face_index, int glyph_id,
-                         int x, int y, int advance_x, int advance_y,
-                         uint32_t primary_color_rgba) {
+                         double x, double y, double advance_x,
+                         double advance_y,
+                         uint32_t primary_color_rgba,
+                         uint32_t outline_color_rgba,
+                         uint32_t shadow_color_rgba,
+                         double border_x, double border_y,
+                         double shadow_x, double shadow_y,
+                         double blur) {
     if (!hb_draw || !font_handle)
       return;
 
@@ -607,21 +642,60 @@ public:
     int ext_min_y = extents.y_bearing + extents.height;
     int ext_max_y = extents.y_bearing;
 
+    int adv_x_i = (int)lrint(advance_x);
+    int adv_y_i = (int)lrint(advance_y);
     uint32_t packed_advance =
-        (((uint32_t)(uint16_t)advance_x) << 16) | (uint16_t)advance_y;
+        (((uint32_t)(uint16_t)adv_x_i) << 16) | (uint16_t)adv_y_i;
 
-    hb_gpu_meta.push_back(atlas_offset);
-    hb_gpu_meta.push_back((int)blob_len);
-    hb_gpu_meta.push_back(floatToBits((float)x));
-    hb_gpu_meta.push_back(floatToBits((float)y));
-    hb_gpu_meta.push_back(ext_min_x);
-    hb_gpu_meta.push_back(ext_max_x);
-    hb_gpu_meta.push_back(ext_min_y);
-    hb_gpu_meta.push_back(ext_max_y);
-    hb_gpu_meta.push_back((int)packed_advance);
-    hb_gpu_meta.push_back((int)primary_color_rgba);
-    hb_gpu_meta.push_back((int)upem);
-    hb_gpu_meta.push_back(blob_len == 0 ? 1 : 0);
+    auto pushInstance = [&](double px, double py, uint32_t color_rgba,
+                            int flags) {
+      hb_gpu_meta.push_back(atlas_offset);
+      hb_gpu_meta.push_back((int)blob_len);
+      hb_gpu_meta.push_back(floatToBits((float)px));
+      hb_gpu_meta.push_back(floatToBits((float)py));
+      hb_gpu_meta.push_back(ext_min_x);
+      hb_gpu_meta.push_back(ext_max_x);
+      hb_gpu_meta.push_back(ext_min_y);
+      hb_gpu_meta.push_back(ext_max_y);
+      hb_gpu_meta.push_back((int)packed_advance);
+      hb_gpu_meta.push_back((int)color_rgba);
+      hb_gpu_meta.push_back((int)upem);
+      hb_gpu_meta.push_back(flags);
+    };
+
+    const bool hasShadow = assColorVisibleAlpha(shadow_color_rgba) > 0 &&
+                           (shadow_x != 0.0 || shadow_y != 0.0);
+    const bool hasOutline = assColorVisibleAlpha(outline_color_rgba) > 0 &&
+                            (border_x > 0.0 || border_y > 0.0);
+
+    if (hasShadow)
+      pushInstance(x + shadow_x, y + shadow_y, shadow_color_rgba, 2);
+
+    if (hasOutline) {
+      const double bx = border_x > 0.0 ? border_x : 0.0;
+      const double by = border_y > 0.0 ? border_y : 0.0;
+
+      // Approximate ASS outline with multi-directional hb-gpu draws.
+      pushInstance(x - bx, y, outline_color_rgba, 1);
+      pushInstance(x + bx, y, outline_color_rgba, 1);
+      pushInstance(x, y - by, outline_color_rgba, 1);
+      pushInstance(x, y + by, outline_color_rgba, 1);
+      pushInstance(x - bx, y - by, outline_color_rgba, 1);
+      pushInstance(x - bx, y + by, outline_color_rgba, 1);
+      pushInstance(x + bx, y - by, outline_color_rgba, 1);
+      pushInstance(x + bx, y + by, outline_color_rgba, 1);
+
+      if (blur > 0.0) {
+        double blur_radius = blur * 0.75;
+        uint32_t soft_outline = assColorScaleAlpha(outline_color_rgba, 0.4f);
+        pushInstance(x - bx - blur_radius, y, soft_outline, 3);
+        pushInstance(x + bx + blur_radius, y, soft_outline, 3);
+        pushInstance(x, y - by - blur_radius, soft_outline, 3);
+        pushInstance(x, y + by + blur_radius, soft_outline, 3);
+      }
+    }
+
+    pushInstance(x, y, primary_color_rgba, blob_len == 0 ? 4 : 0);
 
     hb_blob_destroy(blob);
   }
