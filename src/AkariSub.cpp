@@ -585,6 +585,8 @@ public:
                                  int face_index, int glyph_id, double x,
                                  double y, double advance_x,
                                  double advance_y,
+                                 double glyph_scale_x,
+                                 double glyph_scale_y,
                                  uint32_t primary_color_rgba,
                                  uint32_t outline_color_rgba,
                                  uint32_t shadow_color_rgba,
@@ -597,14 +599,16 @@ public:
     if (!instance)
       return;
     instance->collectHbGpuGlyph(font_handle, face_index, glyph_id, x, y,
-                                advance_x, advance_y, primary_color_rgba,
+                                advance_x, advance_y, glyph_scale_x,
+                                glyph_scale_y, primary_color_rgba,
                                 outline_color_rgba, shadow_color_rgba,
                                 border_x, border_y, shadow_x, shadow_y, blur);
   }
 
   void collectHbGpuGlyph(const void *font_handle, int face_index, int glyph_id,
                          double x, double y, double advance_x,
-                         double advance_y,
+                         double advance_y, double glyph_scale_x,
+                         double glyph_scale_y,
                          uint32_t primary_color_rgba,
                          uint32_t outline_color_rgba,
                          uint32_t shadow_color_rgba,
@@ -657,9 +661,9 @@ public:
       hb_gpu_meta.push_back(ext_max_x);
       hb_gpu_meta.push_back(ext_min_y);
       hb_gpu_meta.push_back(ext_max_y);
-      hb_gpu_meta.push_back((int)packed_advance);
+      hb_gpu_meta.push_back(floatToBits((float)glyph_scale_x));
       hb_gpu_meta.push_back((int)color_rgba);
-      hb_gpu_meta.push_back((int)upem);
+      hb_gpu_meta.push_back(floatToBits((float)glyph_scale_y));
       hb_gpu_meta.push_back(flags);
     };
 
@@ -1153,7 +1157,7 @@ public:
 
     ass_set_selective_style_override_enabled(ass_renderer, set_force_flags);
     ass_set_selective_style_override(ass_renderer, &style);
-    ass_set_font_scale(ass_renderer, 0.3);
+    ass_set_font_scale(ass_renderer, 1);
   }
 
   void disableStyleOverride() {

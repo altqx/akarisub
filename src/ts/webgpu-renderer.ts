@@ -914,10 +914,6 @@ fn fsMain(input: FragIn) -> @location(0) vec4f {
       vertexData[vertexOffset++] = color[3]
     }
 
-    // libass callback pen positions are in integer screen pixels, while
-    // HarfBuzz hb-gpu extents are 26.6 fixed-point.
-    const emToPx = 1 / 64
-
     for (let i = 0; i < glyphCount; i++) {
       const o = i * 12
       const atlasOffsetBytes = meta[o]
@@ -927,13 +923,15 @@ fn fsMain(input: FragIn) -> @location(0) vec4f {
       const extMaxX = meta[o + 5]
       const extMinY = meta[o + 6]
       const extMaxY = meta[o + 7]
+      const glyphScaleX = bitsToFloat(meta[o + 8])
       const glyphLoc = atlasOffsetBytes / 8
       const color = decodeColor(meta[o + 9])
+      const glyphScaleY = bitsToFloat(meta[o + 10])
 
-      const x0 = penX + extMinX * emToPx
-      const y0 = penY - extMinY * emToPx
-      const x1 = penX + extMaxX * emToPx
-      const y1 = penY - extMaxY * emToPx
+      const x0 = penX + extMinX * glyphScaleX
+      const y0 = penY - extMinY * glyphScaleY
+      const x1 = penX + extMaxX * glyphScaleX
+      const y1 = penY - extMaxY * glyphScaleY
 
       pushVertex(x0, y0, extMinX, extMinY, glyphLoc, color)
       pushVertex(x1, y0, extMaxX, extMinY, glyphLoc, color)
