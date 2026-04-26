@@ -567,6 +567,10 @@ void main() {
       vertexData[ptr++] = col[3]
     }
 
+    // libass passes pen positions as integer screen pixels, while HarfBuzz
+    // hb-gpu extents are in 26.6 fixed-point units.
+    const emToPx = 1 / 64
+
     for (let i = 0; i < glyphCount; i++) {
       const o = i * 12
       const atlasOffsetBytes = meta[o]
@@ -579,10 +583,10 @@ void main() {
       const glyphLoc = atlasOffsetBytes / 8
       const color = decodeColor(meta[o + 9])
 
-      const x0 = penX + minX
-      const y0 = penY + minY
-      const x1 = penX + maxX
-      const y1 = penY + maxY
+      const x0 = penX + minX * emToPx
+      const y0 = penY - minY * emToPx
+      const x1 = penX + maxX * emToPx
+      const y1 = penY - maxY * emToPx
 
       push(x0, y0, minX, minY, glyphLoc, color)
       push(x1, y0, maxX, minY, glyphLoc, color)
