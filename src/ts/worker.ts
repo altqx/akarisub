@@ -2060,9 +2060,14 @@ self.getStyleCount = (): void => {
 // =============================================================================
 
 onmessage = ({ data }: MessageEvent): void => {
-  if (self[data.target]) {
-    self[data.target](data)
-  } else {
+  if (!self[data.target]) {
     throw new Error('Unknown event target ' + data.target)
   }
+
+  Promise.resolve(self[data.target](data)).catch((error) => {
+    postMessage({
+      target: 'error',
+      error: error instanceof Error ? error.message : String(error)
+    })
+  })
 }
