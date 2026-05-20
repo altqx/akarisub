@@ -173,8 +173,10 @@ export interface AkariSubOptions {
   wasmUrl?: string
   /** URL to subtitle file */
   subUrl?: string
-  /** Subtitle content as string */
-  subContent?: string
+  /** Subtitle content as string or UTF-8 bytes */
+  subContent?: string | Uint8Array | ArrayBuffer
+  /** Encrypted subtitle content decrypted inside the worker before loading into libass */
+  encryptedSubContent?: EncryptedSubtitleContent
   /** Array of font URLs or Uint8Arrays */
   fonts?: (string | Uint8Array)[]
   /** Available fonts map (lowercase name -> URL/data) */
@@ -193,6 +195,15 @@ export interface AkariSubOptions {
   renderAhead?: number
   /** Pre-render early track windows after load to warm libass caches (default: false) */
   fullTrackWarmup?: boolean
+}
+
+export interface EncryptedSubtitleContent {
+  /** Non-extractable AES-GCM content key from akari-crypto's v2 transport flow */
+  contentKey: CryptoKey
+  /** Single encrypted subtitle payload */
+  encrypted?: ArrayBuffer
+  /** Chunked encrypted subtitle payloads, in display file order */
+  encryptedChunks?: ArrayBuffer[]
 }
 
 // =============================================================================
@@ -271,6 +282,7 @@ export interface HbGpuRenderMessage {
 /** Worker -> Main thread messages */
 export type WorkerOutboundMessage =
   | { target: 'ready' }
+  | { target: 'trackReady' }
   | { target: 'unbusy' }
   | { target: 'console'; command: string; content: string }
   | { target: 'getLocalFont'; font: string }
@@ -297,7 +309,8 @@ export interface WorkerInitMessage {
   height: number
   blendMode: 'js' | 'wasm' | 'hb-gpu'
   subUrl?: string
-  subContent?: string | null
+  subContent?: string | Uint8Array | ArrayBuffer | null
+  encryptedSubContent?: EncryptedSubtitleContent | null
   fonts: (string | Uint8Array)[]
   availableFonts: Record<string, string | Uint8Array>
   fallbackFonts: string[]
@@ -319,7 +332,8 @@ export type WorkerInboundMessage =
   | { target: 'detachOffscreen' }
   | { target: 'canvas'; width: number; height: number; videoWidth: number; videoHeight: number; force?: boolean }
   | { target: 'video'; currentTime?: number; isPaused?: boolean; rate?: number; colorSpace?: string | null }
-  | { target: 'setTrack'; content: string }
+  | { target: 'setTrack'; content: string | Uint8Array | ArrayBuffer }
+  | { target: 'setEncryptedTrack'; content: EncryptedSubtitleContent }
   | { target: 'setTrackByUrl'; url: string }
   | { target: 'freeTrack' }
   | { target: 'demand'; time: number }

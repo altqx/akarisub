@@ -18,6 +18,7 @@ export type {
   VideoFrameCallbackMetadata,
   SubtitleColorSpace,
   WebYCbCrColorSpace,
+  EncryptedSubtitleContent,
   AkariSubModule,
   WorkerInboundMessage,
   WorkerOutboundMessage

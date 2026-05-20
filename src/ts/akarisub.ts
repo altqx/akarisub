@@ -14,6 +14,7 @@ import type {
   SubtitleColorSpace,
   WebYCbCrColorSpace
 } from './types'
+import type { EncryptedSubtitleContent } from './types'
 import {
   webYCbCrMap,
   colorMatrixConversionMap,
@@ -239,7 +240,7 @@ export default class AkariSub extends EventTarget {
 
     // Initialize worker after feature tests complete
     test.then(() => {
-      this._worker.postMessage({
+      const initMessage = {
         target: 'init',
         wasmUrl: options.wasmUrl ?? 'akarisub-worker.wasm',
         asyncRender: shouldUseAsyncRender,
@@ -251,6 +252,7 @@ export default class AkariSub extends EventTarget {
         blendMode: options.blendMode ?? 'wasm',
         subUrl: options.subUrl,
         subContent: options.subContent || null,
+        encryptedSubContent: options.encryptedSubContent || null,
         fonts: options.fonts || [],
         availableFonts: options.availableFonts || { 'liberation sans': './default.woff2' },
         fallbackFonts: options.fallbackFonts || ['liberation sans'],
@@ -263,7 +265,9 @@ export default class AkariSub extends EventTarget {
         libassGlyphLimit: options.libassGlyphLimit ?? 2048,
         useLocalFonts: typeof (globalThis as any).queryLocalFonts !== 'undefined' && (options.useLocalFonts ?? true),
         hasBitmapBug: AkariSub._hasBitmapBug
-      })
+      }
+
+      this._worker.postMessage(initMessage, AkariSub._getSubtitleTransfers(options.subContent, options.encryptedSubContent))
 
       if (this._offscreenRender) {
         this.sendMessage('offscreenCanvas', {}, [this._canvasctrl as OffscreenCanvas])
@@ -333,6 +337,29 @@ export default class AkariSub extends EventTarget {
 
   private static async _test(): Promise<void> {
     await AkariSub._testImageBugs()
+  }
+
+  private static _getSubtitleTransfers(
+    subContent?: string | Uint8Array | ArrayBuffer,
+    encryptedSubContent?: EncryptedSubtitleContent
+  ): Transferable[] {
+    const transfers: Transferable[] = []
+
+    if (subContent instanceof ArrayBuffer) {
+      transfers.push(subContent)
+    } else if (subContent instanceof Uint8Array) {
+      transfers.push(subContent.buffer)
+    }
+
+    if (encryptedSubContent?.encrypted) {
+      transfers.push(encryptedSubContent.encrypted)
+    }
+
+    for (const chunk of encryptedSubContent?.encryptedChunks || []) {
+      transfers.push(chunk)
+    }
+
+    return transfers
   }
 
   // ==========================================================================
@@ -567,8 +594,19 @@ export default class AkariSub extends EventTarget {
   /**
    * Overwrites the current subtitle content.
    */
-  setTrack(content: string): void {
-    this.sendMessage('setTrack', { content })
+  setTrack(content: string | Uint8Array | ArrayBuffer): void {
+    this.sendMessage('setTrack', { content }, AkariSub._getSubtitleTransfers(content))
+    this._reAttachOffscreen()
+    if (this._ctx) this._ctx.filter = 'none'
+  }
+
+  /**
+   * Overwrites the current subtitle content with encrypted v2 payloads.
+   * Decryption happens inside the AkariSub worker so plaintext ASS text is not
+   * materialized in the main thread.
+   */
+  setEncryptedTrack(content: EncryptedSubtitleContent): void {
+    this.sendMessage('setEncryptedTrack', { content }, AkariSub._getSubtitleTransfers(undefined, content))
     this._reAttachOffscreen()
     if (this._ctx) this._ctx.filter = 'none'
   }
@@ -1185,6 +1223,10 @@ export default class AkariSub extends EventTarget {
    */
   private _partial_ready(): void {
     this.dispatchEvent(new CustomEvent('partial_ready'))
+  }
+
+  private _trackReady(): void {
+    this.dispatchEvent(new CustomEvent('trackReady'))
   }
 
   /**

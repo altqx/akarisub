@@ -24,7 +24,8 @@ export type {
   RenderTimes,
   VideoFrameCallbackMetadata,
   SubtitleColorSpace,
-  WebYCbCrColorSpace
+  WebYCbCrColorSpace,
+  EncryptedSubtitleContent
 } from './ts/types'
 
 // Utility exports (for advanced usage)

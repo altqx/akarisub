@@ -12,6 +12,7 @@ import type {
   ASSEvent,
   ASSStyle,
   AkariSubModule,
+  EncryptedSubtitleContent,
   SubtitleColorSpace,
   WorkerInboundMessage
 } from './types'
@@ -183,6 +184,7 @@ let warmupEnabled = false
 let firstTrackEventStartTime: number | null = null
 let fullTrackWarmupPromise: Promise<void> | null = null
 let hbGpuShadersPosted = false
+let protectedTrackContent = false
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
 
@@ -508,6 +510,101 @@ const withCString = <T>(input: string, callback: (ptr: number) => T): T => {
   }
 }
 
+const toUint8Array = (content: Uint8Array | ArrayBuffer): Uint8Array => {
+  return content instanceof Uint8Array ? content : new Uint8Array(content)
+}
+
+const isBinaryContent = (content: string | Uint8Array | ArrayBuffer): content is Uint8Array | ArrayBuffer => {
+  return content instanceof Uint8Array || content instanceof ArrayBuffer
+}
+
+const withCBytes = <T>(input: Uint8Array, callback: (ptr: number) => T): T => {
+  if (!_Module) throw new Error('AkariSub module is not initialized')
+
+  const ptr = _Module._malloc(input.length + 1)
+  if (!ptr) throw new Error('Failed to allocate subtitle content')
+
+  try {
+    self.HEAPU8.set(input, ptr)
+    self.HEAPU8[ptr + input.length] = 0
+    return callback(ptr)
+  } finally {
+    self.HEAPU8.fill(0, ptr, ptr + input.length + 1)
+    _Module._free(ptr)
+  }
+}
+
+const decryptV2Payload = async (encrypted: ArrayBuffer, contentKey: CryptoKey): Promise<Uint8Array> => {
+  const data = new Uint8Array(encrypted)
+  const keyIdSize = 8
+  const nonceSize = 12
+  const headerSize = 1 + keyIdSize + nonceSize
+
+  if (data.length < headerSize + 16) {
+    throw new Error('Ciphertext too short for v2 subtitle payload')
+  }
+
+  if (data[0] !== 2) {
+    throw new Error('Unsupported encrypted subtitle protocol version')
+  }
+
+  const header = data.subarray(0, 1 + keyIdSize)
+  const nonce = data.subarray(1 + keyIdSize, headerSize)
+  const ciphertext = data.subarray(headerSize)
+  const decrypted = await crypto.subtle.decrypt(
+    {
+      name: 'AES-GCM',
+      iv: nonce.buffer.slice(nonce.byteOffset, nonce.byteOffset + nonce.byteLength),
+      additionalData: header.buffer.slice(header.byteOffset, header.byteOffset + header.byteLength),
+      tagLength: 128
+    },
+    contentKey,
+    ciphertext.buffer.slice(ciphertext.byteOffset, ciphertext.byteOffset + ciphertext.byteLength)
+  )
+
+  return new Uint8Array(decrypted)
+}
+
+const decryptSubtitleContent = async (content: EncryptedSubtitleContent): Promise<Uint8Array> => {
+  if (content.encrypted) {
+    return decryptV2Payload(content.encrypted, content.contentKey)
+  }
+
+  const chunks = content.encryptedChunks || []
+  if (chunks.length === 0) {
+    throw new Error('Encrypted subtitle content is empty')
+  }
+
+  const decryptedChunks = await Promise.all(chunks.map((chunk) => decryptV2Payload(chunk, content.contentKey)))
+  const totalLength = decryptedChunks.reduce((sum, chunk) => sum + chunk.length, 0)
+  const result = new Uint8Array(totalLength)
+  let offset = 0
+
+  for (const chunk of decryptedChunks) {
+    result.set(chunk, offset)
+    chunk.fill(0)
+    offset += chunk.length
+  }
+
+  return result
+}
+
+const createTrackFromBytes = (content: Uint8Array): void => {
+  const api = requireApi()
+  const handle = requireHandle()
+  withCBytes(content, (contentPtr) => {
+    api.createTrackMem(handle, contentPtr)
+  })
+}
+
+const createTrackFromString = (content: string): void => {
+  const api = requireApi()
+  const handle = requireHandle()
+  withCString(content, (contentPtr) => {
+    api.createTrackMem(handle, contentPtr)
+  })
+}
+
 const requireApi = (): AkariSubApi => {
   if (!akariSubApi) throw new Error('AkariSub API is not initialized')
   return akariSubApi
@@ -744,25 +841,49 @@ const readAsync = (url: string, load: (data: ArrayBuffer) => void, err: (e: any)
 // Track Management
 // =============================================================================
 
-self.setTrack = ({ content }: { content: string }): void => {
+const finishTrackLoad = (): void => {
+  const api = requireApi()
+  const handle = requireHandle()
+  syncTotalEventsMetric()
+  firstTrackEventStartTime = getFirstEventStartTime()
+  subtitleColorSpace = libassYCbCrMap[api.getTrackColorSpace(handle)]
+  forceNextDemandRender = true
+  postMessage({ target: 'verifyColorSpace', subtitleColorSpace })
+  postMessage({ target: 'trackReady' })
+}
+
+self.setTrack = ({ content }: { content: string | Uint8Array | ArrayBuffer }): void => {
   stopWarmup()
   fullTrackWarmupPromise = null
+  protectedTrackContent = false
+
+  if (isBinaryContent(content)) {
+    createTrackFromBytes(toUint8Array(content))
+    finishTrackLoad()
+    return
+  }
 
   processAvailableFonts(content)
 
   if (clampPos) content = fixPlayRes(content)
   if (dropAllBlur) content = dropBlur(content)
 
-  const api = requireApi()
-  const handle = requireHandle()
-  withCString(content, (contentPtr) => {
-    api.createTrackMem(handle, contentPtr)
-  })
-  syncTotalEventsMetric()
-  firstTrackEventStartTime = getFirstEventStartTime()
-  subtitleColorSpace = libassYCbCrMap[api.getTrackColorSpace(handle)]
-  forceNextDemandRender = true
-  postMessage({ target: 'verifyColorSpace', subtitleColorSpace })
+  createTrackFromString(content)
+  finishTrackLoad()
+}
+
+self.setEncryptedTrack = async ({ content }: { content: EncryptedSubtitleContent }): Promise<void> => {
+  stopWarmup()
+  fullTrackWarmupPromise = null
+  protectedTrackContent = true
+
+  const decrypted = await decryptSubtitleContent(content)
+  try {
+    createTrackFromBytes(decrypted)
+  } finally {
+    decrypted.fill(0)
+  }
+  finishTrackLoad()
 }
 
 self.getColorSpace = (): void => {
@@ -773,6 +894,7 @@ self.freeTrack = (): void => {
   stopWarmup()
   fullTrackWarmupPromise = null
   firstTrackEventStartTime = null
+  protectedTrackContent = false
   const api = requireApi()
   const handle = requireHandle()
   api.removeTrack(handle)
@@ -1520,19 +1642,34 @@ self.init = async (data: any): Promise<void> => {
     }
 
     let subContent = data.subContent
-    if (!subContent) subContent = read_(data.subUrl) as string
+    let decryptedSubContent: Uint8Array | null = null
+
+    if (data.encryptedSubContent) {
+      protectedTrackContent = true
+      decryptedSubContent = await decryptSubtitleContent(data.encryptedSubContent)
+      subContent = decryptedSubContent
+    } else {
+      protectedTrackContent = false
+      if (!subContent) subContent = read_(data.subUrl) as string
+    }
 
     // For large files, emit partial_ready early to allow playback to start
     // while font loading and track parsing continues in the background
-    const isLargeSubtitle = subContent.length > 500000
+    const isLargeSubtitle = typeof subContent === 'string'
+      ? subContent.length > 500000
+      : toUint8Array(subContent).byteLength > 500000
     if (isLargeSubtitle) {
       postMessage({ target: 'partial_ready' })
       if (debug) console.log('[AkariSub] Large subtitle detected, emitting partial_ready early')
     }
 
-    processAvailableFonts(subContent)
-    if (clampPos) subContent = fixPlayRes(subContent)
-    if (dropAllBlur) subContent = dropBlur(subContent)
+    if (typeof subContent === 'string') {
+      processAvailableFonts(subContent)
+      if (clampPos) subContent = fixPlayRes(subContent)
+      if (dropAllBlur) subContent = dropBlur(subContent)
+    } else if (debug && (clampPos || dropAllBlur)) {
+      console.warn('[AkariSub] Text rewrite options are skipped for protected binary subtitle content')
+    }
 
     // Load attached/preloaded fonts before ready to avoid runtime font churn during first playback.
     let hasAttachedFonts = false
@@ -1591,9 +1728,15 @@ self.init = async (data: any): Promise<void> => {
       if (debug) console.log('[AkariSub] Font reload complete')
     }
 
-    withCString(subContent, (subPtr) => {
-      requireApi().createTrackMem(requireHandle(), subPtr)
-    })
+    if (typeof subContent === 'string') {
+      createTrackFromString(subContent)
+    } else {
+      try {
+        createTrackFromBytes(toUint8Array(subContent))
+      } finally {
+        decryptedSubContent?.fill(0)
+      }
+    }
     syncTotalEventsMetric()
     firstTrackEventStartTime = getFirstEventStartTime()
     subtitleColorSpace = libassYCbCrMap[requireApi().getTrackColorSpace(requireHandle())]
@@ -1808,7 +1951,13 @@ self.getEvents = (): void => {
   const api = requireApi()
   const count = api.getEventCount(requireHandle())
   for (let i = 0; i < count; i++) {
-    events.push({ ...readEvent(i), _index: i })
+    const event = { ...readEvent(i), _index: i }
+    if (protectedTrackContent) {
+      event.Name = ''
+      event.Effect = ''
+      event.Text = ''
+    }
+    events.push(event)
   }
   postMessage({ target: 'getEvents', events })
 }
