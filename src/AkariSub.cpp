@@ -825,14 +825,36 @@ public:
   }
 
   void removeEvent(int eid) {
+    if (eid < 0 || eid >= track->n_events) {
+      return;
+    }
+
     ass_free_event(track, eid);
+    if (eid + 1 < track->n_events) {
+      memmove(&track->events[eid], &track->events[eid + 1],
+              (track->n_events - eid - 1) * sizeof(ASS_Event));
+    }
+    memset(&track->events[track->n_events - 1], 0, sizeof(ASS_Event));
+    track->n_events--;
   }
 
   int getStyleCount() const { return track->n_styles; }
 
   int allocStyle() { return ass_alloc_style(track); }
 
-  void removeStyle(int sid) { ass_free_style(track, sid); }
+  void removeStyle(int sid) {
+    if (sid < 0 || sid >= track->n_styles) {
+      return;
+    }
+
+    ass_free_style(track, sid);
+    if (sid + 1 < track->n_styles) {
+      memmove(&track->styles[sid], &track->styles[sid + 1],
+              (track->n_styles - sid - 1) * sizeof(ASS_Style));
+    }
+    memset(&track->styles[track->n_styles - 1], 0, sizeof(ASS_Style));
+    track->n_styles--;
+  }
 
   void removeAllEvents() {
     ass_flush_events(track);
