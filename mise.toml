@@ -1,6 +1,6 @@
 [tools]
 bun = "latest"
-emsdk = "5.0.6"
+emsdk = "6.0.0"
 cmake = "latest"
 
 [env]
