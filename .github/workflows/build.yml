@@ -78,9 +78,9 @@ jobs:
           bun-version: latest
 
       - name: Setup Emscripten
-        uses: emscripten-core/setup-emsdk@v15
+        uses: emscripten-core/setup-emsdk@v16
         with:
-          version: 5.0.6
+          version: 6.0.0
           actions-cache-folder: emsdk-cache
 
       - name: Cache Bun dependencies
