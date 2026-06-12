@@ -144,6 +144,7 @@ interface AkariSubApi {
   styleSetNum: (handle: number, index: number, field: number, value: number) => void
   styleGetStr: (handle: number, index: number, field: number) => number
   styleSetStr: (handle: number, index: number, field: number, valuePtr: number) => void
+  getEventTimeRange: (handle: number, outPtr: number) => number
   renderBlendCollect: (handle: number, time: number, force: number, outPtr: number, maxItems: number) => number
   renderImageCollect: (handle: number, time: number, force: number, outPtr: number, maxItems: number) => number
 }
@@ -252,56 +253,28 @@ const syncTotalEventsMetric = (): void => {
   metrics.totalEvents = akariSubHandle ? requireApi().getEventCount(akariSubHandle) : 0
 }
 
-const getFirstEventStartTime = (): number | null => {
-  if (!akariSubHandle) return null
+const getTrackEventTimeRange = (): { start: number; end: number } | null => {
+  if (!akariSubHandle || !_Module) return null
 
   const api = requireApi()
   const handle = requireHandle()
-  const count = api.getEventCount(handle)
-  if (count <= 0) return null
+  const outPtr = _Module._malloc(2 * Int32Array.BYTES_PER_ELEMENT)
+  if (!outPtr) return null
 
-  let firstStart = Number.POSITIVE_INFINITY
+  try {
+    if (!api.getEventTimeRange(handle, outPtr)) return null
 
-  for (let i = 0; i < count; i++) {
-    const start = api.eventGetInt(handle, i, EVENT_INT_FIELDS.Start) / ASS_TIME_SCALE
-    if (Number.isFinite(start) && start < firstStart) {
-      firstStart = start
-    }
+    const view = new Int32Array(self.wasmMemory.buffer, outPtr, 2)
+    const start = Math.max(0, view[0] / ASS_TIME_SCALE)
+    const end = Math.max(start, view[1] / ASS_TIME_SCALE)
+    return { start, end }
+  } finally {
+    _Module._free(outPtr)
   }
-
-  if (!Number.isFinite(firstStart)) return null
-  return Math.max(0, firstStart)
 }
 
-const getTrackEventTimeRange = (): { start: number; end: number } | null => {
-  if (!akariSubHandle) return null
-
-  const api = requireApi()
-  const handle = requireHandle()
-  const count = api.getEventCount(handle)
-  if (count <= 0) return null
-
-  let start = Number.POSITIVE_INFINITY
-  let end = 0
-
-  for (let i = 0; i < count; i++) {
-    const eventStart = api.eventGetInt(handle, i, EVENT_INT_FIELDS.Start) / ASS_TIME_SCALE
-    const eventDuration = Math.max(0, api.eventGetInt(handle, i, EVENT_INT_FIELDS.Duration) / ASS_TIME_SCALE)
-
-    if (!Number.isFinite(eventStart)) continue
-
-    const eventEnd = eventStart + eventDuration
-    if (eventStart < start) start = eventStart
-    if (eventEnd > end) end = eventEnd
-  }
-
-  if (!Number.isFinite(start)) return null
-  if (end < start) end = start
-
-  return {
-    start: Math.max(0, start),
-    end: Math.max(0, end)
-  }
+const getFirstEventStartTime = (): number | null => {
+  return getTrackEventTimeRange()?.start ?? null
 }
 
 const prewarmEntireTrack = async (): Promise<void> => {
@@ -1353,6 +1326,7 @@ self.init = async (data: any): Promise<void> => {
       styleSetNum: Module._akarisub_style_set_num,
       styleGetStr: Module._akarisub_style_get_str,
       styleSetStr: Module._akarisub_style_set_str,
+      getEventTimeRange: Module._akarisub_get_event_time_range,
       renderBlendCollect: Module._akarisub_render_blend_collect,
       renderImageCollect: Module._akarisub_render_image_collect
     }

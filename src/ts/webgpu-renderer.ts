@@ -147,10 +147,6 @@ export class WebGPURenderer {
   private readonly imageDataArray: Float32Array
   private readonly resolutionArray = new Float32Array(2)
 
-  // Reusable conversion buffer for RGBA->BGRA (grows as needed, never shrinks)
-  private conversionBuffer: Uint8Array | null = null
-  private conversionBufferSize = 0
-
   // Bind group (recreated only when texture array changes)
   private bindGroup: GPUBindGroup | null = null
   private bindGroupDirty = true
@@ -275,7 +271,7 @@ export class WebGPURenderer {
 
     this.textureArray = this.device!.createTexture({
       size: [w, h, l],
-      format: this.format,
+      format: 'rgba8unorm',
       usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT
     })
     this.textureArrayView = this.textureArray.createView({ dimension: '2d-array' })
@@ -343,15 +339,6 @@ export class WebGPURenderer {
       ]
     })
     this.bindGroupDirty = false
-  }
-
-  private ensureConversionBuffer(size: number): Uint8Array {
-    if (this.conversionBufferSize < size) {
-      // Grow with 50% headroom to reduce reallocations
-      this.conversionBufferSize = Math.max(size, (this.conversionBufferSize * 1.5) | 0, 65536)
-      this.conversionBuffer = new Uint8Array(this.conversionBufferSize)
-    }
-    return this.conversionBuffer!
   }
 
   async setCanvas(canvas: HTMLCanvasElement, width: number, height: number): Promise<void> {
@@ -560,7 +547,6 @@ export class WebGPURenderer {
     const queue = device.queue
     const textureArray = this.textureArray!
     const imageDataArray = this.imageDataArray
-    const isBGRA = this.format === 'bgra8unorm'
     const textureView = currentTexture.createView()
 
     // Process images in batches if needed
@@ -586,7 +572,7 @@ export class WebGPURenderer {
             { width: w, height: h }
           )
         } else if (imgData instanceof ArrayBuffer || imgData instanceof Uint8Array || imgData instanceof Uint8ClampedArray) {
-          this.uploadTextureData(texIndex, imgData, w, h, isBGRA)
+          this.uploadTextureData(texIndex, imgData, w, h)
         }
 
         // Fill pre-allocated array
@@ -636,38 +622,14 @@ export class WebGPURenderer {
     layerIndex: number,
     rgbaBuffer: ArrayBuffer | Uint8Array | Uint8ClampedArray,
     width: number,
-    height: number,
-    swapRB: boolean
+    height: number
   ): void {
-    const size = width * height * 4
-    const src = toUint8View(rgbaBuffer)
-
-    if (swapRB) {
-      // Use reusable conversion buffer
-      const uploadData = this.ensureConversionBuffer(size)
-
-      // Unrolled loop for better performance
-      for (let j = 0; j < size; j += 4) {
-        uploadData[j] = src[j + 2] // B <- R
-        uploadData[j + 1] = src[j + 1] // G
-        uploadData[j + 2] = src[j] // R <- B
-        uploadData[j + 3] = src[j + 3] // A
-      }
-
-      this.device!.queue.writeTexture(
-        { texture: this.textureArray!, origin: [0, 0, layerIndex] },
-        uploadData.buffer,
-        { bytesPerRow: width * 4 },
-        { width, height }
-      )
-    } else {
-      this.device!.queue.writeTexture(
-        { texture: this.textureArray!, origin: [0, 0, layerIndex] },
-        src,
-        { bytesPerRow: width * 4 },
-        { width, height }
-      )
-    }
+    this.device!.queue.writeTexture(
+      { texture: this.textureArray!, origin: [0, 0, layerIndex] },
+      toUint8View(rgbaBuffer),
+      { bytesPerRow: width * 4 },
+      { width, height }
+    )
   }
 
   private cleanupPendingTextures(): void {
@@ -723,8 +685,6 @@ export class WebGPURenderer {
     this.imageDataBuffer = null
 
     this.bindGroup = null
-    this.conversionBuffer = null
-    this.conversionBufferSize = 0
 
     this.device?.destroy()
     this.device = null

@@ -28,6 +28,7 @@ public:
     lessen_counter = 0;
   }
 
+  // Returned memory is uninitialized; callers must overwrite it fully.
   void *take(size_t new_size) {
     if (size >= new_size) {
       if (size >= 1.3 * new_size) {
@@ -38,7 +39,6 @@ public:
       }
       if (lessen_counter < 10) {
         // not reducing the buffer yet
-        memset(buffer, 0, new_size);
         return buffer;
       }
     }
@@ -47,7 +47,6 @@ public:
     buffer = malloc(new_size);
     if (buffer) {
       size = new_size;
-      memset(buffer, 0, size);
     } else
       size = 0;
     lessen_counter = 0;
@@ -399,10 +398,11 @@ public:
   }
 
   /* TRACK */
-  void createTrackMem(std::string buf) {
+  // ass_read_memory copies the buffer internally, so the caller's heap
+  // pointer can be passed straight through without intermediate copies.
+  void createTrackMem(const char *data, size_t size) {
     removeTrack();
-    char *data = buf.empty() ? nullptr : &buf[0];
-    track = ass_read_memory(ass_library, data, buf.size(), NULL);
+    track = ass_read_memory(ass_library, (char *)data, size, NULL);
     if (!track) {
       fprintf(stderr, "AkariSub: Failed to start a track\n");
       exit(4);
@@ -488,40 +488,20 @@ public:
     uint8_t *bitmap = img->bitmap;
     int stride = img->stride;
 
-    // Pre-compute alpha factor (avoid per-pixel double->float conversion)
+    // alpha and color are constant for the whole bitmap, so each of the 256
+    // possible mask values maps to exactly one output pixel: precompute them
+    // once and the per-pixel work becomes a single table lookup.
     float alpha_f = (float)alpha;
-
-    // Process 4 pixels at a time when possible
-    int w4 = w & ~3; // Round down to multiple of 4
+    uint32_t lut[256];
+    lut[0] = 0;
+    for (int i = 1; i < 256; ++i)
+      lut[i] = (((uint32_t)(alpha_f * i)) << 24) | color;
 
     for (int y = 0; y < h; ++y) {
       uint8_t *row = bitmap + y * stride;
-      int row_offset = y * w;
-
-      // Unrolled loop for 4 pixels at a time
-      int x = 0;
-      for (; x < w4; x += 4) {
-        uint8_t m0 = row[x];
-        uint8_t m1 = row[x + 1];
-        uint8_t m2 = row[x + 2];
-        uint8_t m3 = row[x + 3];
-
-        out[row_offset + x] =
-            m0 ? (((uint32_t)(alpha_f * m0)) << 24) | color : 0;
-        out[row_offset + x + 1] =
-            m1 ? (((uint32_t)(alpha_f * m1)) << 24) | color : 0;
-        out[row_offset + x + 2] =
-            m2 ? (((uint32_t)(alpha_f * m2)) << 24) | color : 0;
-        out[row_offset + x + 3] =
-            m3 ? (((uint32_t)(alpha_f * m3)) << 24) | color : 0;
-      }
-
-      // Handle remaining pixels
-      for (; x < w; ++x) {
-        uint8_t mask = row[x];
-        out[row_offset + x] =
-            mask ? (((uint32_t)(alpha_f * mask)) << 24) | color : 0;
-      }
+      uint32_t *out_row = out + y * w;
+      for (int x = 0; x < w; ++x)
+        out_row[x] = lut[row[x]];
     }
   }
 
@@ -548,6 +528,7 @@ public:
   }
 
   void setDefaultFont(const std::string &name) {
+    free((void *)defaultFont);
     defaultFont = copyString(name);
     reloadFonts();
   }
@@ -1043,7 +1024,7 @@ EMSCRIPTEN_KEEPALIVE void akarisub_set_drop_animations(AkariSub *instance, int v
 
 EMSCRIPTEN_KEEPALIVE void akarisub_create_track_mem(AkariSub *instance, const char *content) {
   if (instance)
-    instance->createTrackMem(content ? std::string(content) : std::string());
+    instance->createTrackMem(content, content ? strlen(content) : 0);
 }
 
 EMSCRIPTEN_KEEPALIVE void akarisub_remove_track(AkariSub *instance) {
@@ -1116,14 +1097,6 @@ EMSCRIPTEN_KEEPALIVE void akarisub_style_override_index(AkariSub *instance, int 
 EMSCRIPTEN_KEEPALIVE void akarisub_disable_style_override(AkariSub *instance) {
   if (instance)
     instance->disableStyleOverride();
-}
-
-EMSCRIPTEN_KEEPALIVE RenderResult *akarisub_render_blend(AkariSub *instance, double tm, int force) {
-  return instance ? instance->renderBlend(tm, force) : NULL;
-}
-
-EMSCRIPTEN_KEEPALIVE RenderResult *akarisub_render_image(AkariSub *instance, double tm, int force) {
-  return instance ? instance->renderImage(tm, force) : NULL;
 }
 
 EMSCRIPTEN_KEEPALIVE int akarisub_get_changed(AkariSub *instance) {
@@ -1414,36 +1387,31 @@ EMSCRIPTEN_KEEPALIVE void akarisub_style_set_str(AkariSub *instance, int index, 
   }
 }
 
-EMSCRIPTEN_KEEPALIVE int akarisub_render_result_x(RenderResult *result) { return result ? result->x : 0; }
-EMSCRIPTEN_KEEPALIVE int akarisub_render_result_y(RenderResult *result) { return result ? result->y : 0; }
-EMSCRIPTEN_KEEPALIVE int akarisub_render_result_w(RenderResult *result) { return result ? result->w : 0; }
-EMSCRIPTEN_KEEPALIVE int akarisub_render_result_h(RenderResult *result) { return result ? result->h : 0; }
-EMSCRIPTEN_KEEPALIVE size_t akarisub_render_result_image(RenderResult *result) { return result ? result->image : 0; }
-EMSCRIPTEN_KEEPALIVE RenderResult *akarisub_render_result_next(RenderResult *result) {
-  return result ? result->next : NULL;
-}
-
-// Fill metadata for a linked list of RenderResult nodes in one call.
-// out layout per image (6 ints): x, y, w, h, image_ptr, next_ptr
-EMSCRIPTEN_KEEPALIVE int akarisub_render_result_collect(RenderResult *result, int *out, int max_items) {
-  if (!out || max_items <= 0)
+// Scan all events in one call and write [min start, max end] (in ms) to
+// out[0..1]. Returns 1 if the track has events, 0 otherwise.
+EMSCRIPTEN_KEEPALIVE int akarisub_get_event_time_range(AkariSub *instance, int *out) {
+  if (!instance || !instance->track || !out)
     return 0;
 
-  int count = 0;
-  RenderResult *cur = result;
-  while (cur && count < max_items) {
-    int base = count * 6;
-    out[base + 0] = cur->x;
-    out[base + 1] = cur->y;
-    out[base + 2] = cur->w;
-    out[base + 3] = cur->h;
-    out[base + 4] = (int)(uintptr_t)cur->image;
-    out[base + 5] = (int)(uintptr_t)cur->next;
-    cur = cur->next;
-    count++;
+  ASS_Track *track = instance->track;
+  if (track->n_events <= 0)
+    return 0;
+
+  long long min_start = track->events[0].Start;
+  long long max_end = 0;
+  for (int i = 0; i < track->n_events; i++) {
+    ASS_Event *evt = track->events + i;
+    long long start = evt->Start;
+    long long end = start + (evt->Duration > 0 ? evt->Duration : 0);
+    if (start < min_start)
+      min_start = start;
+    if (end > max_end)
+      max_end = end;
   }
 
-  return count;
+  out[0] = (int)min_start;
+  out[1] = (int)max_end;
+  return 1;
 }
 
 // Combined render + collect: render, then collect results into `out` buffer in one WASM call.

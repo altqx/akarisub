@@ -389,6 +389,7 @@ export interface AkariSubModule extends EmscriptenModule {
   _akarisub_style_set_num: (handle: number, index: number, field: number, value: number) => void
   _akarisub_style_get_str: (handle: number, index: number, field: number) => number
   _akarisub_style_set_str: (handle: number, index: number, field: number, valuePtr: number) => void
+  _akarisub_get_event_time_range: (handle: number, outPtr: number) => number
   _akarisub_render_blend_collect: (handle: number, time: number, force: number, outPtr: number, maxItems: number) => number
   _akarisub_render_image_collect: (handle: number, time: number, force: number, outPtr: number, maxItems: number) => number
   FS_createPath: (parent: string, path: string, canRead: boolean, canWrite: boolean) => void

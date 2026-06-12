@@ -86,6 +86,7 @@ if (__akarisub_ready) {
       '_akarisub_style_set_num': _akarisub_style_set_num,
       '_akarisub_style_get_str': _akarisub_style_get_str,
       '_akarisub_style_set_str': _akarisub_style_set_str,
+      '_akarisub_get_event_time_range': _akarisub_get_event_time_range,
       '_akarisub_render_blend_collect': _akarisub_render_blend_collect,
       '_akarisub_render_image_collect': _akarisub_render_image_collect
     })
