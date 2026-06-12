@@ -55,7 +55,7 @@ let lastCurrentTimeReceivedAt = nowMs()
 let targetFps = 24
 let onDemandRenderMode = false
 let useLocalFonts = false
-let blendMode: 'js' | 'wasm' | 'hb-gpu' = 'wasm'
+let blendMode: 'js' | 'wasm' = 'wasm'
 let availableFonts: Record<string, string | Uint8Array> = {}
 const fontMap_: Record<string, boolean> = {}
 let attachedFontId = 0  // For attached/preloaded fonts (higher priority)
@@ -146,8 +146,6 @@ interface AkariSubApi {
   styleSetStr: (handle: number, index: number, field: number, valuePtr: number) => void
   renderBlendCollect: (handle: number, time: number, force: number, outPtr: number, maxItems: number) => number
   renderImageCollect: (handle: number, time: number, force: number, outPtr: number, maxItems: number) => number
-  renderHbGpuCollect?: (handle: number, time: number, force: number, outPtr: number, maxItems: number) => number
-  hbGpuShaderSource?: (family: number, stage: number, lang: number) => number
 }
 
 let akariSubApi: AkariSubApi | null = null
@@ -169,8 +167,6 @@ let poolInitialized = false
 // Batch render-collect buffer: 3 header ints (changed, count, time) + 5 ints per image (x, y, w, h, image_ptr)
 const RRC_HEADER_INTS = 3
 const RRC_IMG_STRIDE = 5
-const HBG_HEADER_INTS = 5
-const HBG_GLYPH_STRIDE = 12
 // Pre-allocated buffer for batch render-collect calls
 let rrcBufPtr = 0
 let rrcBufCapacity = 0
@@ -183,7 +179,6 @@ let warmupEndTime = 0
 let warmupEnabled = false
 let firstTrackEventStartTime: number | null = null
 let fullTrackWarmupPromise: Promise<void> | null = null
-let hbGpuShadersPosted = false
 let protectedTrackContent = false
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
@@ -248,12 +243,6 @@ const prewarmRenderer = (time: number): void => {
 
   if (blendMode === 'wasm') {
     api.renderBlendCollect(handle, time, 0, rrcBufPtr, rrcBufCapacity)
-  } else if (blendMode === 'hb-gpu') {
-    if (api.renderHbGpuCollect) {
-      api.renderHbGpuCollect(handle, time, 0, rrcBufPtr, rrcBufCapacity)
-    } else {
-      api.renderBlendCollect(handle, time, 0, rrcBufPtr, rrcBufCapacity)
-    }
   } else {
     api.renderImageCollect(handle, time, 0, rrcBufPtr, rrcBufCapacity)
   }
@@ -1041,14 +1030,11 @@ const render = (time: number, force?: boolean | number): void => {
   const written =
     blendMode === 'wasm'
       ? api.renderBlendCollect(handle, time, forceInt, rrcBufPtr, rrcBufCapacity)
-      : blendMode === 'hb-gpu'
-        ? (api.renderHbGpuCollect
-            ? api.renderHbGpuCollect(handle, time, forceInt, rrcBufPtr, rrcBufCapacity)
-            : api.renderBlendCollect(handle, time, forceInt, rrcBufPtr, rrcBufCapacity))
-        : api.renderImageCollect(handle, time, forceInt, rrcBufPtr, rrcBufCapacity)
+      : api.renderImageCollect(handle, time, forceInt, rrcBufPtr, rrcBufCapacity)
 
   const headerView = new Int32Array(self.wasmMemory.buffer, rrcBufPtr, RRC_HEADER_INTS)
   const changed = headerView[0]
+  const imageCount = headerView[1]
 
   // Update metrics
   const renderEndTime = performance.now()
@@ -1076,58 +1062,6 @@ const render = (time: number, force?: boolean | number): void => {
   }
 
   if (changed !== 0 || force) {
-    if (blendMode === 'hb-gpu') {
-      const hbHeader = new Int32Array(self.wasmMemory.buffer, rrcBufPtr, HBG_HEADER_INTS)
-      const payloadPtr = hbHeader[3]
-      const payloadSize = hbHeader[4]
-
-      let glyphData = new ArrayBuffer(0)
-      let atlasData = new ArrayBuffer(0)
-
-      if (written > 0 && payloadPtr > 0 && payloadSize >= HBG_HEADER_INTS * Int32Array.BYTES_PER_ELEMENT) {
-        const payloadHeader = new Int32Array(self.wasmMemory.buffer, payloadPtr, 3)
-        const glyphCount = payloadHeader[1]
-        const atlasByteLen = payloadHeader[2]
-        const glyphMetaByteLen = glyphCount * HBG_GLYPH_STRIDE * Int32Array.BYTES_PER_ELEMENT
-        const expectedPayloadSize = (3 * Int32Array.BYTES_PER_ELEMENT) + glyphMetaByteLen + atlasByteLen
-
-        if (expectedPayloadSize <= payloadSize && glyphCount === written) {
-          glyphData = new ArrayBuffer(glyphMetaByteLen)
-          atlasData = new ArrayBuffer(atlasByteLen)
-
-          if (glyphMetaByteLen > 0) {
-            const src = new Uint8Array(self.wasmMemory.buffer, payloadPtr + 3 * Int32Array.BYTES_PER_ELEMENT, glyphMetaByteLen)
-            new Uint8Array(glyphData).set(src)
-          }
-
-          if (atlasByteLen > 0) {
-            const src = new Uint8Array(
-              self.wasmMemory.buffer,
-              payloadPtr + (3 * Int32Array.BYTES_PER_ELEMENT) + glyphMetaByteLen,
-              atlasByteLen
-            )
-            new Uint8Array(atlasData).set(src)
-          }
-        }
-      }
-
-      metrics.pendingRenders--
-      postMessage(
-        {
-          target: 'renderHbGpu',
-          glyphData,
-          atlasData,
-          width: self.width,
-          height: self.height,
-          times,
-          colorSpace: subtitleColorSpace
-        },
-        [glyphData, atlasData]
-      )
-      completeRenderCycle()
-      return
-    }
-
     const images = frameImages
     const buffers = frameArrayBuffers
     images.length = 0
@@ -1420,37 +1354,7 @@ self.init = async (data: any): Promise<void> => {
       styleGetStr: Module._akarisub_style_get_str,
       styleSetStr: Module._akarisub_style_set_str,
       renderBlendCollect: Module._akarisub_render_blend_collect,
-      renderImageCollect: Module._akarisub_render_image_collect,
-      renderHbGpuCollect: Module._akarisub_render_hb_gpu_collect,
-      hbGpuShaderSource: Module._akarisub_hb_gpu_shader_source
-    }
-
-    if (!hbGpuShadersPosted && akariSubApi.hbGpuShaderSource) {
-      const shaderApi = akariSubApi
-      const getSource = (family: number, stage: number, lang: number): string => {
-        if (!shaderApi?.hbGpuShaderSource) return ''
-        const ptr = shaderApi.hbGpuShaderSource(family, stage, lang)
-        if (!ptr) return ''
-        return readCString(ptr)
-      }
-
-      postMessage({
-        target: 'hbGpuShaders',
-        wgsl: {
-          vertex: getSource(0, 0, 2),
-          fragment: getSource(0, 1, 2),
-          drawFragment: getSource(1, 1, 2),
-          paintFragment: getSource(2, 1, 2)
-        },
-        glsl: {
-          vertex: getSource(0, 0, 1),
-          fragment: getSource(0, 1, 1),
-          drawFragment: getSource(1, 1, 1),
-          paintFragment: getSource(2, 1, 1)
-        }
-      })
-
-      hbGpuShadersPosted = true
+      renderImageCollect: Module._akarisub_render_image_collect
     }
 
     // Normalize fallback fonts and deduplicate
@@ -1526,10 +1430,6 @@ self.init = async (data: any): Promise<void> => {
     self.height = data.height
     onDemandRenderMode = !!data.onDemandRender
     blendMode = data.blendMode
-    if (blendMode === 'hb-gpu' && (!akariSubApi.renderHbGpuCollect || !akariSubApi.hbGpuShaderSource)) {
-      console.warn('[AkariSub] hb-gpu exports missing in loaded WASM, falling back to wasm blend mode')
-      blendMode = 'wasm'
-    }
     asyncRender = data.asyncRender
 
     if (asyncRender && typeof createImageBitmap === 'undefined') {
