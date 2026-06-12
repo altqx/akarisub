@@ -14,7 +14,8 @@
     },
     "./worker": {
       "import": "./dist/akarisub-worker.js"
-    }
+    },
+    "./worker.wasm": "./dist/akarisub-worker.wasm"
   },
   "files": [
     "dist/COPYRIGHT",
