@@ -124,6 +124,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: akarisub-dist
+          path: dist
 
       - name: Setup Deno
         uses: denoland/setup-deno@v2
