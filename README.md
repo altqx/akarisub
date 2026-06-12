@@ -65,13 +65,13 @@ If you use a bundler like Vite, you can instead do:
 
 ```js
 import AkariSub from 'akarisub'
-import workerUrl from 'akarisub/dist/akarisub-worker.js?url'
-import wasmUrl from 'akarisub/dist/akarisub-worker.wasm?url'
+import workerUrl from 'akarisub/worker?url'
+import wasmUrl from 'akarisub/worker.wasm?url'
 
 const renderer = new AkariSub({
   video: document.querySelector('video'),
   subContent: subtitleString,
-  workerUrl, // you can also use: `new URL('akarisub/dist/akarisub-worker.js', import.meta.url)` instead of importing it as an url
+  workerUrl,
   wasmUrl
 })
 ```
