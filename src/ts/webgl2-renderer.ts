@@ -179,7 +179,6 @@ export class WebGL2Renderer {
     gl.bindVertexArray(null)
 
     // Texture array
-    this._texArray = gl.createTexture()!
     this._allocateTextureArray(256, 256, 32)
 
     // Premultiplied-alpha blending
@@ -194,18 +193,28 @@ export class WebGL2Renderer {
   // Texture management
   // ==========================================================================
 
-  private _nextPow2(n: number): number {
-    n--; n |= n >> 1; n |= n >> 2; n |= n >> 4; n |= n >> 8; n |= n >> 16; return n + 1
+  // Round up to a multiple of 64: gives headroom against size jitter without
+  // power-of-2 over-allocation (a 1920x1080 blend region would otherwise
+  // round to 2048x2048 and waste ~2x memory).
+  private _roundDim(n: number): number {
+    return (Math.max(n, 64) + 63) & ~63
+  }
+
+  // Round layers up to a multiple of 8, clamped to the layer cap
+  private _roundLayers(n: number): number {
+    return Math.min((Math.max(n, 8) + 7) & ~7, MAX_TEXTURE_ARRAY_LAYERS)
   }
 
   private _allocateTextureArray(width: number, height: number, layers: number): void {
     const gl = this._gl!
-    const w = this._nextPow2(Math.max(width, 64))
-    const h = this._nextPow2(Math.max(height, 64))
-    const l = Math.min(this._nextPow2(Math.max(layers, 16)), MAX_TEXTURE_ARRAY_LAYERS)
+    const w = this._roundDim(width)
+    const h = this._roundDim(height)
+    const l = this._roundLayers(layers)
 
+    if (this._texArray) gl.deleteTexture(this._texArray)
+    this._texArray = gl.createTexture()!
     gl.bindTexture(gl.TEXTURE_2D_ARRAY, this._texArray)
-    gl.texImage3D(gl.TEXTURE_2D_ARRAY, 0, gl.RGBA8, w, h, l, 0, gl.RGBA, gl.UNSIGNED_BYTE, null)
+    gl.texStorage3D(gl.TEXTURE_2D_ARRAY, 1, gl.RGBA8, w, h, l)
     gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MIN_FILTER, gl.NEAREST)
     gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MAG_FILTER, gl.NEAREST)
     gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
@@ -219,12 +228,9 @@ export class WebGL2Renderer {
   private _ensureTextureArray(maxW: number, maxH: number, count: number): void {
     const c = Math.min(count, MAX_TEXTURE_ARRAY_LAYERS)
     if (maxW <= this._texWidth && maxH <= this._texHeight && c <= this._texLayers) return
-    const newW = this._nextPow2(Math.max(this._texWidth, maxW))
-    const newH = this._nextPow2(Math.max(this._texHeight, maxH))
-    const newL = Math.min(
-      this._nextPow2(Math.max(this._texLayers, c, c + 16)),
-      MAX_TEXTURE_ARRAY_LAYERS
-    )
+    const newW = Math.max(this._texWidth, maxW)
+    const newH = Math.max(this._texHeight, maxH)
+    const newL = Math.max(c, Math.min(this._texLayers, 16))
     this._allocateTextureArray(newW, newH, newL)
   }
 

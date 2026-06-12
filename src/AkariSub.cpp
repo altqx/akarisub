@@ -701,34 +701,11 @@ public:
   }
 
   RenderResult *renderBlendPart(const BoundingBox &rect, ASS_Image *img) {
-    // First pass: calculate actual bounding box including all images that
-    // belong to this region
-    int actual_min_x = rect.min_x, actual_min_y = rect.min_y;
-    int actual_max_x = rect.max_x, actual_max_y = rect.max_y;
-
-    for (ASS_Image *cur = img; cur != NULL; cur = cur->next) {
-      int curw = cur->w, curh = cur->h;
-      if (curw == 0 || curh == 0)
-        continue;
-
-      int center_x = cur->dst_x + (curw >> 1);
-      int center_y = cur->dst_y + (curh >> 1);
-      if (center_x < rect.min_x || center_x > rect.max_x ||
-          center_y < rect.min_y || center_y > rect.max_y)
-        continue;
-
-      // This image belongs to our region - expand bounds to include full image
-      actual_min_x = MIN(actual_min_x, cur->dst_x);
-      actual_min_y = MIN(actual_min_y, cur->dst_y);
-      actual_max_x = MAX(actual_max_x, cur->dst_x + curw - 1);
-      actual_max_y = MAX(actual_max_y, cur->dst_y + curh - 1);
-    }
-
     // Clamp to canvas bounds
-    actual_min_x = MAX(actual_min_x, 0);
-    actual_min_y = MAX(actual_min_y, 0);
-    actual_max_x = MIN(actual_max_x, canvas_w - 1);
-    actual_max_y = MIN(actual_max_y, canvas_h - 1);
+    int actual_min_x = MAX(rect.min_x, 0);
+    int actual_min_y = MAX(rect.min_y, 0);
+    int actual_max_x = MIN(rect.max_x, canvas_w - 1);
+    int actual_max_y = MIN(rect.max_y, canvas_h - 1);
 
     int width = actual_max_x - actual_min_x + 1;
     int height = actual_max_y - actual_min_y + 1;
@@ -795,6 +772,15 @@ public:
       float b_val = ((cur->color >> 8) & 0xFF) * INV_255;
       float a_factor = normalized_a * INV_255;
 
+      float lut_a[256], lut_r[256], lut_g[256], lut_b[256];
+      for (int i = 0; i < 256; ++i) {
+        float pix_alpha = i * a_factor;
+        lut_a[i] = pix_alpha;
+        lut_r[i] = r * pix_alpha;
+        lut_g[i] = g * pix_alpha;
+        lut_b[i] = b_val * pix_alpha;
+      }
+
       for (int y = 0; y < render_h; y++) {
         int buf_line_start = (dst_y + y) * width + dst_x;
         unsigned char *bitmap_row = bitmap + (src_y_off + y) * curs + src_x_off;
@@ -804,17 +790,16 @@ public:
           if (mask == 0)
             continue; // Early exit for transparent pixels
 
-          float pix_alpha = mask * a_factor;
+          float pix_alpha = lut_a[mask];
           float inv_alpha = 1.0f - pix_alpha;
 
           int buf_idx = (buf_line_start + x) << 2;
 
-          // Pre-multiply image RGB with alpha for current pixel
           float old_a = buf[buf_idx + 3];
           buf[buf_idx + 3] = pix_alpha + old_a * inv_alpha;
-          buf[buf_idx] = r * pix_alpha + buf[buf_idx] * inv_alpha;
-          buf[buf_idx + 1] = g * pix_alpha + buf[buf_idx + 1] * inv_alpha;
-          buf[buf_idx + 2] = b_val * pix_alpha + buf[buf_idx + 2] * inv_alpha;
+          buf[buf_idx] = lut_r[mask] + buf[buf_idx] * inv_alpha;
+          buf[buf_idx + 1] = lut_g[mask] + buf[buf_idx + 1] * inv_alpha;
+          buf[buf_idx + 2] = lut_b[mask] + buf[buf_idx + 2] * inv_alpha;
         }
       }
     }

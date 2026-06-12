@@ -247,15 +247,16 @@ export class WebGPURenderer {
     this._initialized = true
   }
 
-  // Round up to next power of 2 for GPU-friendly sizes
-  private nextPowerOf2(n: number): number {
-    n--
-    n |= n >> 1
-    n |= n >> 2
-    n |= n >> 4
-    n |= n >> 8
-    n |= n >> 16
-    return n + 1
+  // Round up to a multiple of 64: gives headroom against size jitter without
+  // power-of-2 over-allocation (a 1920x1080 blend region would otherwise
+  // round to 2048x2048 and waste ~2x memory).
+  private roundDim(n: number): number {
+    return (Math.max(n, 64) + 63) & ~63
+  }
+
+  // Round layers up to a multiple of 8, clamped to the WebGPU max
+  private roundLayers(n: number): number {
+    return Math.min((Math.max(n, 8) + 7) & ~7, MAX_TEXTURE_ARRAY_LAYERS)
   }
 
   private createTextureArray(width: number, height: number, layers: number): void {
@@ -263,11 +264,9 @@ export class WebGPURenderer {
       this.pendingDestroyTextures.push(this.textureArray)
     }
 
-    // Use power-of-2 dimensions for better GPU performance
-    const w = this.nextPowerOf2(Math.max(width, 64))
-    const h = this.nextPowerOf2(Math.max(height, 64))
-    // Clamp layers to WebGPU max (256)
-    const l = Math.min(this.nextPowerOf2(Math.max(layers, 16)), MAX_TEXTURE_ARRAY_LAYERS)
+    const w = this.roundDim(width)
+    const h = this.roundDim(height)
+    const l = this.roundLayers(layers)
 
     this.textureArray = this.device!.createTexture({
       size: [w, h, l],
@@ -314,14 +313,10 @@ export class WebGPURenderer {
     ) {
       return false
     }
-
-    // Grow with some headroom to avoid frequent resizes, but cap at max layers
-    const newWidth = this.nextPowerOf2(Math.max(this.textureArrayWidth, maxWidth))
-    const newHeight = this.nextPowerOf2(Math.max(this.textureArrayHeight, maxHeight))
-    const newLayers = Math.min(
-      this.nextPowerOf2(Math.max(this.textureArraySize, clampedCount, clampedCount + 16)),
-      MAX_TEXTURE_ARRAY_LAYERS
-    )
+    
+    const newWidth = Math.max(this.textureArrayWidth, maxWidth)
+    const newHeight = Math.max(this.textureArrayHeight, maxHeight)
+    const newLayers = Math.max(clampedCount, Math.min(this.textureArraySize, 16))
 
     this.createTextureArray(newWidth, newHeight, newLayers)
     return true
