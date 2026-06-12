@@ -8,9 +8,9 @@
 
 /** ASS Event (dialogue/subtitle entry) */
 export interface ASSEvent {
-  /** Start Time of the Event (in seconds) */
+  /** Start Time of the Event (in milliseconds) */
   Start: number
-  /** Duration of the Event (in seconds) */
+  /** Duration of the Event (in milliseconds) */
   Duration: number
   /** Style name */
   Style: string

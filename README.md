@@ -25,9 +25,10 @@ AkariSub is a JS wrapper for <a href="https://github.com/libass/libass">libass</
 
 ### Fork Enhancements
 
-- **WebGPU Support** - Hardware-accelerated rendering using the modern WebGPU API [(on browsers which support it)](https://caniuse.com/webgpu)
+- **GPU Rendering** - Hardware-accelerated rendering with an automatic fallback chain: WebGPU [(on browsers which support it)](https://caniuse.com/webgpu) → WebGL2 → Canvas2D
 - **Hyper Optimizations** - Performance improvements and intelligent caching for smoother playback
 - **Proper Fontconfig Implementation** - add Fontconfig support with multiple fallback fonts supported
+- **Encrypted Subtitles** - optionally load AES-GCM encrypted subtitle payloads that are decrypted inside the worker, so plaintext never touches the main thread
 - **Statistics Reporting** - Built-in statistics and performance metrics for debugging and monitoring
 - **TypeScript Support** - Full TypeScript definitions and type safety
 - **Updated Dependencies** - All dependencies updated to their latest versions, including libass
@@ -51,7 +52,7 @@ deno add jsr:@altq/akarisub
 By default all you need to do is copy the files from the `dist/` folder of the repository into the same folder as where your JS runs, then do:
 
 ```js
-import AkariSub from './akarisub.es.js'
+import AkariSub from './index.js'
 
 const renderer = new AkariSub({
   video: document.querySelector('video'),
@@ -78,26 +79,29 @@ const renderer = new AkariSub({
 
 ## Using only with canvas
 
-You're also able to use it without any video. However, that requires you to set the time the subtitles should render at yourself:
+You're also able to use it without any video. However, that requires you to set the time the subtitles should render at yourself. Disable `onDemandRender` (it relies on video frame callbacks) and drive the clock manually:
 
 ```js
-import AkariSub from './akarisub.es.js'
+import AkariSub from './index.js'
 
 const renderer = new AkariSub({
   canvas: document.querySelector('canvas'),
-  subUrl: './tracks/sub.ass'
+  subUrl: './tracks/sub.ass',
+  onDemandRender: false
 })
 
-renderer.setCurrentTime(15)
+// setCurrentTime(isPaused?, currentTime?, rate?)
+renderer.setCurrentTime(true, 15)
 ```
 
 ## Changing subtitles
 
-You're not limited to only display the subtitle file you referenced in your options. You're able to dynamically change subtitles on the fly. There's three methods that you can use for this specifically:
+You're not limited to only display the subtitle file you referenced in your options. You're able to dynamically change subtitles on the fly. There's four methods that you can use for this specifically:
 
 - `setTrackByUrl(url):` works the same as the `subUrl` option. It will set the subtitle to display by its URL.
-- `setTrack(content):` works the same as the `subContent` option. It will set the subtitle to display by its content.
-- `freeTrack():` this simply removes the subtitles. You can use the two methods above to set a new subtitle file to be displayed.
+- `setTrack(content):` works the same as the `subContent` option. It will set the subtitle to display by its content (string, `Uint8Array` or `ArrayBuffer`).
+- `setEncryptedTrack(content):` works the same as the `encryptedSubContent` option. The payload is decrypted inside the worker, so plaintext subtitles are never materialized on the main thread.
+- `freeTrack():` this simply removes the subtitles. You can use the methods above to set a new subtitle file to be displayed.
 
 ```js
 renderer.setTrackByUrl('/newsub.ass')
@@ -168,9 +172,9 @@ console.log(`Events: ${eventCount}, Styles: ${styleCount}`)
 | `cacheHits` | number | Number of cache hits (unchanged frames) |
 | `cacheMisses` | number | Number of cache misses (rendered frames) |
 
-## WebGPU Rendering
+## GPU Rendering
 
-AkariSub automatically uses WebGPU for GPU-accelerated rendering when available, with automatic fallback to Canvas2D:
+AkariSub automatically picks the fastest available renderer: WebGPU → WebGL2 → Canvas2D. GPU renderers are used when no custom canvas is given and the browser supports them:
 
 ```typescript
 import AkariSub from 'akarisub'
@@ -178,14 +182,14 @@ import AkariSub from 'akarisub'
 const renderer = new AkariSub({
   video: document.querySelector('video'),
   subUrl: './tracks/sub.ass',
-  preferWebGPU: true, // Enable WebGPU (default: true)
-  onWebGPUFallback: () => {
-    console.log('WebGPU unavailable, using Canvas2D fallback')
+  onCanvasFallback: () => {
+    console.log('No GPU renderer available, using Canvas2D fallback')
   }
 })
 
-// Check if WebGPU is being used
-if (renderer.isUsingWebGPU) {
+console.log(renderer.rendererType) // 'webgpu' | 'webgl2' | 'canvas2d'
+
+if (renderer.isUsingGPURenderer) {
   console.log('GPU-accelerated rendering enabled!')
 }
 ```
@@ -211,18 +215,20 @@ The default options are best, and automatically fallback to the next fastest opt
 | `dropAllAnimations` | boolean | `false` | Discard all animated tags for performance |
 | `dropAllBlur` | boolean | `false` | Drop all blur effects (~10x performance gain) |
 | `clampPos` | boolean | `false` | Clamp `\pos` values to script resolution |
+| `renderAhead` | number | `0.008` | Extra seconds to render ahead, compensates pipeline latency |
 | `workerUrl` | string | `'akarisub-worker.js'` | URL to the worker script |
 | `wasmUrl` | string | `'akarisub-worker.wasm'` | URL to the WASM binary |
 | `subUrl` | string | - | URL of the subtitle file to play |
-| `subContent` | string | - | Content of the subtitle file to play |
+| `subContent` | string \| Uint8Array \| ArrayBuffer | - | Content of the subtitle file to play |
+| `encryptedSubContent` | EncryptedSubtitleContent | - | AES-GCM encrypted subtitle payload, decrypted inside the worker |
 | `fonts` | (string \| Uint8Array)[] | - | Array of font URLs or Uint8Arrays to force load |
 | `availableFonts` | Record<string, string \| Uint8Array> | `{'liberation sans': './default.woff2'}` | Available fonts map (lowercase name → URL/data) |
-| `fallbackFont` | string | `'liberation sans'` | Fallback font family key |
-| `useLocalFonts` | boolean | `false` | Use Local Font Access API if available |
-| `libassMemoryLimit` | number | - | libass bitmap cache memory limit in MiB |
-| `libassGlyphLimit` | number | - | libass glyph cache limit |
-| `preferWebGPU` | boolean | `true` | Prefer WebGPU renderer if available |
-| `onWebGPUFallback` | function | - | Callback when WebGPU is unavailable |
+| `fallbackFonts` | string[] | `['liberation sans']` | Fallback font families in order, used for the fontconfig cascade |
+| `useLocalFonts` | boolean | `true` | Use Local Font Access API if available |
+| `libassMemoryLimit` | number | `128` | libass bitmap cache memory limit in MiB |
+| `libassGlyphLimit` | number | `2048` | libass glyph cache limit |
+| `fullTrackWarmup` | boolean | `false` | Pre-render early track windows after load to warm libass caches |
+| `onCanvasFallback` | function | - | Callback when no GPU renderer is available (Canvas2D fallback) |
 
 ## Methods
 
@@ -231,7 +237,8 @@ The default options are best, and automatically fallback to the next fastest opt
 | Method | Parameters | Description |
 |--------|------------|-------------|
 | `setTrackByUrl(url)` | `url: string` | Load subtitle from URL |
-| `setTrack(content)` | `content: string` | Set subtitle from string content |
+| `setTrack(content)` | `content: string \| Uint8Array \| ArrayBuffer` | Set subtitle from content |
+| `setEncryptedTrack(content)` | `content: EncryptedSubtitleContent` | Set subtitle from an encrypted payload (decrypted in the worker) |
 | `freeTrack()` | - | Remove current subtitles |
 
 ### Playback Control
@@ -286,7 +293,6 @@ The default options are best, and automatically fallback to the next fastest opt
 | `resetStats()` | - | `Promise<void>` | Reset statistics counters |
 | `getEventCount()` | - | `Promise<number>` | Get event count (lightweight) |
 | `getStyleCount()` | - | `Promise<number>` | Get style count (lightweight) |
-| `runBenchmark()` | - | `void` | Run a benchmark on the worker |
 
 ### Lifecycle
 
@@ -304,8 +310,11 @@ The default options are best, and automatically fallback to the next fastest opt
 | `prescaleHeightLimit` | number | Height limit for prescaling |
 | `maxRenderHeight` | number | Maximum render height |
 | `timeOffset` | number | Subtitle time offset in seconds |
+| `renderAhead` | number | Extra seconds to render ahead of the video clock |
 | `busy` | boolean | Whether the renderer is currently busy |
-| `isUsingWebGPU` | boolean | Whether WebGPU renderer is active (read-only) |
+| `rendererType` | `'webgpu'` \| `'webgl2'` \| `'canvas2d'` | Active renderer backend (read-only) |
+| `isUsingGPURenderer` | boolean | Whether a hardware-accelerated renderer is active (read-only) |
+| `isUsingWebGPU` | boolean | *Deprecated* - use `rendererType === 'webgpu'` |
 
 ## Type Definitions
 
@@ -313,8 +322,8 @@ The default options are best, and automatically fallback to the next fastest opt
 
 | Property | Type | Description |
 |----------|------|-------------|
-| `Start` | number | Start time in seconds |
-| `Duration` | number | Duration in seconds |
+| `Start` | number | Start time in milliseconds |
+| `Duration` | number | Duration in milliseconds |
 | `Style` | string | Style name |
 | `Name` | string | Character name (informational) |
 | `MarginL` | number | Left margin override in pixels |
@@ -361,11 +370,11 @@ The default options are best, and automatically fallback to the next fastest opt
 
 ## Dependencies
 
+[mise](https://mise.jdx.dev) manages the toolchain (emsdk, bun, cmake — see `mise.toml`). You additionally need the usual autotools build dependencies:
+
 - git
-- emscripten (Configure the enviroment)
 - make
 - python3
-- cmake
 - pkgconfig
 - patch
 - libtool
@@ -377,25 +386,19 @@ The default options are best, and automatically fallback to the next fastest opt
 
 ## Get the Source
 
-Run git clone --recursive https://github.com/altqx/akarisub.git
+```bash
+git clone --recursive https://github.com/altqx/akarisub.git
+```
 
-## Build inside a Container
+## Build
 
-### Docker
+```bash
+mise install      # installs emsdk, bun, cmake
+bun install       # JS dependencies
+make              # builds the static libs (fribidi, freetype, harfbuzz, fontconfig, libass, ...) and the WASM worker
+bun run build     # builds the WASM worker, TypeScript declarations and JS bundles
+```
 
-1. Install Docker
-2. ./run-docker-build.sh
-3. Artifacts are in /dist/js
-
-### Buildah
-
-1. Install Buildah and a suitable backend for buildah run like crun or runc
-2. ./run-buildah-build.sh
-3. Artifacts are in /dist/js
-
-## Build without Containers
-
-1. Install the dependency packages listed above
-2. make
-   - If on macOS with libtool from brew, LIBTOOLIZE=glibtoolize make
-3. Artifacts are in /dist/js
+- If on macOS with libtool from brew, `LIBTOOLIZE=glibtoolize make`
+- Incremental rebuilds of the worker only: `bun run build:wasm` (or `make worker`)
+- Artifacts are in `dist/`
