@@ -66,15 +66,7 @@ void msg_callback(int level, const char *fmt, va_list va, void *data) {
   fprintf(stream, "\n");
 }
 
-const float MIN_UINT8_CAST = 0.9 / 255;
-const float MAX_UINT8_CAST = 255.9 / 255;
 const float INV_255 = 1.0f / 255.0f;
-const float INV_255_SQ = 1.0f / (255.0f * 255.0f);
-
-#define CLAMP_UINT8(value)                                                     \
-  ((value > MIN_UINT8_CAST)                                                    \
-       ? ((value < MAX_UINT8_CAST) ? (int)(value * 255) : 255)                 \
-       : 0)
 
 typedef struct RenderResult {
 public:
@@ -641,18 +633,15 @@ public:
     int split_x_low = canvas_w / 3, split_x_high = 2 * canvas_w / 3;
     int split_y_low = canvas_h / 3, split_y_high = 2 * canvas_h / 3;
 
-    // First pass: determine which region each image belongs to based on center
-    // Store the region assignment to use for bounding box expansion
-    int region_assignments[1024];
-    int image_count = 0;
+    // Assign each image to a region by its center point and expand that
+    // region's bounding box to the image's full bounds. renderBlendPart
+    // re-derives membership from the center, so no per-image bookkeeping
+    // is needed and there is no cap on the number of images.
     BoundingBox boxes[MAX_BLEND_STORAGES];
 
     for (ASS_Image *cur = img; cur != NULL; cur = cur->next) {
-      if (cur->w == 0 || cur->h == 0) {
-        if (image_count < 1024)
-          region_assignments[image_count++] = -1;
+      if (cur->w == 0 || cur->h == 0)
         continue;
-      }
       int index = 0;
       int middle_x = cur->dst_x + (cur->w >> 1),
           middle_y = cur->dst_y + (cur->h >> 1);
@@ -666,22 +655,6 @@ public:
       } else if (middle_x > split_x_low) {
         index += 1;
       }
-      if (image_count < 1024)
-        region_assignments[image_count++] = index;
-      // Mark region as having content (will expand bounds in second pass)
-      boxes[index].add(middle_x, middle_y, 1, 1);
-    }
-
-    // Second pass: expand bounding boxes to include full bounds of all images
-    // that will be rendered in each region (based on center-based assignment)
-    image_count = 0;
-    for (ASS_Image *cur = img; cur != NULL; cur = cur->next) {
-      if (image_count >= 1024)
-        break;
-      int index = region_assignments[image_count++];
-      if (index < 0 || cur->w == 0 || cur->h == 0)
-        continue;
-      // Expand the region's bounding box to fully include this image
       boxes[index].add(cur->dst_x, cur->dst_y, cur->w, cur->h);
     }
 

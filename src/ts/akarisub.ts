@@ -549,13 +549,6 @@ export default class AkariSub extends EventTarget {
     }
   }
 
-  /**
-   * Run a benchmark on the worker.
-   */
-  runBenchmark(): void {
-    this.sendMessage('runBenchmark')
-  }
-
   // ==========================================================================
   // Track Management
   // ==========================================================================

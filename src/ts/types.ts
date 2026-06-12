@@ -321,7 +321,6 @@ export type WorkerInboundMessage =
   | { target: 'resetStats' }
   | { target: 'getEventCount' }
   | { target: 'getStyleCount' }
-  | { target: 'runBenchmark' }
   | { target: 'getColorSpace' }
 
 // =============================================================================

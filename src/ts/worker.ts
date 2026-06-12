@@ -163,7 +163,7 @@ const FULL_WARMUP_CAP_SECONDS = 30
 const FULL_WARMUP_STEP_SECONDS = 1
 const FULL_WARMUP_YIELD_EVERY = 24
 const ASS_TIME_SCALE = 1000
-const imagePool: RenderResultItem[] = new Array(MAX_POOLED_IMAGES)
+const imagePool: RenderResultItem[] = []
 let poolInitialized = false
 // Batch render-collect buffer: 3 header ints (changed, count, time) + 5 ints per image (x, y, w, h, image_ptr)
 const RRC_HEADER_INTS = 3
@@ -171,6 +171,13 @@ const RRC_IMG_STRIDE = 5
 // Pre-allocated buffer for batch render-collect calls
 let rrcBufPtr = 0
 let rrcBufCapacity = 0
+// Cached views over the render-collect buffer; refreshed when the wasm memory
+// grows (buffer identity changes) or the buffer is reallocated/resized.
+let rrcHeaderView: Int32Array | null = null
+let rrcMetaView: Int32Array | null = null
+let rrcViewsBuffer: ArrayBufferLike | null = null
+let rrcViewsPtr = 0
+let rrcViewsCapacity = 0
 const frameImages: RenderResultItem[] = []
 const frameArrayBuffers: ArrayBuffer[] = []
 const frameBitmapPromises: Promise<ImageBitmap>[] = []
@@ -201,10 +208,13 @@ const initPool = (): void => {
 }
 
 const getPooledItem = (index: number): RenderResultItem => {
-  if (index < MAX_POOLED_IMAGES) {
-    return imagePool[index]
+  let item = imagePool[index]
+  if (!item) {
+    // Grow the pool on demand so frames with many images reuse items too
+    item = { w: 0, h: 0, x: 0, y: 0, image: 0 }
+    imagePool[index] = item
   }
-  return { w: 0, h: 0, x: 0, y: 0, image: 0 }
+  return item
 }
 
 /**
@@ -233,6 +243,22 @@ const ensureRenderCollectBuffer = (maxImages: number): void => {
   }
 
   rrcBufCapacity = nextCapacity
+}
+
+const refreshRrcViews = (): void => {
+  const buffer = self.wasmMemory.buffer
+  if (rrcHeaderView && rrcViewsBuffer === buffer && rrcViewsPtr === rrcBufPtr && rrcViewsCapacity === rrcBufCapacity) {
+    return
+  }
+  rrcHeaderView = new Int32Array(buffer, rrcBufPtr, RRC_HEADER_INTS)
+  rrcMetaView = new Int32Array(
+    buffer,
+    rrcBufPtr + RRC_HEADER_INTS * Int32Array.BYTES_PER_ELEMENT,
+    rrcBufCapacity - RRC_HEADER_INTS
+  )
+  rrcViewsBuffer = buffer
+  rrcViewsPtr = rrcBufPtr
+  rrcViewsCapacity = rrcBufCapacity
 }
 
 const prewarmRenderer = (time: number): void => {
@@ -1005,9 +1031,10 @@ const render = (time: number, force?: boolean | number): void => {
       ? api.renderBlendCollect(handle, time, forceInt, rrcBufPtr, rrcBufCapacity)
       : api.renderImageCollect(handle, time, forceInt, rrcBufPtr, rrcBufCapacity)
 
-  const headerView = new Int32Array(self.wasmMemory.buffer, rrcBufPtr, RRC_HEADER_INTS)
+  // Refresh after the WASM call: rendering may have grown the memory
+  refreshRrcViews()
+  const headerView = rrcHeaderView!
   const changed = headerView[0]
-  const imageCount = headerView[1]
 
   // Update metrics
   const renderEndTime = performance.now()
@@ -1042,8 +1069,7 @@ const render = (time: number, force?: boolean | number): void => {
 
     if (written === 0) return paintImages({ images, buffers, times })
 
-    const imgDataOffset = rrcBufPtr + RRC_HEADER_INTS * Int32Array.BYTES_PER_ELEMENT
-    const meta = new Int32Array(self.wasmMemory.buffer, imgDataOffset, written * RRC_IMG_STRIDE)
+    const meta = rrcMetaView!
 
     const useAsyncBitmapPath = asyncRender && offscreenRender !== true
 
@@ -1062,7 +1088,12 @@ const render = (time: number, force?: boolean | number): void => {
 
         const pointer = meta[metaOffset + 4]
         const byteLength = item.w * item.h * 4
-        const rawData = new Uint8ClampedArray(self.wasmMemory.buffer, pointer, byteLength)
+        let rawData = new Uint8ClampedArray(self.wasmMemory.buffer, pointer, byteLength)
+        if (hasBitmapBug) {
+          // Browsers with the partial-bitmap bug mis-render ImageData backed
+          // by a view into a larger buffer; give them a standalone copy.
+          rawData = rawData.slice()
+        }
 
         const imageData = new ImageData(rawData as Uint8ClampedArray<ArrayBuffer>, item.w, item.h)
 
@@ -1092,6 +1123,20 @@ const render = (time: number, force?: boolean | number): void => {
         }
       })
     } else {
+      // When posting to the main thread, copy all image pixels into one
+      // transferable buffer instead of allocating/transferring one per image.
+      let copyTarget: Uint8ClampedArray<ArrayBuffer> | null = null
+      let copyOffset = 0
+      if (!offCanvasCtx) {
+        let totalBytes = 0
+        for (let i = 0; i < written; ++i) {
+          const metaOffset = i * RRC_IMG_STRIDE
+          totalBytes += meta[metaOffset + 2] * meta[metaOffset + 3] * 4
+        }
+        copyTarget = new Uint8ClampedArray(totalBytes)
+        buffers.push(copyTarget.buffer)
+      }
+
       for (let i = 0; i < written; ++i) {
         const metaOffset = i * RRC_IMG_STRIDE
         const item = getPooledItem(i)
@@ -1101,13 +1146,13 @@ const render = (time: number, force?: boolean | number): void => {
         item.h = meta[metaOffset + 3]
         item.image = meta[metaOffset + 4]
 
-        if (!offCanvasCtx) {
+        if (copyTarget) {
           const imagePtr = item.image as number
           const byteLength = item.w * item.h * 4
-          const copiedData = new Uint8ClampedArray(byteLength)
+          const copiedData = copyTarget.subarray(copyOffset, copyOffset + byteLength)
           copiedData.set(self.HEAPU8C.subarray(imagePtr, imagePtr + byteLength))
-          buffers.push(copiedData.buffer)
           item.image = copiedData
+          copyOffset += byteLength
         }
         images[i] = item
       }
@@ -1706,6 +1751,11 @@ self.destroy = (): void => {
       _Module._free(rrcBufPtr)
       rrcBufPtr = 0
       rrcBufCapacity = 0
+      rrcHeaderView = null
+      rrcMetaView = null
+      rrcViewsBuffer = null
+      rrcViewsPtr = 0
+      rrcViewsCapacity = 0
     }
   }
   if (akariSubHandle) {
