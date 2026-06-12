@@ -13,7 +13,8 @@
       "dist/default.woff2",
       "dist/index.js",
       "LICENSE",
-      "README.md"
+      "README.md",
+      "THIRD_PARTY_NOTICES.md"
     ]
   }
 }

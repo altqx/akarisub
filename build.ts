@@ -87,6 +87,13 @@ if (!workerBuildResult.success) {
   process.exit(1)
 }
 
+// Copy package metadata assets to dist root
+await copyFile(
+  resolve(__dirname, 'THIRD_PARTY_NOTICES.md'),
+  resolve(__dirname, 'dist/COPYRIGHT')
+)
+console.log('Copied THIRD_PARTY_NOTICES.md to dist/COPYRIGHT')
+
 // Copy the wasm file to dist root
 try {
   await copyFile(

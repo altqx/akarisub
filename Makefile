@@ -298,13 +298,6 @@ dist/js/akarisub.js: src/akarisub.js
 	mkdir -p dist/js
 	cp src/akarisub.js $@
 
-# dist/license/all:
-#	@#FIXME: allow -j in toplevel Makefile and reintegrate licence extraction into this file
-#	make -j "$$(nproc)" -f Makefile_licence all
-
-# dist/js/COPYRIGHT: dist/license/all
-#	cp "$<" "$@"
-
 # Clean Tasks
 
 clean: clean-dist clean-libs clean-akarisub
@@ -312,7 +305,6 @@ clean: clean-dist clean-libs clean-akarisub
 clean-dist:
 	rm -frv dist/libraries/*
 	rm -frv dist/js/*
-	rm -frv dist/license/*
 clean-libs:
 	rm -frv dist/libraries build/lib
 clean-akarisub:

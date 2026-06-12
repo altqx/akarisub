@@ -18,6 +18,7 @@
     "./worker.wasm": "./dist/akarisub-worker.wasm"
   },
   "files": [
+    "THIRD_PARTY_NOTICES.md",
     "dist/COPYRIGHT",
     "dist/default.woff2",
     "dist/akarisub*",
@@ -30,6 +31,7 @@
     "build:ts": "tsgo",
     "build:bundle": "bun build.ts",
     "build": "bun run build:wasm && bun run build:ts && bun run build:bundle",
+    "license:third-party": "bun build/generate-third-party-notices.mjs",
     "typecheck": "tsc --noEmit",
     "format": "bun run prettier . --write"
   },

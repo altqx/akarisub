@@ -374,7 +374,6 @@ The default options are best, and automatically fallback to the next fastest opt
 - ragel - Required by Harfbuzz
 - itstool - Required by Fontconfig
 - gperf - Required by Fontconfig
-- licensecheck
 
 ## Get the Source
 
