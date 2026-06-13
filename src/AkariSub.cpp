@@ -7,6 +7,7 @@
 #include <string>
 
 #include <emscripten.h>
+#include <wasm_simd128.h>
 
 int log_level = 3;
 
@@ -772,13 +773,17 @@ public:
       float b_val = ((cur->color >> 8) & 0xFF) * INV_255;
       float a_factor = normalized_a * INV_255;
 
-      float lut_a[256], lut_r[256], lut_g[256], lut_b[256];
+      // The LUT is laid out as RGBA vectors so each pixel blends with one
+      // SIMD multiply-add over all four channels.
+      float lut_a[256];
+      float lut_rgba[256][4] __attribute__((aligned(16)));
       for (int i = 0; i < 256; ++i) {
         float pix_alpha = i * a_factor;
         lut_a[i] = pix_alpha;
-        lut_r[i] = r * pix_alpha;
-        lut_g[i] = g * pix_alpha;
-        lut_b[i] = b_val * pix_alpha;
+        lut_rgba[i][0] = r * pix_alpha;
+        lut_rgba[i][1] = g * pix_alpha;
+        lut_rgba[i][2] = b_val * pix_alpha;
+        lut_rgba[i][3] = pix_alpha;
       }
 
       for (int y = 0; y < render_h; y++) {
@@ -790,16 +795,14 @@ public:
           if (mask == 0)
             continue; // Early exit for transparent pixels
 
-          float pix_alpha = lut_a[mask];
-          float inv_alpha = 1.0f - pix_alpha;
-
           int buf_idx = (buf_line_start + x) << 2;
 
-          float old_a = buf[buf_idx + 3];
-          buf[buf_idx + 3] = pix_alpha + old_a * inv_alpha;
-          buf[buf_idx] = lut_r[mask] + buf[buf_idx] * inv_alpha;
-          buf[buf_idx + 1] = lut_g[mask] + buf[buf_idx + 1] * inv_alpha;
-          buf[buf_idx + 2] = lut_b[mask] + buf[buf_idx + 2] * inv_alpha;
+          // buf = contrib + buf * (1 - pix_alpha), all four channels at once
+          v128_t contrib = wasm_v128_load(lut_rgba[mask]);
+          v128_t inv_alpha = wasm_f32x4_splat(1.0f - lut_a[mask]);
+          v128_t cur = wasm_v128_load(buf + buf_idx);
+          wasm_v128_store(buf + buf_idx,
+                          wasm_f32x4_add(contrib, wasm_f32x4_mul(cur, inv_alpha)));
         }
       }
     }
@@ -841,30 +844,29 @@ public:
     int total_pixels = width * height;
     const float MIN_ALPHA_THRESHOLD = 4.0f / 255.0f;
 
+    const v128_t v_zero = wasm_f32x4_splat(0.0f);
+    const v128_t v_one = wasm_f32x4_splat(1.0f);
+    const v128_t v_255 = wasm_f32x4_splat(255.0f);
+    const v128_t v_half = wasm_f32x4_splat(0.5f);
+
     for (int i = 0; i < total_pixels; i++) {
       int buf_coord = i << 2;
       float alpha = buf[buf_coord + 3];
 
       // Only output if alpha is above minimum threshold
       if (alpha >= MIN_ALPHA_THRESHOLD) {
-        // un-multiply the result
+        // un-multiply RGB (alpha lane scales by 1), clamp to [0,1], scale to
+        // 0-255 with rounding, then narrow the four lanes to RGBA bytes
         float inv_alpha = 1.0f / alpha;
-
-        float r_f = buf[buf_coord] * inv_alpha;
-        float g_f = buf[buf_coord + 1] * inv_alpha;
-        float b_f = buf[buf_coord + 2] * inv_alpha;
-
-        // Clamp to 0-1 range
-        r_f = r_f > 1.0f ? 1.0f : (r_f < 0.0f ? 0.0f : r_f);
-        g_f = g_f > 1.0f ? 1.0f : (g_f < 0.0f ? 0.0f : g_f);
-        b_f = b_f > 1.0f ? 1.0f : (b_f < 0.0f ? 0.0f : b_f);
-
-        int r = (int)(r_f * 255.0f + 0.5f);
-        int g = (int)(g_f * 255.0f + 0.5f);
-        int b_val = (int)(b_f * 255.0f + 0.5f);
-        int a = (int)(alpha * 255.0f + 0.5f);
-
-        result[i] = (a << 24) | (b_val << 16) | (g << 8) | r;
+        v128_t v = wasm_f32x4_mul(
+            wasm_v128_load(buf + buf_coord),
+            wasm_f32x4_make(inv_alpha, inv_alpha, inv_alpha, 1.0f));
+        v = wasm_f32x4_pmin(v_one, wasm_f32x4_pmax(v_zero, v));
+        v = wasm_f32x4_add(wasm_f32x4_mul(v, v_255), v_half);
+        v128_t u = wasm_i32x4_trunc_sat_f32x4(v);
+        v128_t n16 = wasm_i16x8_narrow_i32x4(u, u);
+        v128_t n8 = wasm_u8x16_narrow_i16x8(n16, n16);
+        result[i] = (unsigned int)wasm_i32x4_extract_lane(n8, 0);
       } else {
         result[i] = 0;
       }
@@ -1369,6 +1371,35 @@ EMSCRIPTEN_KEEPALIVE int akarisub_get_event_time_range(AkariSub *instance, int *
 
   out[0] = (int)min_start;
   out[1] = (int)max_end;
+  return 1;
+}
+
+// When no event is active at tm (seconds), writes the next event start time
+// (ms; -1 if there are no further events) to out[0] and returns 1: render
+// output is guaranteed empty until then, so render calls can be skipped.
+// Returns 0 when an event is active at tm (it may animate, so every frame
+// must be rendered) or when there is no track.
+EMSCRIPTEN_KEEPALIVE int akarisub_get_empty_window(AkariSub *instance, double tm, int *out) {
+  if (!instance || !instance->track || !out)
+    return 0;
+
+  ASS_Track *track = instance->track;
+  long long now = (long long)(tm * 1000);
+  long long next_start = -1;
+
+  for (int i = 0; i < track->n_events; i++) {
+    ASS_Event *evt = track->events + i;
+    long long start = evt->Start;
+    long long duration = evt->Duration > 0 ? evt->Duration : 0;
+    if (start <= now && now < start + duration)
+      return 0;
+    if (start > now && (next_start < 0 || start < next_start))
+      next_start = start;
+  }
+
+  // Clamp distant events to INT_MAX so the window ends there and the next
+  // render re-evaluates, rather than skipping them forever.
+  out[0] = next_start < 0 ? -1 : (next_start > 0x7fffffff ? 0x7fffffff : (int)next_start);
   return 1;
 }
 

@@ -145,6 +145,7 @@ interface AkariSubApi {
   styleGetStr: (handle: number, index: number, field: number) => number
   styleSetStr: (handle: number, index: number, field: number, valuePtr: number) => void
   getEventTimeRange: (handle: number, outPtr: number) => number
+  getEmptyWindow: (handle: number, tm: number, outPtr: number) => number
   renderBlendCollect: (handle: number, time: number, force: number, outPtr: number, maxItems: number) => number
   renderImageCollect: (handle: number, time: number, force: number, outPtr: number, maxItems: number) => number
 }
@@ -301,6 +302,31 @@ const getTrackEventTimeRange = (): { start: number; end: number } | null => {
 
 const getFirstEventStartTime = (): number | null => {
   return getTrackEventTimeRange()?.start ?? null
+}
+
+let emptyWindowFrom = -1
+let emptyWindowUntil = -1
+
+const invalidateEmptyWindow = (): void => {
+  emptyWindowFrom = -1
+  emptyWindowUntil = -1
+}
+
+const computeEmptyWindow = (time: number): void => {
+  if (!akariSubHandle || !_Module) return
+
+  const outPtr = _Module._malloc(Int32Array.BYTES_PER_ELEMENT)
+  if (!outPtr) return
+
+  try {
+    if (!requireApi().getEmptyWindow(requireHandle(), time, outPtr)) return
+
+    const nextStart = new Int32Array(self.wasmMemory.buffer, outPtr, 1)[0]
+    emptyWindowFrom = time
+    emptyWindowUntil = nextStart < 0 ? Number.POSITIVE_INFINITY : nextStart / ASS_TIME_SCALE
+  } finally {
+    _Module._free(outPtr)
+  }
 }
 
 const prewarmEntireTrack = async (): Promise<void> => {
@@ -1011,6 +1037,13 @@ const render = (time: number, force?: boolean | number): void => {
     return
   }
 
+  // Inside a known-empty window the output cannot change: skip the WASM call
+  if (!force && emptyWindowFrom >= 0 && time >= emptyWindowFrom && time < emptyWindowUntil) {
+    metrics.cacheHits++
+    postMessage({ target: 'unbusy' })
+    return
+  }
+
   renderInFlight = true
   initPool() // Ensure pool is ready
 
@@ -1035,6 +1068,11 @@ const render = (time: number, force?: boolean | number): void => {
   refreshRrcViews()
   const headerView = rrcHeaderView!
   const changed = headerView[0]
+
+  // Frame produced no images: ask how long renders can be skipped.
+  if (headerView[1] === 0 && (emptyWindowFrom < 0 || time < emptyWindowFrom || time >= emptyWindowUntil)) {
+    computeEmptyWindow(time)
+  }
 
   // Update metrics
   const renderEndTime = performance.now()
@@ -1372,6 +1410,7 @@ self.init = async (data: any): Promise<void> => {
       styleGetStr: Module._akarisub_style_get_str,
       styleSetStr: Module._akarisub_style_set_str,
       getEventTimeRange: Module._akarisub_get_event_time_range,
+      getEmptyWindow: Module._akarisub_get_empty_window,
       renderBlendCollect: Module._akarisub_render_blend_collect,
       renderImageCollect: Module._akarisub_render_image_collect
     }
@@ -1983,9 +2022,25 @@ self.getStyleCount = (): void => {
 // Message Handler
 // =============================================================================
 
+const RENDER_SAFE_TARGETS = new Set([
+  'demand',
+  'video',
+  'getEvents',
+  'getStyles',
+  'getStats',
+  'resetStats',
+  'getEventCount',
+  'getStyleCount',
+  'getColorSpace'
+])
+
 onmessage = ({ data }: MessageEvent): void => {
   if (!self[data.target]) {
     throw new Error('Unknown event target ' + data.target)
+  }
+
+  if (!RENDER_SAFE_TARGETS.has(data.target)) {
+    invalidateEmptyWindow()
   }
 
   Promise.resolve(self[data.target](data)).catch((error) => {

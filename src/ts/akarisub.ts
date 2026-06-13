@@ -153,7 +153,8 @@ export default class AkariSub extends EventTarget {
     this._onCanvasFallback = options.onCanvasFallback
 
     const canUseGPURenderer = !this._isLikelyWebKit && !options.canvas && (isWebGPUSupported() || isWebGL2Supported())
-    const shouldUseAsyncRender = typeof createImageBitmap !== 'undefined' && (options.asyncRender ?? !this._isLikelyWebKit)
+    const shouldUseAsyncRender =
+      typeof createImageBitmap !== 'undefined' && (options.asyncRender ?? (!this._isLikelyWebKit && !canUseGPURenderer))
 
     // Don't support offscreen rendering on custom canvases
     this._offscreenRender =

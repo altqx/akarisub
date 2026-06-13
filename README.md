@@ -203,7 +203,7 @@ The default options are best, and automatically fallback to the next fastest opt
 | `video` | HTMLVideoElement | - | Video to use as target for rendering and event listeners |
 | `canvas` | HTMLCanvasElement | - | Canvas to use for manual handling (optional if video is provided) |
 | `blendMode` | `'js'` \| `'wasm'` | `'wasm'` | Image blending mode. WASM is better for low-end devices, JS for hardware acceleration |
-| `asyncRender` | boolean | `true` | Use async rendering with ImageBitmap for GPU offloading |
+| `asyncRender` | boolean | auto | Render via ImageBitmap. Defaults to `true` on Canvas2D paths and `false` when a GPU renderer is active (raw buffers upload with fewer copies) or on WebKit |
 | `offscreenRender` | boolean | `true` | Render fully on the worker, greatly reduces CPU usage |
 | `onDemandRender` | boolean | `true` | Render subtitles as the video player renders frames |
 | `targetFps` | number | `24` | Target FPS when not using onDemandRender |
