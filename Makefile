@@ -265,7 +265,7 @@ COMPAT_ARGS = \
 		-s MIN_CHROME_VERSION=114 \
 		-s MIN_SAFARI_VERSION=160400
 
-dist/js/$(WORKER_NAME).js: src/AkariSub.cpp src/ts/worker.ts src/pre-worker.js src/post-worker.js
+dist/js/$(WORKER_NAME).js: src/AkariSub.cpp src/ts/worker.ts src/pre-worker.js src/post-worker.js $(LIBASS_DEPS)
 	mkdir -p dist/js
 	em++ src/AkariSub.cpp $(LIBASS_DEPS) \
 		-O3 \
