@@ -174,7 +174,7 @@ jobs:
           if curl -fsS -o /dev/null "https://jsr.io/@${jsr_path}/${jsr_version}_meta.json" 2>/dev/null; then
             echo "${jsr_name} v${jsr_version} is already available on JSR; skipping publish"
           else
-            deno publish --no-check --sloppy-imports
+            deno publish --no-check --sloppy-imports --allow-dirty
           fi
 
       - name: Publish to npm
