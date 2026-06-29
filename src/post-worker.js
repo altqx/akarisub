@@ -71,7 +71,7 @@ if (__akarisub_ready) {
     Module['_akarisub_reload_fonts'] = _akarisub_reload_fonts
     Module['_akarisub_set_default_font'] = _akarisub_set_default_font
     Module['_akarisub_set_fallback_fonts'] = _akarisub_set_fallback_fonts
-    Module['_akarisub_set_use_local_fonts'] = _akarisub_set_use_local_fonts
+    Module['_akarisub_set_use_fontconfig_provider'] = _akarisub_set_use_fontconfig_provider
     Module['_akarisub_set_memory_limits'] = _akarisub_set_memory_limits
     Module['_akarisub_get_event_count'] = _akarisub_get_event_count
     Module['_akarisub_alloc_event'] = _akarisub_alloc_event

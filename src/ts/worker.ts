@@ -62,6 +62,7 @@ let targetFps = 24
 let onDemandRenderMode = false
 let rawAssImageGpuEnabled = false
 let useLocalFonts = false
+let useFontconfigProvider = true
 let blendMode: 'js' | 'wasm' = 'wasm'
 let availableFonts: Record<string, string | Uint8Array> = {}
 const fontMap_: Record<string, boolean> = {}
@@ -139,7 +140,7 @@ interface AkariSubApi {
   reloadFonts: (handle: number) => void
   setDefaultFont: (handle: number, fontPtr: number) => void
   setFallbackFonts: (handle: number, fontsPtr: number) => void
-  setUseLocalFonts: (handle: number, enabled: number) => void
+  setUseFontconfigProvider: (handle: number, enabled: number) => void
   setMemoryLimits: (handle: number, glyphLimit: number, memoryLimit: number) => void
   getEventCount: (handle: number) => number
   allocEvent: (handle: number) => number
@@ -1850,7 +1851,7 @@ self.init = async (data: any): Promise<void> => {
       reloadFonts: Module._akarisub_reload_fonts,
       setDefaultFont: Module._akarisub_set_default_font,
       setFallbackFonts: Module._akarisub_set_fallback_fonts,
-      setUseLocalFonts: Module._akarisub_set_use_local_fonts,
+      setUseFontconfigProvider: Module._akarisub_set_use_fontconfig_provider,
       setMemoryLimits: Module._akarisub_set_memory_limits,
       getEventCount: Module._akarisub_get_event_count,
       allocEvent: Module._akarisub_alloc_event,
@@ -1977,6 +1978,7 @@ self.init = async (data: any): Promise<void> => {
     debug = data.debug
     targetFps = data.targetFps || targetFps
     useLocalFonts = data.useLocalFonts
+    useFontconfigProvider = data.useFontconfigProvider
     dropAllBlur = data.dropAllBlur
     clampPos = data.clampPos
 
@@ -2045,7 +2047,7 @@ self.init = async (data: any): Promise<void> => {
     akariSubHandle = withCString(primaryFallback || '', (fontPtr) => {
       return requireApi().create(self.width, self.height, fontPtr, debug ? 1 : 0)
     })
-    requireApi().setUseLocalFonts(akariSubHandle, useLocalFonts ? 1 : 0)
+    requireApi().setUseFontconfigProvider(akariSubHandle, useFontconfigProvider ? 1 : 0)
 
     if (pendingFallbackFonts.length > 0) {
       for (const { data: fontData, name: fontName } of pendingFallbackFonts) {

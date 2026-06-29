@@ -258,6 +258,7 @@ export default class AkariSub extends EventTarget {
         libassMemoryLimit: options.libassMemoryLimit ?? 128,
         libassGlyphLimit: options.libassGlyphLimit ?? 2048,
         useLocalFonts: typeof (globalThis as any).queryLocalFonts !== 'undefined' && (options.useLocalFonts ?? true),
+        useFontconfigProvider: options.useFontconfigProvider ?? true,
         hasBitmapBug: AkariSub._hasBitmapBug
       }
 

@@ -382,7 +382,7 @@ private:
 
   const char *defaultFont;
   std::string fallbackFonts; // comma-separated list of fallback font families
-  bool useLocalFonts;
+  bool useFontconfigProvider;
 
 public:
   ASS_Track *track;
@@ -402,7 +402,7 @@ public:
     adaptive_blend_layouts = false;
     scanned_events = 0;
     this->debug = debug;
-    useLocalFonts = true;
+    useFontconfigProvider = true;
     defaultFont = copyString(df);
     ass_library = ass_library_init();
     if (!ass_library) {
@@ -640,11 +640,11 @@ public:
     return fallbackFonts;
   }
 
-  void setUseLocalFonts(int enabled) {
+  void setUseFontconfigProvider(int enabled) {
     bool next = !!enabled;
-    if (useLocalFonts == next)
+    if (useFontconfigProvider == next)
       return;
-    useLocalFonts = next;
+    useFontconfigProvider = next;
     reloadFonts();
   }
 
@@ -654,7 +654,7 @@ public:
     // can skew glyph metrics when no requested font matches.
     std::string fontFamilyStorage = getPrimaryFallbackFamily(fallbackFonts);
     const char *fontFamily = fontFamilyStorage.empty() ? defaultFont : fontFamilyStorage.c_str();
-    if (useLocalFonts) {
+    if (useFontconfigProvider) {
       ass_set_fonts(ass_renderer, NULL, fontFamily, ASS_FONTPROVIDER_FONTCONFIG, "/assets/fonts.conf", 1);
     } else {
       ass_set_fonts(ass_renderer, NULL, fontFamily, ASS_FONTPROVIDER_NONE, NULL, 1);
@@ -1186,9 +1186,9 @@ EMSCRIPTEN_KEEPALIVE void akarisub_set_fallback_fonts(AkariSub *instance, const 
     instance->setFallbackFonts(fonts ? std::string(fonts) : std::string());
 }
 
-EMSCRIPTEN_KEEPALIVE void akarisub_set_use_local_fonts(AkariSub *instance, int enabled) {
+EMSCRIPTEN_KEEPALIVE void akarisub_set_use_fontconfig_provider(AkariSub *instance, int enabled) {
   if (instance)
-    instance->setUseLocalFonts(enabled);
+    instance->setUseFontconfigProvider(enabled);
 }
 
 EMSCRIPTEN_KEEPALIVE void akarisub_set_memory_limits(AkariSub *instance, int glyph_limit, int bitmap_cache_limit) {

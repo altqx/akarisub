@@ -188,8 +188,10 @@ export interface AkariSubOptions {
   availableFonts?: Record<string, string | Uint8Array>
   /** Fallback font families in order (default: ['liberation sans']). Fontconfig uses these for cascade. */
   fallbackFonts?: string[]
-  /** Use Local Font Access API (default: true if available) */
+  /** Use Local Font Access API for OS font lookup (default: true if available) */
   useLocalFonts?: boolean
+  /** Use libass fontconfig provider for virtual/packaged font lookup (default: true) */
+  useFontconfigProvider?: boolean
   /** libass bitmap cache memory limit in MiB */
   libassMemoryLimit?: number
   /** libass glyph cache limit */
@@ -329,6 +331,7 @@ export interface WorkerInitMessage {
   libassMemoryLimit?: number
   libassGlyphLimit?: number
   useLocalFonts: boolean
+  useFontconfigProvider: boolean
   hasBitmapBug: boolean
 }
 
@@ -417,7 +420,7 @@ export interface AkariSubModule extends EmscriptenModule {
   _akarisub_reload_fonts: (handle: number) => void
   _akarisub_set_default_font: (handle: number, fontPtr: number) => void
   _akarisub_set_fallback_fonts: (handle: number, fontsPtr: number) => void
-  _akarisub_set_use_local_fonts: (handle: number, enabled: number) => void
+  _akarisub_set_use_fontconfig_provider: (handle: number, enabled: number) => void
   _akarisub_set_memory_limits: (handle: number, glyphLimit: number, memoryLimit: number) => void
   _akarisub_get_event_count: (handle: number) => number
   _akarisub_alloc_event: (handle: number) => number
