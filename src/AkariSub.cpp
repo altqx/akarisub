@@ -38,7 +38,7 @@ public:
       } else {
         lessen_counter = 0;
       }
-      if (lessen_counter < 10) {
+      if (lessen_counter < 128) {
         // not reducing the buffer yet
         return buffer;
       }
@@ -76,8 +76,8 @@ public:
   RenderResult *next;
 } RenderResult;
 
-// maximum regions - a grid of 3x3
-#define MAX_BLEND_STORAGES (3 * 3)
+// maximum blend regions among adaptive layouts below (2x2)
+#define MAX_BLEND_STORAGES (2 * 2)
 struct RenderBlendStorage {
   RenderResult next;
   ReusableBuffer buf;
@@ -86,6 +86,58 @@ struct RenderBlendStorage {
 
 #define MIN(x, y) (((x) < (y)) ? (x) : (y))
 #define MAX(x, y) (((x) > (y)) ? (x) : (y))
+
+struct RawAssTrimmedImage {
+  int dst_x;
+  int dst_y;
+  int w;
+  int h;
+  unsigned char *bitmap;
+  int stride;
+};
+
+static bool trimRawAssImage(ASS_Image *img, RawAssTrimmedImage *trim) {
+  if (!img || !trim || img->w <= 0 || img->h <= 0 || !img->bitmap)
+    return false;
+
+  int stride = img->stride > 0 ? img->stride : img->w;
+  int min_x = img->w;
+  int min_y = img->h;
+  int max_x = -1;
+  int max_y = -1;
+
+  for (int y = 0; y < img->h; y++) {
+    unsigned char *row = img->bitmap + y * stride;
+    int left = 0;
+    while (left < img->w && row[left] == 0)
+      left++;
+    if (left == img->w)
+      continue;
+
+    int right = img->w - 1;
+    while (right > left && row[right] == 0)
+      right--;
+
+    if (left < min_x)
+      min_x = left;
+    if (right > max_x)
+      max_x = right;
+    if (y < min_y)
+      min_y = y;
+    max_y = y;
+  }
+
+  if (max_x < min_x || max_y < min_y)
+    return false;
+
+  trim->dst_x = img->dst_x + min_x;
+  trim->dst_y = img->dst_y + min_y;
+  trim->w = max_x - min_x + 1;
+  trim->h = max_y - min_y + 1;
+  trim->bitmap = img->bitmap + min_y * stride + min_x;
+  trim->stride = stride;
+  return true;
+}
 
 class BoundingBox {
 public:
@@ -317,6 +369,7 @@ private:
   ReusableBuffer m_buffer;
   RenderBlendStorage m_blendParts[MAX_BLEND_STORAGES];
   bool drop_animations;
+  bool adaptive_blend_layouts;
   int scanned_events; // next unscanned event index
   ASS_Library *ass_library;
   ASS_Renderer *ass_renderer;
@@ -329,6 +382,7 @@ private:
 
   const char *defaultFont;
   std::string fallbackFonts; // comma-separated list of fallback font families
+  bool useLocalFonts;
 
 public:
   ASS_Track *track;
@@ -345,8 +399,10 @@ public:
     this->canvas_w = canvas_w;
     this->canvas_h = canvas_h;
     drop_animations = false;
+    adaptive_blend_layouts = false;
     scanned_events = 0;
     this->debug = debug;
+    useLocalFonts = true;
     defaultFont = copyString(df);
     ass_library = ass_library_init();
     if (!ass_library) {
@@ -376,6 +432,8 @@ public:
     if (drop_animations)
       scanAnimations(scanned_events);
   }
+
+  void setAdaptiveBlendLayouts(int value) { adaptive_blend_layouts = !!value; }
 
   /*
    * \brief Scan events starting at index i for animations
@@ -513,6 +571,41 @@ public:
     return processImages(imgs);
   }
 
+  ASS_Image *renderRaw(double tm, int force) {
+    time = 0;
+    count = 0;
+
+    ASS_Image *imgs =
+        ass_render_frame(ass_renderer, track, (int)(tm * 1000), &changed);
+    if (imgs == NULL || (changed == 0 && !force))
+      return NULL;
+
+    if (debug)
+      time = emscripten_get_now();
+
+    for (ASS_Image *cur = imgs; cur != NULL; cur = cur->next) {
+      if (cur->w == 0 || cur->h == 0)
+        continue;
+      if ((255 - (cur->color & 0xFF)) == 0)
+        continue;
+      ++count;
+    }
+
+    return imgs;
+  }
+
+  ASS_Image *renderRawForCollect(double tm, int force) {
+    time = 0;
+    count = 0;
+
+    ASS_Image *imgs = ass_render_frame(ass_renderer, track, (int)(tm * 1000), &changed);
+    if (debug)
+      time = emscripten_get_now();
+    if (imgs == NULL || (changed == 0 && !force))
+      return NULL;
+    return imgs;
+  }
+
   void quitLibrary() {
     removeTrack();
     ass_renderer_done(ass_renderer);
@@ -547,13 +640,25 @@ public:
     return fallbackFonts;
   }
 
+  void setUseLocalFonts(int enabled) {
+    bool next = !!enabled;
+    if (useLocalFonts == next)
+      return;
+    useLocalFonts = next;
+    reloadFonts();
+  }
+
   void reloadFonts() {
     // libass expects a single fallback family here. Passing a comma-separated
     // list makes fontconfig treat the whole string as the default family and
     // can skew glyph metrics when no requested font matches.
     std::string fontFamilyStorage = getPrimaryFallbackFamily(fallbackFonts);
     const char *fontFamily = fontFamilyStorage.empty() ? defaultFont : fontFamilyStorage.c_str();
-    ass_set_fonts(ass_renderer, NULL, fontFamily, ASS_FONTPROVIDER_FONTCONFIG, "/assets/fonts.conf", 1);
+    if (useLocalFonts) {
+      ass_set_fonts(ass_renderer, NULL, fontFamily, ASS_FONTPROVIDER_FONTCONFIG, "/assets/fonts.conf", 1);
+    } else {
+      ass_set_fonts(ass_renderer, NULL, fontFamily, ASS_FONTPROVIDER_NONE, NULL, 1);
+    }
   }
 
   void addFont(const std::string &name, int data, unsigned long data_size) {
@@ -630,53 +735,96 @@ public:
       m_blendParts[i].taken = false;
     }
 
-    // split rendering region in 9 pieces (as on 3x3 grid)
-    int split_x_low = canvas_w / 3, split_x_high = 2 * canvas_w / 3;
-    int split_y_low = canvas_h / 3, split_y_high = 2 * canvas_h / 3;
+    // Try a small set of output-equivalent partition layouts and pick the one
+    // with the lowest estimated blend/upload cost for this frame. This keeps
+    // animated/karaoke frames from using overly large regions while letting
+    // sparse vector/blur frames collapse into fewer, cheaper planes.
+    struct BlendLayout {
+      int grid_x;
+      int grid_y;
+    };
+    const BlendLayout layouts[] = {{1, 2}, {2, 2}, {2, 1}, {1, 1}};
+    constexpr int LAYOUT_COUNT = sizeof(layouts) / sizeof(layouts[0]);
+    const int BLUR_MERGE_MARGIN = 0;
+    const size_t PLANE_OVERHEAD_PIXELS = 8192;
+    BoundingBox layoutBoxes[LAYOUT_COUNT][MAX_BLEND_STORAGES];
+    int bestLayout = -1;
+    size_t bestCost = (size_t)-1;
 
-    // Assign each image to a region by its center point and expand that
-    // region's bounding box to the image's full bounds. renderBlendPart
-    // re-derives membership from the center, so no per-image bookkeeping
-    // is needed and there is no cap on the number of images.
-    BoundingBox boxes[MAX_BLEND_STORAGES];
+    const int layoutLimit = adaptive_blend_layouts ? LAYOUT_COUNT : 1;
+    for (int layoutIndex = 0; layoutIndex < layoutLimit; ++layoutIndex) {
+      const int grid_x = layouts[layoutIndex].grid_x;
+      const int grid_y = layouts[layoutIndex].grid_y;
+      const int boxCount = grid_x * grid_y;
+      BoundingBox *candidate = layoutBoxes[layoutIndex];
 
-    for (ASS_Image *cur = img; cur != NULL; cur = cur->next) {
-      if (cur->w == 0 || cur->h == 0)
-        continue;
-      int index = 0;
-      int middle_x = cur->dst_x + (cur->w >> 1),
-          middle_y = cur->dst_y + (cur->h >> 1);
-      if (middle_y > split_y_high) {
-        index += 2 * 3;
-      } else if (middle_y > split_y_low) {
-        index += 1 * 3;
-      }
-      if (middle_x > split_x_high) {
-        index += 2;
-      } else if (middle_x > split_x_low) {
-        index += 1;
-      }
-      boxes[index].add(cur->dst_x, cur->dst_y, cur->w, cur->h);
-    }
-
-    // now merge regions as long as there are intersecting regions
-    const int BLUR_MERGE_MARGIN = 100;
-    for (;;) {
-      bool merged = false;
-      for (int box1 = 0; box1 < MAX_BLEND_STORAGES - 1; box1++) {
-        if (boxes[box1].empty())
+      for (ASS_Image *cur = img; cur != NULL; cur = cur->next) {
+        if (cur->w == 0 || cur->h == 0)
           continue;
-        for (int box2 = box1 + 1; box2 < MAX_BLEND_STORAGES; box2++) {
-          if (boxes[box2].empty())
+        int middle_x = cur->dst_x + (cur->w >> 1);
+        int middle_y = cur->dst_y + (cur->h >> 1);
+        int cell_x = canvas_w > 0 ? (middle_x * grid_x) / canvas_w : 0;
+        int cell_y = canvas_h > 0 ? (middle_y * grid_y) / canvas_h : 0;
+        if (cell_x < 0)
+          cell_x = 0;
+        else if (cell_x >= grid_x)
+          cell_x = grid_x - 1;
+        if (cell_y < 0)
+          cell_y = 0;
+        else if (cell_y >= grid_y)
+          cell_y = grid_y - 1;
+        int index = cell_y * grid_x + cell_x;
+        candidate[index].add(cur->dst_x, cur->dst_y, cur->w, cur->h);
+      }
+
+      for (;;) {
+        bool merged = false;
+        for (int box1 = 0; box1 < boxCount - 1; box1++) {
+          if (candidate[box1].empty())
             continue;
-          if (boxes[box1].tryMergeWithMargin(boxes[box2], BLUR_MERGE_MARGIN)) {
-            boxes[box2].clear();
-            merged = true;
+          for (int box2 = box1 + 1; box2 < boxCount; box2++) {
+            if (candidate[box2].empty())
+              continue;
+            if (candidate[box1].tryMergeWithMargin(candidate[box2], BLUR_MERGE_MARGIN)) {
+              candidate[box2].clear();
+              merged = true;
+            }
           }
         }
+        if (!merged)
+          break;
       }
-      if (!merged)
-        break;
+
+      size_t cost = 0;
+      int parts = 0;
+      for (int box = 0; box < boxCount; box++) {
+        if (candidate[box].empty())
+          continue;
+        int min_x = MAX(candidate[box].min_x, 0);
+        int min_y = MAX(candidate[box].min_y, 0);
+        int max_x = MIN(candidate[box].max_x, canvas_w - 1);
+        int max_y = MIN(candidate[box].max_y, canvas_h - 1);
+        int w = max_x - min_x + 1;
+        int h = max_y - min_y + 1;
+        if (w <= 0 || h <= 0)
+          continue;
+        cost += (size_t)w * (size_t)h;
+        parts++;
+      }
+      if (parts == 0)
+        continue;
+      cost += (size_t)parts * PLANE_OVERHEAD_PIXELS;
+      if (bestLayout < 0 || cost < bestCost) {
+        bestLayout = layoutIndex;
+        bestCost = cost;
+      }
+    }
+
+    BoundingBox boxes[MAX_BLEND_STORAGES];
+    if (bestLayout >= 0) {
+      const int boxCount = layouts[bestLayout].grid_x * layouts[bestLayout].grid_y;
+      for (int i = 0; i < boxCount; ++i)
+        boxes[i] = layoutBoxes[bestLayout][i];
     }
 
     RenderResult *renderResult = NULL;
@@ -777,32 +925,49 @@ public:
       // SIMD multiply-add over all four channels.
       float lut_a[256];
       float lut_rgba[256][4] __attribute__((aligned(16)));
+      float lut_inv_rgba[256][4] __attribute__((aligned(16)));
       for (int i = 0; i < 256; ++i) {
         float pix_alpha = i * a_factor;
+        float inv_pix_alpha = 1.0f - pix_alpha;
         lut_a[i] = pix_alpha;
         lut_rgba[i][0] = r * pix_alpha;
         lut_rgba[i][1] = g * pix_alpha;
         lut_rgba[i][2] = b_val * pix_alpha;
         lut_rgba[i][3] = pix_alpha;
+        lut_inv_rgba[i][0] = inv_pix_alpha;
+        lut_inv_rgba[i][1] = inv_pix_alpha;
+        lut_inv_rgba[i][2] = inv_pix_alpha;
+        lut_inv_rgba[i][3] = inv_pix_alpha;
       }
 
       for (int y = 0; y < render_h; y++) {
         int buf_line_start = (dst_y + y) * width + dst_x;
         unsigned char *bitmap_row = bitmap + (src_y_off + y) * curs + src_x_off;
 
-        for (int x = 0; x < render_w; x++) {
+        for (int x = 0; x < render_w;) {
           unsigned char mask = bitmap_row[x];
-          if (mask == 0)
+          if (mask == 0) {
+            if (x + 4 <= render_w) {
+              uint32_t mask4;
+              memcpy(&mask4, bitmap_row + x, sizeof(mask4));
+              if (mask4 == 0) {
+                x += 4;
+                continue;
+              }
+            }
+            ++x;
             continue; // Early exit for transparent pixels
+          }
 
           int buf_idx = (buf_line_start + x) << 2;
 
           // buf = contrib + buf * (1 - pix_alpha), all four channels at once
           v128_t contrib = wasm_v128_load(lut_rgba[mask]);
-          v128_t inv_alpha = wasm_f32x4_splat(1.0f - lut_a[mask]);
+          v128_t inv_alpha = wasm_v128_load(lut_inv_rgba[mask]);
           v128_t cur = wasm_v128_load(buf + buf_idx);
           wasm_v128_store(buf + buf_idx,
                           wasm_f32x4_add(contrib, wasm_f32x4_mul(cur, inv_alpha)));
+          ++x;
         }
       }
     }
@@ -839,6 +1004,7 @@ public:
       return NULL;
     }
     storage->taken = true;
+    memset(result, 0, needed);
 
     // now build the result
     int total_pixels = width * height;
@@ -855,20 +1021,18 @@ public:
 
       // Only output if alpha is above minimum threshold
       if (alpha >= MIN_ALPHA_THRESHOLD) {
-        // un-multiply RGB (alpha lane scales by 1), clamp to [0,1], scale to
-        // 0-255 with rounding, then narrow the four lanes to RGBA bytes
+        // un-multiply RGB (alpha lane scales by 1), scale to 0-255 with
+        // rounding, then narrow the four lanes to RGBA bytes. The final
+        // saturating narrows clamp to u8.
         float inv_alpha = 1.0f / alpha;
         v128_t v = wasm_f32x4_mul(
             wasm_v128_load(buf + buf_coord),
             wasm_f32x4_make(inv_alpha, inv_alpha, inv_alpha, 1.0f));
-        v = wasm_f32x4_pmin(v_one, wasm_f32x4_pmax(v_zero, v));
         v = wasm_f32x4_add(wasm_f32x4_mul(v, v_255), v_half);
         v128_t u = wasm_i32x4_trunc_sat_f32x4(v);
         v128_t n16 = wasm_i16x8_narrow_i32x4(u, u);
         v128_t n8 = wasm_u8x16_narrow_i16x8(n16, n16);
         result[i] = (unsigned int)wasm_i32x4_extract_lane(n8, 0);
-      } else {
-        result[i] = 0;
       }
     }
 
@@ -982,6 +1146,11 @@ EMSCRIPTEN_KEEPALIVE void akarisub_set_drop_animations(AkariSub *instance, int v
     instance->setDropAnimations(value);
 }
 
+EMSCRIPTEN_KEEPALIVE void akarisub_set_adaptive_blend_layouts(AkariSub *instance, int value) {
+  if (instance)
+    instance->setAdaptiveBlendLayouts(value);
+}
+
 EMSCRIPTEN_KEEPALIVE void akarisub_create_track_mem(AkariSub *instance, const char *content) {
   if (instance)
     instance->createTrackMem(content, content ? strlen(content) : 0);
@@ -1015,6 +1184,11 @@ EMSCRIPTEN_KEEPALIVE void akarisub_set_default_font(AkariSub *instance, const ch
 EMSCRIPTEN_KEEPALIVE void akarisub_set_fallback_fonts(AkariSub *instance, const char *fonts) {
   if (instance)
     instance->setFallbackFonts(fonts ? std::string(fonts) : std::string());
+}
+
+EMSCRIPTEN_KEEPALIVE void akarisub_set_use_local_fonts(AkariSub *instance, int enabled) {
+  if (instance)
+    instance->setUseLocalFonts(enabled);
 }
 
 EMSCRIPTEN_KEEPALIVE void akarisub_set_memory_limits(AkariSub *instance, int glyph_limit, int bitmap_cache_limit) {
@@ -1477,6 +1651,52 @@ EMSCRIPTEN_KEEPALIVE int akarisub_render_image_collect(
     written++;
   }
 
+  return written;
+}
+
+// Raw libass ASS_Image collect path for browser GPU composition.
+// Header: out[0] = changed, out[1] = image count, out[2] = render_time.
+// Image rows: dst_x, dst_y, w, h, bitmap_ptr, color (RRGGBBAA), stride, type.
+EMSCRIPTEN_KEEPALIVE int akarisub_render_raw_collect(
+    AkariSub *instance, double tm, int force, int *out, int max_items) {
+  if (!instance || !out || max_items < 3)
+    return 0;
+
+  ASS_Image *img = instance->renderRawForCollect(tm, force);
+
+  out[0] = instance->changed;
+  out[1] = 0;
+  out[2] = instance->time;
+
+  if (!img || (instance->changed == 0 && !force))
+    return 0;
+
+  int *img_out = out + 3;
+  int written = 0;
+  int img_max = (max_items - 3) / 8;
+
+  for (ASS_Image *cur = img; cur != NULL && written < img_max; cur = cur->next) {
+    if ((255 - (cur->color & 0xFF)) == 0)
+      continue;
+
+    RawAssTrimmedImage trim;
+    if (!trimRawAssImage(cur, &trim))
+      continue;
+
+    int base = written * 8;
+    img_out[base + 0] = trim.dst_x;
+    img_out[base + 1] = trim.dst_y;
+    img_out[base + 2] = trim.w;
+    img_out[base + 3] = trim.h;
+    img_out[base + 4] = (int)(uintptr_t)trim.bitmap;
+    img_out[base + 5] = (int)cur->color;
+    img_out[base + 6] = trim.stride;
+    img_out[base + 7] = cur->type;
+    written++;
+  }
+
+  instance->count = written;
+  out[1] = written;
   return written;
 }
 

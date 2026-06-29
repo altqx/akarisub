@@ -152,16 +152,21 @@ export default class AkariSub extends EventTarget {
 
     this._onCanvasFallback = options.onCanvasFallback
 
-    const canUseGPURenderer = !this._isLikelyWebKit && !options.canvas && (isWebGPUSupported() || isWebGL2Supported())
+    const isCustomCanvas = !!options.canvas
+    const wantsOffscreenRender = options.offscreenRender ?? !isCustomCanvas
+    const canTransferOffscreen = 'transferControlToOffscreen' in HTMLCanvasElement.prototype
+    const canUseGPURenderer = !this._isLikelyWebKit && !isCustomCanvas && (isWebGPUSupported() || isWebGL2Supported())
     const shouldUseAsyncRender =
       typeof createImageBitmap !== 'undefined' && (options.asyncRender ?? (!this._isLikelyWebKit && !canUseGPURenderer))
 
-    // Don't support offscreen rendering on custom canvases
-    this._offscreenRender =
-      'transferControlToOffscreen' in HTMLCanvasElement.prototype &&
-      !options.canvas &&
-      !canUseGPURenderer &&
-      (options.offscreenRender ?? true)
+    // A caller-provided canvas is usually used by manual render/benchmark
+    // integrations where end-to-end latency matters more than moving all paint
+    // work off the main thread. Use the async ImageBitmap main-thread path by
+    // default there; video-managed canvases still use worker OffscreenCanvas
+    // when no main-thread GPU renderer is active. Callers can set
+    // offscreenRender=true to force worker painting or rawAssImageGpu=true to
+    // opt into the experimental raw ASS_Image WebGL2 compositor.
+    this._offscreenRender = canTransferOffscreen && !canUseGPURenderer && wantsOffscreenRender
 
     this.timeOffset = options.timeOffset || 0
     this._video = options.video
@@ -191,8 +196,8 @@ export default class AkariSub extends EventTarget {
 
     this._canvasctrl = this._offscreenRender
       ? (
-        this._canvas as HTMLCanvasElement & { transferControlToOffscreen(): OffscreenCanvas }
-      ).transferControlToOffscreen()
+          this._canvas as HTMLCanvasElement & { transferControlToOffscreen(): OffscreenCanvas }
+        ).transferControlToOffscreen()
       : this._canvas
 
     this._lastRenderTime = 0
@@ -230,6 +235,10 @@ export default class AkariSub extends EventTarget {
         wasmUrl: options.wasmUrl ?? 'akarisub-worker.wasm',
         asyncRender: shouldUseAsyncRender,
         fullTrackWarmup: options.fullTrackWarmup ?? false,
+        blockingFullTrackWarmup: options.blockingFullTrackWarmup ?? false,
+        fullTrackWarmupStep: options.fullTrackWarmupStep ?? 1,
+        adaptiveBlendLayouts: options.adaptiveBlendLayouts ?? false,
+        rawAssImageGpu: options.rawAssImageGpu ?? false,
         onDemandRender: this._onDemandRender,
         initialTime: (this._video?.currentTime ?? 0) + this.timeOffset,
         width: this._canvasctrl.width || 0,
@@ -252,10 +261,24 @@ export default class AkariSub extends EventTarget {
         hasBitmapBug: AkariSub._hasBitmapBug
       }
 
-      this._worker.postMessage(initMessage, AkariSub._getSubtitleTransfers(options.subContent, options.encryptedSubContent))
+      this._worker.postMessage(
+        initMessage,
+        AkariSub._getSubtitleTransfers(options.subContent, options.encryptedSubContent)
+      )
 
       if (this._offscreenRender) {
-        this.sendMessage('offscreenCanvas', {}, [this._canvasctrl as OffscreenCanvas])
+        const offscreenCanvas = this._canvasctrl as OffscreenCanvas
+        // Post this immediately after init, before the worker can emit ready and
+        // trigger an on-demand render. sendMessage() waits for ready and races
+        // the first render, leaving offscreenRender=true with no canvas bound.
+        this._worker.postMessage(
+          {
+            target: 'offscreenCanvas',
+            rawAssImageGpu: options.rawAssImageGpu ?? false,
+            transferable: [offscreenCanvas]
+          },
+          [offscreenCanvas]
+        )
       }
     })
   }
@@ -360,7 +383,11 @@ export default class AkariSub extends EventTarget {
         const renderer = new WebGPURenderer()
         await renderer.init()
         if (!this._canvas) return
-        await renderer.setCanvas(this._canvas, Math.max(1, this._canvas.width || 1), Math.max(1, this._canvas.height || 1))
+        await renderer.setCanvas(
+          this._canvas,
+          Math.max(1, this._canvas.width || 1),
+          Math.max(1, this._canvas.height || 1)
+        )
         this._gpuRenderer = renderer
         this._rendererType = 'webgpu'
         console.log('[AkariSub] Using WebGPU renderer')
@@ -375,7 +402,11 @@ export default class AkariSub extends EventTarget {
         const renderer = new WebGL2Renderer()
         await renderer.init()
         if (!this._canvas) return
-        await renderer.setCanvas(this._canvas, Math.max(1, this._canvas.width || 1), Math.max(1, this._canvas.height || 1))
+        await renderer.setCanvas(
+          this._canvas,
+          Math.max(1, this._canvas.width || 1),
+          Math.max(1, this._canvas.height || 1)
+        )
         this._gpuRenderer = renderer
         this._rendererType = 'webgl2'
         console.log('[AkariSub] Using WebGL2 renderer')
@@ -486,11 +517,14 @@ export default class AkariSub extends EventTarget {
       force = false
     }
 
+    const storageWidth = this._videoWidth || this._video?.videoWidth || width || this._canvasctrl.width || 0
+    const storageHeight = this._videoHeight || this._video?.videoHeight || height || this._canvasctrl.height || 0
+
     this.sendMessage('canvas', {
       width,
       height,
-      videoWidth: this._videoWidth || this._video?.videoWidth || 0,
-      videoHeight: this._videoHeight || this._video?.videoHeight || 0,
+      videoWidth: storageWidth,
+      videoHeight: storageHeight,
       force
     })
   }
@@ -735,14 +769,18 @@ export default class AkariSub extends EventTarget {
       maxRenderTime: stats.maxRenderTime ?? 0,
       minRenderTime: stats.minRenderTime ?? 0,
       lastRenderTime: stats.lastRenderTime ?? 0,
+      lastImageCount: stats.lastImageCount,
+      lastImagePixels: stats.lastImagePixels,
       pendingRenders: stats.pendingRenders ?? 0,
       totalEvents: stats.totalEvents ?? 0,
       cacheHits: stats.cacheHits ?? 0,
       cacheMisses: stats.cacheMisses ?? 0,
       renderFps: stats.avgRenderTime && stats.avgRenderTime > 0 ? Math.round(1000 / stats.avgRenderTime) : 0,
-      usingWorker: true,
-      offscreenRender: this._offscreenRender,
-      onDemandRender: this._onDemandRender
+      usingWorker: stats.usingWorker ?? true,
+      rawAssImageGpu: stats.rawAssImageGpu,
+      workerRenderer: stats.workerRenderer,
+      offscreenRender: stats.offscreenRender ?? this._offscreenRender,
+      onDemandRender: stats.onDemandRender ?? this._onDemandRender
     }
   }
 
@@ -775,7 +813,7 @@ export default class AkariSub extends EventTarget {
 
   private _sendLocalFont(name: string): void {
     try {
-      ; (globalThis as any).queryLocalFonts().then((fontData: any[]) => {
+      ;(globalThis as any).queryLocalFonts().then((fontData: any[]) => {
         const font = fontData?.find((obj: any) => obj.fullName.toLowerCase() === name)
         if (font) {
           font.blob().then((blob: Blob) => {
@@ -793,7 +831,7 @@ export default class AkariSub extends EventTarget {
   private _getLocalFont(data: { font: string }): void {
     try {
       if (navigator?.permissions?.query) {
-        ; (navigator.permissions.query as any)({ name: 'local-fonts' }).then((permission: any) => {
+        ;(navigator.permissions.query as any)({ name: 'local-fonts' }).then((permission: any) => {
           if (permission.state === 'granted') {
             this._sendLocalFont(data.font)
           }
@@ -839,9 +877,8 @@ export default class AkariSub extends EventTarget {
 
     if (!Number.isFinite(elapsed) || elapsed <= 0) return
 
-    this._smoothedDemandLatencyMs = this._smoothedDemandLatencyMs <= 0
-      ? elapsed
-      : this._smoothedDemandLatencyMs * 0.75 + elapsed * 0.25
+    this._smoothedDemandLatencyMs =
+      this._smoothedDemandLatencyMs <= 0 ? elapsed : this._smoothedDemandLatencyMs * 0.75 + elapsed * 0.25
   }
 
   private _getDemandPipelineLeadSeconds(now: number, metadata: VideoFrameCallbackMetadata): number {
@@ -884,7 +921,7 @@ export default class AkariSub extends EventTarget {
 
     if (!this._workerReady) {
       this._enqueueDemand(demandData)
-      ; (this._video as any).requestVideoFrameCallback(this._boundHandleRVFC)
+      ;(this._video as any).requestVideoFrameCallback(this._boundHandleRVFC)
       return
     }
 
@@ -895,7 +932,7 @@ export default class AkariSub extends EventTarget {
       this._demandRender(demandData)
     }
 
-    ; (this._video as any).requestVideoFrameCallback(this._boundHandleRVFC)
+    ;(this._video as any).requestVideoFrameCallback(this._boundHandleRVFC)
   }
 
   private _demandRender(metadata: { mediaTime: number; width: number; height: number }): void {
@@ -935,7 +972,7 @@ export default class AkariSub extends EventTarget {
   }
 
   private _updateColorSpace(): void {
-    ; (this._video as any).requestVideoFrameCallback(() => {
+    ;(this._video as any).requestVideoFrameCallback(() => {
       try {
         const frame = new (globalThis as any).VideoFrame(this._video)
         this._videoColorSpace = webYCbCrMap[frame.colorSpace.matrix] ?? null
@@ -1028,11 +1065,12 @@ export default class AkariSub extends EventTarget {
             const imgH = image.h
 
             const rawImage = image.image
-            const rawData = rawImage instanceof Uint8ClampedArray
-              ? rawImage
-              : rawImage instanceof Uint8Array
-                ? new Uint8ClampedArray(rawImage.buffer, rawImage.byteOffset, rawImage.byteLength)
-                : new Uint8ClampedArray(rawImage as ArrayBuffer)
+            const rawData =
+              rawImage instanceof Uint8ClampedArray
+                ? rawImage
+                : rawImage instanceof Uint8Array
+                  ? new Uint8ClampedArray(rawImage.buffer, rawImage.byteOffset, rawImage.byteLength)
+                  : new Uint8ClampedArray(rawImage as ArrayBuffer)
             const fixedData = fixAlpha(rawData, hasAlphaBug)
             ctx.putImageData(new ImageData(fixedData as Uint8ClampedArray<ArrayBuffer>, imgW, imgH), image.x, image.y)
           }
@@ -1106,7 +1144,10 @@ export default class AkariSub extends EventTarget {
         total += (data.times as any)[key] || 0
       }
 
-      console.log(`[${this._rendererType.toUpperCase()}] Bitmaps: ` + count + ' Total: ' + (total | 0) + 'ms', data.times)
+      console.log(
+        `[${this._rendererType.toUpperCase()}] Bitmaps: ` + count + ' Total: ' + (total | 0) + 'ms',
+        data.times
+      )
     }
   }
 
@@ -1117,13 +1158,14 @@ export default class AkariSub extends EventTarget {
     if (this._onDemandRender && this._video) {
       this.setCurrentTime(this._video.paused, this._video.currentTime + this.timeOffset, this._video.playbackRate)
 
-      const pending = this._pendingDemandTimes.length > 0
-        ? this._pendingDemandTimes[this._pendingDemandTimes.length - 1]
-        : {
-          mediaTime: this._video.currentTime + this.renderAhead * (this._video.playbackRate || 1),
-          width: this._video.videoWidth,
-          height: this._video.videoHeight
-        }
+      const pending =
+        this._pendingDemandTimes.length > 0
+          ? this._pendingDemandTimes[this._pendingDemandTimes.length - 1]
+          : {
+              mediaTime: this._video.currentTime + this.renderAhead * (this._video.playbackRate || 1),
+              width: this._video.videoWidth,
+              height: this._video.videoHeight
+            }
 
       this._pendingDemandTimes.length = 0
       this.busy = true
@@ -1198,7 +1240,7 @@ export default class AkariSub extends EventTarget {
   }
 
   private _console(data: { content: string; command: string }): void {
-    ; (console as any)[data.command].apply(console, JSON.parse(data.content))
+    ;(console as any)[data.command].apply(console, JSON.parse(data.content))
   }
 
   private _onmessage(event: MessageEvent): void {

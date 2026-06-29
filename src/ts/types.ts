@@ -108,10 +108,18 @@ export interface PerformanceStats {
   minRenderTime: number
   /** Last render time in milliseconds */
   lastRenderTime: number
+  /** Number of image planes emitted by the last render */
+  lastImageCount?: number
+  /** Total RGBA/raw image pixels emitted by the last render */
+  lastImagePixels?: number
   /** Estimated render FPS based on timing */
   renderFps: number
   /** Whether using Web Worker */
   usingWorker: boolean
+  /** Whether worker-side raw ASS_Image WebGL2 composition is active */
+  rawAssImageGpu?: boolean
+  /** Active worker renderer backend */
+  workerRenderer?: 'webgl2-raw-ass' | 'canvas2d' | 'hybrid' | 'main-thread'
   /** Whether offscreen rendering is enabled */
   offscreenRender: boolean
   /** Whether on-demand rendering is enabled */
@@ -140,8 +148,10 @@ export interface AkariSubOptions {
   blendMode?: 'js' | 'wasm'
   /** Use async rendering with ImageBitmap (default: true) */
   asyncRender?: boolean
-  /** Use offscreen canvas rendering (default: true) */
+  /** Use offscreen canvas rendering (default: true for video-managed canvases, false for caller-provided custom canvases) */
   offscreenRender?: boolean
+  /** Use worker-side raw ASS_Image WebGL2 compositor (experimental; default: false) */
+  rawAssImageGpu?: boolean
   /** Use requestVideoFrameCallback for precise sync (default: true) */
   onDemandRender?: boolean
   /** Target FPS when not using onDemandRender (default: 24) */
@@ -190,6 +200,12 @@ export interface AkariSubOptions {
   renderAhead?: number
   /** Pre-render early track windows after load to warm libass caches (default: false) */
   fullTrackWarmup?: boolean
+  /** Wait for fullTrackWarmup to finish before ready (default: false) */
+  blockingFullTrackWarmup?: boolean
+  /** Step in seconds for fullTrackWarmup; lower values warm more frames (default: 1) */
+  fullTrackWarmupStep?: number
+  /** Allow adaptive CPU preblend layouts for text-heavy frames (default: false) */
+  adaptiveBlendLayouts?: boolean
 }
 
 export interface EncryptedSubtitleContent {
@@ -225,6 +241,26 @@ export interface RenderImage {
   w: number
   h: number
   image: ImageBitmap | ArrayBuffer | Uint8Array | Uint8ClampedArray | number
+}
+
+/** Raw libass ASS_Image plane exposed directly from WASM for GPU mask composition. */
+export interface RawASSImage {
+  /** ASS_Image.dst_x */
+  dst_x: number
+  /** ASS_Image.dst_y */
+  dst_y: number
+  /** ASS_Image.w */
+  w: number
+  /** ASS_Image.h */
+  h: number
+  /** Pointer to ASS_Image.bitmap in WASM memory */
+  bitmap: number
+  /** ASS_Image.color packed as RRGGBBAA */
+  color: number
+  /** ASS_Image.stride in bytes */
+  stride: number
+  /** ASS_Image.type when provided by libass */
+  type: number
 }
 
 /** Render timing debug info */
@@ -270,6 +306,10 @@ export interface WorkerInitMessage {
   wasmUrl: string
   asyncRender: boolean
   fullTrackWarmup: boolean
+  blockingFullTrackWarmup: boolean
+  fullTrackWarmupStep: number
+  adaptiveBlendLayouts: boolean
+  rawAssImageGpu: boolean
   onDemandRender: boolean
   initialTime: number
   width: number
@@ -295,7 +335,7 @@ export interface WorkerInitMessage {
 /** Main thread -> Worker messages */
 export type WorkerInboundMessage =
   | WorkerInitMessage
-  | { target: 'offscreenCanvas'; transferable: [OffscreenCanvas] }
+  | { target: 'offscreenCanvas'; rawAssImageGpu?: boolean; transferable: [OffscreenCanvas] }
   | { target: 'detachOffscreen' }
   | { target: 'canvas'; width: number; height: number; videoWidth: number; videoHeight: number; force?: boolean }
   | { target: 'video'; currentTime?: number; isPaused?: boolean; rate?: number; colorSpace?: string | null }
@@ -363,13 +403,21 @@ export interface AkariSubModule extends EmscriptenModule {
   _akarisub_create: (width: number, height: number, fallbackFontPtr: number, debug: number) => number
   _akarisub_destroy: (handle: number) => void
   _akarisub_set_drop_animations: (handle: number, value: number) => void
+  _akarisub_set_adaptive_blend_layouts: (handle: number, value: number) => void
   _akarisub_create_track_mem: (handle: number, contentPtr: number) => void
   _akarisub_remove_track: (handle: number) => void
-  _akarisub_resize_canvas: (handle: number, width: number, height: number, videoWidth: number, videoHeight: number) => void
+  _akarisub_resize_canvas: (
+    handle: number,
+    width: number,
+    height: number,
+    videoWidth: number,
+    videoHeight: number
+  ) => void
   _akarisub_add_font: (handle: number, namePtr: number, dataPtr: number, size: number) => void
   _akarisub_reload_fonts: (handle: number) => void
   _akarisub_set_default_font: (handle: number, fontPtr: number) => void
   _akarisub_set_fallback_fonts: (handle: number, fontsPtr: number) => void
+  _akarisub_set_use_local_fonts: (handle: number, enabled: number) => void
   _akarisub_set_memory_limits: (handle: number, glyphLimit: number, memoryLimit: number) => void
   _akarisub_get_event_count: (handle: number) => number
   _akarisub_alloc_event: (handle: number) => number
@@ -390,8 +438,34 @@ export interface AkariSubModule extends EmscriptenModule {
   _akarisub_style_set_str: (handle: number, index: number, field: number, valuePtr: number) => void
   _akarisub_get_event_time_range: (handle: number, outPtr: number) => number
   _akarisub_get_empty_window: (handle: number, tm: number, outPtr: number) => number
-  _akarisub_render_blend_collect: (handle: number, time: number, force: number, outPtr: number, maxItems: number) => number
-  _akarisub_render_image_collect: (handle: number, time: number, force: number, outPtr: number, maxItems: number) => number
+  _akarisub_render_blend_collect: (
+    handle: number,
+    time: number,
+    force: number,
+    outPtr: number,
+    maxItems: number
+  ) => number
+  _akarisub_render_image_collect: (
+    handle: number,
+    time: number,
+    force: number,
+    outPtr: number,
+    maxItems: number
+  ) => number
+  _akarisub_render_raw_collect: (
+    handle: number,
+    time: number,
+    force: number,
+    outPtr: number,
+    maxItems: number
+  ) => number
   FS_createPath: (parent: string, path: string, canRead: boolean, canWrite: boolean) => void
-  FS_createDataFile: (parent: string, name: string | null, data: Uint8Array, canRead: boolean, canWrite: boolean, canOwn?: boolean) => void
+  FS_createDataFile: (
+    parent: string,
+    name: string | null,
+    data: Uint8Array,
+    canRead: boolean,
+    canWrite: boolean,
+    canOwn?: boolean
+  ) => void
 }
