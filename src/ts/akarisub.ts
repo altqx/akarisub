@@ -30,8 +30,6 @@ import { WebGL2Renderer, isWebGL2Supported } from './webgl2-renderer'
 type AnyGPURenderer = WebGPURenderer | WebGL2Renderer
 
 const DEFAULT_RENDER_AHEAD = 0.008
-const DEFAULT_PIPELINE_LATENCY_MS = DEFAULT_RENDER_AHEAD * 1000
-const DEFAULT_WEBKIT_PIPELINE_LATENCY_MS = 16
 
 const isLikelyWebKit = (): boolean => {
   if (typeof navigator === 'undefined') return false
@@ -101,8 +99,6 @@ export default class AkariSub extends EventTarget {
   private _renderEpoch: number = 0
   private _nextDemandId: number = 1
   private readonly _isLikelyWebKit: boolean
-  private _activeDemandStartedAt: number = 0
-  private _smoothedDemandLatencyMs: number
 
   // Bound methods for event listeners
   private _boundResize: () => void
@@ -145,9 +141,6 @@ export default class AkariSub extends EventTarget {
     })
 
     this._isLikelyWebKit = isLikelyWebKit()
-    this._smoothedDemandLatencyMs = this._isLikelyWebKit
-      ? DEFAULT_WEBKIT_PIPELINE_LATENCY_MS
-      : DEFAULT_PIPELINE_LATENCY_MS
 
     // Run feature tests
     const test = AkariSub._test()
@@ -869,8 +862,6 @@ export default class AkariSub extends EventTarget {
   }
 
   private _unbusy(): void {
-    this._observeDemandCompletion()
-
     if (this._pendingDemandTimes.length > 0) {
       if (this._pendingDemandTimes.length > 1) {
         const latestDemand = this._pendingDemandTimes[this._pendingDemandTimes.length - 1]
@@ -945,30 +936,6 @@ export default class AkariSub extends EventTarget {
         image.image.close()
       }
     }
-  }
-
-  private _markDemandDispatched(): void {
-    if (!this._onDemandRender) return
-    this._activeDemandStartedAt = performance.now()
-  }
-
-  private _observeDemandCompletion(): void {
-    if (!this._onDemandRender || this._activeDemandStartedAt === 0) return
-
-    const elapsed = performance.now() - this._activeDemandStartedAt
-    this._activeDemandStartedAt = 0
-
-    if (!Number.isFinite(elapsed) || elapsed <= 0) return
-
-    this._smoothedDemandLatencyMs =
-      this._smoothedDemandLatencyMs <= 0 ? elapsed : this._smoothedDemandLatencyMs * 0.75 + elapsed * 0.25
-  }
-
-  private _getDemandPipelineLeadSeconds(now: number, metadata: VideoFrameCallbackMetadata): number {
-    const expectedDisplayTime = metadata.expectedDisplayTime ?? metadata.presentationTime ?? now
-    const displayLeadSeconds = Math.max(0, expectedDisplayTime - now) / 1000
-
-    return Math.max(0, this._smoothedDemandLatencyMs / 1000 - displayLeadSeconds)
   }
 
   private _isVideoPausedForWorker(): boolean {
@@ -1079,8 +1046,12 @@ export default class AkariSub extends EventTarget {
     if (this._destroyed) return
 
     const playbackRate = this._videoPlaybackRateForWorker()
-    const pipelineLeadSeconds = this._getDemandPipelineLeadSeconds(now, metadata)
-    const renderLeadSeconds = this._isVideoPausedForWorker() ? 0 : pipelineLeadSeconds + this.renderAhead
+    // RVFC metadata.mediaTime is the frame timestamp supplied by the browser.
+    // Do not feed measured subtitle-render latency back into the requested media
+    // time: a single slow render can otherwise make all later subtitles render
+    // tens of milliseconds in the future and visibly desync. Keep only the
+    // caller-configured fixed renderAhead bias.
+    const renderLeadSeconds = this._isVideoPausedForWorker() ? 0 : this.renderAhead
     const renderTime = metadata.mediaTime + renderLeadSeconds * playbackRate
 
     const demandData = {
@@ -1100,7 +1071,6 @@ export default class AkariSub extends EventTarget {
       this.resize()
     }
 
-    this._markDemandDispatched()
     this.sendMessage('demand', {
       time: metadata.mediaTime + this.timeOffset,
       requestId: this._nextDemandId++,
@@ -1117,7 +1087,6 @@ export default class AkariSub extends EventTarget {
     this._ctx = this._canvasctrl.getContext('2d', { alpha: true, desynchronized: true })
     this.sendMessage('detachOffscreen')
     this.busy = false
-    this._activeDemandStartedAt = 0
     this._pendingDemandTimes.length = 0
     this.resize(0, 0, 0, 0, true)
   }
