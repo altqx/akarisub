@@ -1318,6 +1318,23 @@ self.setTrackByUrl = ({ url }: { url: string }): void => {
 
 let _isPaused = true
 
+const projectedCurrentTime = (): number => {
+  if (_isPaused) return lastCurrentTime
+  return lastCurrentTime + ((nowMs() - lastCurrentTimeReceivedAt) / 1000) * rate
+}
+
+const freezeClockAtProjectedTime = (): void => {
+  lastCurrentTime = projectedCurrentTime()
+  lastCurrentTimeReceivedAt = nowMs()
+}
+
+const setPlaybackRate = (newRate: number): void => {
+  if (!Number.isFinite(newRate)) return
+
+  if (!_isPaused) freezeClockAtProjectedTime()
+  rate = newRate
+}
+
 const getCurrentTime = (): number => {
   const diff = (nowMs() - lastCurrentTimeReceivedAt) / 1000
   if (_isPaused) {
@@ -1325,13 +1342,17 @@ const getCurrentTime = (): number => {
   } else {
     if (diff > 5) {
       console.error("Didn't receive currentTime > 5 seconds. Assuming video was paused.")
+      freezeClockAtProjectedTime()
       setIsPaused(true)
+      return lastCurrentTime
     }
     return lastCurrentTime + diff * rate
   }
 }
 
 const setCurrentTime = (currentTime: number): void => {
+  if (!Number.isFinite(currentTime)) return
+
   lastCurrentTime = currentTime
   lastCurrentTimeReceivedAt = nowMs()
 
@@ -1358,8 +1379,15 @@ const setCurrentTime = (currentTime: number): void => {
 }
 
 const setIsPaused = (isPaused: boolean): void => {
+  if (isPaused === _isPaused) return
+
+  if (isPaused) {
+    freezeClockAtProjectedTime()
+  }
+
   if (onDemandRenderMode) {
     _isPaused = isPaused
+    if (!isPaused) lastCurrentTimeReceivedAt = nowMs()
     if (rafId) {
       cancelAnimationFrame(rafId)
       rafId = null
@@ -1367,17 +1395,15 @@ const setIsPaused = (isPaused: boolean): void => {
     return
   }
 
-  if (isPaused !== _isPaused) {
-    _isPaused = isPaused
-    if (isPaused) {
-      if (rafId) {
-        cancelAnimationFrame(rafId)
-        rafId = null
-      }
-    } else {
-      lastCurrentTimeReceivedAt = nowMs()
-      rafId = requestAnimationFrame(renderLoop)
+  _isPaused = isPaused
+  if (isPaused) {
+    if (rafId) {
+      cancelAnimationFrame(rafId)
+      rafId = null
     }
+  } else {
+    lastCurrentTimeReceivedAt = nowMs()
+    rafId = requestAnimationFrame(renderLoop)
   }
 }
 
@@ -2288,7 +2314,7 @@ self.canvas = ({
   self.width = width
   self.height = height
   if (akariSubHandle) requireApi().resizeCanvas(akariSubHandle, width, height, videoWidth, videoHeight)
-  if (force) render(lastCurrentTime, true)
+  if (force) render(getCurrentTime(), true)
 }
 
 self.video = ({
@@ -2302,7 +2328,7 @@ self.video = ({
 }): void => {
   if (currentTime != null) setCurrentTime(currentTime)
   if (isPaused != null) setIsPaused(isPaused)
-  if (newRate != null) rate = newRate
+  if (newRate != null) setPlaybackRate(newRate)
 }
 
 self.destroy = (): void => {

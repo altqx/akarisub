@@ -210,7 +210,7 @@ export default class AkariSub extends EventTarget {
     // Bind methods
     this._boundResize = this.resize.bind(this)
     this._boundTimeUpdate = this._timeupdate.bind(this)
-    this._boundSetRate = () => this.setRate((this._video as HTMLVideoElement).playbackRate)
+    this._boundSetRate = () => this._syncVideoClock(new Event('ratechange'))
     this._boundUpdateColorSpace = this._updateColorSpace.bind(this)
     this._boundHandleRVFC = this._handleRVFC.bind(this)
 
@@ -540,14 +540,7 @@ export default class AkariSub extends EventTarget {
   // ==========================================================================
 
   private _timeupdate(event: Event): void {
-    const eventmap: Record<string, boolean> = {
-      seeking: true,
-      waiting: true,
-      playing: false
-    }
-    const playing = eventmap[event.type]
-    if (playing != null) this._playstate = playing
-    this.setCurrentTime(this._video!.paused || this._playstate, this._video!.currentTime + this.timeOffset)
+    this._syncVideoClock(event)
   }
 
   /**
@@ -557,22 +550,27 @@ export default class AkariSub extends EventTarget {
     if (video instanceof HTMLVideoElement) {
       this._removeListeners()
       this._video = video
+      this._playstate = video.paused || video.ended
 
       if (this._onDemandRender) {
         if (!this._destroyed && this._video === video) {
           ;(video as any).requestVideoFrameCallback(this._boundHandleRVFC)
         }
       } else {
-        this._playstate = video.paused
-
-        video.addEventListener('timeupdate', this._boundTimeUpdate, false)
-        video.addEventListener('progress', this._boundTimeUpdate, false)
-        video.addEventListener('waiting', this._boundTimeUpdate, false)
-        video.addEventListener('seeking', this._boundTimeUpdate, false)
-        video.addEventListener('playing', this._boundTimeUpdate, false)
-        video.addEventListener('ratechange', this._boundSetRate, false)
         video.addEventListener('resize', this._boundResize, false)
       }
+
+      video.addEventListener('timeupdate', this._boundTimeUpdate, false)
+      video.addEventListener('progress', this._boundTimeUpdate, false)
+      video.addEventListener('play', this._boundTimeUpdate, false)
+      video.addEventListener('playing', this._boundTimeUpdate, false)
+      video.addEventListener('pause', this._boundTimeUpdate, false)
+      video.addEventListener('ended', this._boundTimeUpdate, false)
+      video.addEventListener('waiting', this._boundTimeUpdate, false)
+      video.addEventListener('stalled', this._boundTimeUpdate, false)
+      video.addEventListener('seeking', this._boundTimeUpdate, false)
+      video.addEventListener('seeked', this._boundTimeUpdate, false)
+      video.addEventListener('ratechange', this._boundSetRate, false)
 
       if ('VideoFrame' in window) {
         video.addEventListener('loadedmetadata', this._boundUpdateColorSpace, false)
@@ -580,6 +578,8 @@ export default class AkariSub extends EventTarget {
       }
 
       if (video.videoWidth > 0) this.resize()
+
+      this._syncVideoClock()
 
       if (typeof ResizeObserver !== 'undefined') {
         if (!this._ro) this._ro = new ResizeObserver(() => this.resize())
@@ -638,6 +638,12 @@ export default class AkariSub extends EventTarget {
    * Sets the playback state of the media.
    */
   setIsPaused(isPaused: boolean): void {
+    if (this._video) {
+      this._playstate = isPaused
+      this._syncVideoClock()
+      return
+    }
+
     this.sendMessage('video', { isPaused })
   }
 
@@ -645,6 +651,11 @@ export default class AkariSub extends EventTarget {
    * Sets the playback rate of the media.
    */
   setRate(rate: number): void {
+    if (this._video) {
+      this.setCurrentTime(this._isVideoPausedForWorker(), this._currentVideoTimeWithOffset(), rate)
+      return
+    }
+
     this.sendMessage('video', { rate })
   }
 
@@ -897,15 +908,88 @@ export default class AkariSub extends EventTarget {
   private _isVideoPausedForWorker(): boolean {
     if (!this._video) return true
 
-    // Non-RVFC mode tracks waiting/seeking state through _playstate. In RVFC
-    // mode that state is intentionally unused, so only the element's paused
-    // bit should be sent to the worker.
-    return this._onDemandRender ? this._video.paused : this._video.paused || this._playstate
+    return this._video.paused || this._video.ended || this._playstate
   }
 
   private _videoPlaybackRateForWorker(): number {
     const playbackRate = this._video?.playbackRate ?? 1
     return Number.isFinite(playbackRate) ? playbackRate : 1
+  }
+
+  private _setVideoClockStateFromEvent(event?: Event): void {
+    if (!event || !this._video) return
+
+    switch (event.type) {
+      case 'play':
+      case 'playing':
+      case 'canplay':
+        this._playstate = false
+        break
+      case 'pause':
+      case 'ended':
+      case 'seeking':
+      case 'waiting':
+      case 'stalled':
+        this._playstate = true
+        break
+      case 'seeked':
+        this._playstate = this._video.paused || this._video.ended
+        break
+    }
+  }
+
+  private _currentVideoTimeWithOffset(): number {
+    const currentTime = this._video?.currentTime ?? 0
+    return (Number.isFinite(currentTime) ? currentTime : 0) + this.timeOffset
+  }
+
+  private _syncVideoClock(event?: Event): void {
+    if (!this._video || this._destroyed) return
+
+    this._setVideoClockStateFromEvent(event)
+
+    const currentTime = this._currentVideoTimeWithOffset()
+    const playbackRate = this._videoPlaybackRateForWorker()
+    const isPaused = this._isVideoPausedForWorker()
+    this.setCurrentTime(isPaused, currentTime, playbackRate)
+
+    if (!this._onDemandRender) return
+
+    // RVFC renders ahead while the video is actively presenting frames. When
+    // playback pauses, stalls, or seeks, RVFC may stop and the last ahead render
+    // can be visibly in the future. Force an exact render at the displayed media
+    // time for non-advancing states.
+    const shouldRenderExactFrame =
+      isPaused ||
+      event?.type === 'pause' ||
+      event?.type === 'seeking' ||
+      event?.type === 'seeked' ||
+      event?.type === 'waiting' ||
+      event?.type === 'stalled' ||
+      event?.type === 'ended'
+
+    if (shouldRenderExactFrame) {
+      this._pendingDemandTimes.length = 0
+      this._requestDemandRender({
+        mediaTime: currentTime - this.timeOffset,
+        width: this._video.videoWidth || this._videoWidth || 0,
+        height: this._video.videoHeight || this._videoHeight || 0
+      })
+    }
+  }
+
+  private _requestDemandRender(metadata: { mediaTime: number; width: number; height: number }): void {
+    if (!this._workerReady) {
+      this._enqueueDemand(metadata)
+      return
+    }
+
+    if (this.busy) {
+      this._enqueueDemand(metadata)
+    } else {
+      this.busy = true
+      this._demandRender(metadata)
+    }
   }
 
   private _enqueueDemand(metadata: { mediaTime: number; width: number; height: number }): void {
@@ -928,10 +1012,10 @@ export default class AkariSub extends EventTarget {
   private _handleRVFC(now: number, metadata: VideoFrameCallbackMetadata): void {
     if (this._destroyed) return
 
-    // Get the video's playback rate to correctly scale time offsets
-    const playbackRate = this._video?.playbackRate ?? 1
+    const playbackRate = this._videoPlaybackRateForWorker()
     const pipelineLeadSeconds = this._getDemandPipelineLeadSeconds(now, metadata)
-    const renderTime = metadata.mediaTime + (pipelineLeadSeconds + this.renderAhead) * playbackRate
+    const renderLeadSeconds = this._isVideoPausedForWorker() ? 0 : pipelineLeadSeconds + this.renderAhead
+    const renderTime = metadata.mediaTime + renderLeadSeconds * playbackRate
 
     const demandData = {
       mediaTime: renderTime,
@@ -939,19 +1023,7 @@ export default class AkariSub extends EventTarget {
       height: metadata.height
     }
 
-    if (!this._workerReady) {
-      this._enqueueDemand(demandData)
-      ;(this._video as any).requestVideoFrameCallback(this._boundHandleRVFC)
-      return
-    }
-
-    if (this.busy) {
-      this._enqueueDemand(demandData)
-    } else {
-      this.busy = true
-      this._demandRender(demandData)
-    }
-
+    this._requestDemandRender(demandData)
     ;(this._video as any).requestVideoFrameCallback(this._boundHandleRVFC)
   }
 
@@ -1178,7 +1250,8 @@ export default class AkariSub extends EventTarget {
     if (this._video) {
       const currentTime = this._video.currentTime
       const playbackRate = this._videoPlaybackRateForWorker()
-      this.setCurrentTime(this._isVideoPausedForWorker(), currentTime + this.timeOffset, playbackRate)
+      const isPaused = this._isVideoPausedForWorker()
+      this.setCurrentTime(isPaused, currentTime + this.timeOffset, playbackRate)
 
       if (!this._onDemandRender) {
         this.dispatchEvent(new CustomEvent('ready'))
@@ -1189,7 +1262,7 @@ export default class AkariSub extends EventTarget {
         this._pendingDemandTimes.length > 0
           ? this._pendingDemandTimes[this._pendingDemandTimes.length - 1]
           : {
-              mediaTime: currentTime + this.renderAhead * playbackRate,
+              mediaTime: currentTime + (isPaused ? 0 : this.renderAhead * playbackRate),
               width: this._video.videoWidth,
               height: this._video.videoHeight
             }
@@ -1212,6 +1285,7 @@ export default class AkariSub extends EventTarget {
   }
 
   private _trackReady(): void {
+    this._syncVideoClock()
     this.dispatchEvent(new CustomEvent('trackReady'))
   }
 
@@ -1319,8 +1393,13 @@ export default class AkariSub extends EventTarget {
 
       this._video.removeEventListener('timeupdate', this._boundTimeUpdate)
       this._video.removeEventListener('progress', this._boundTimeUpdate)
+      this._video.removeEventListener('play', this._boundTimeUpdate)
+      this._video.removeEventListener('pause', this._boundTimeUpdate)
+      this._video.removeEventListener('ended', this._boundTimeUpdate)
       this._video.removeEventListener('waiting', this._boundTimeUpdate)
+      this._video.removeEventListener('stalled', this._boundTimeUpdate)
       this._video.removeEventListener('seeking', this._boundTimeUpdate)
+      this._video.removeEventListener('seeked', this._boundTimeUpdate)
       this._video.removeEventListener('playing', this._boundTimeUpdate)
       this._video.removeEventListener('ratechange', this._boundSetRate)
       this._video.removeEventListener('resize', this._boundResize)
