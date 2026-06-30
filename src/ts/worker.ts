@@ -1814,8 +1814,22 @@ const cancelAnimationFrame = self.cancelAnimationFrame ? self.cancelAnimationFra
 self.init = async (data: any): Promise<void> => {
   hasBitmapBug = data.hasBitmapBug
   fullTrackWarmupEnabled = !!data.fullTrackWarmup
+  _isPaused = data.initialIsPaused ?? true
+  if (typeof data.initialPlaybackRate === 'number' && Number.isFinite(data.initialPlaybackRate)) {
+    rate = data.initialPlaybackRate
+  }
+
   if (typeof data.initialTime === 'number' && Number.isFinite(data.initialTime)) {
     lastCurrentTime = data.initialTime
+    if (
+      !_isPaused &&
+      typeof data.initialTimeSnapshotAtMs === 'number' &&
+      Number.isFinite(data.initialTimeSnapshotAtMs)
+    ) {
+      lastCurrentTimeReceivedAt = nowMs() - Math.max(0, Date.now() - data.initialTimeSnapshotAtMs)
+    } else {
+      lastCurrentTimeReceivedAt = nowMs()
+    }
   }
 
   const _fetch = self.fetch
@@ -2174,7 +2188,7 @@ self.init = async (data: any): Promise<void> => {
     ensureRenderCollectBuffer(PREWARM_MAX_IMAGES)
 
     try {
-      prewarmRenderer(lastCurrentTime)
+      prewarmRenderer(getCurrentTime())
     } catch (e) {
       if (debug) console.warn('[AkariSub] Prewarm render failed, continuing:', e)
     }
@@ -2187,7 +2201,7 @@ self.init = async (data: any): Promise<void> => {
         if (debug) console.warn('[AkariSub] Full track warmup failed, continuing:', e)
       }
       try {
-        prewarmRenderer(lastCurrentTime)
+        prewarmRenderer(getCurrentTime())
       } catch (e) {
         if (debug) console.warn('[AkariSub] Post-warmup re-prime failed, continuing:', e)
       }

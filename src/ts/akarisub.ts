@@ -230,6 +230,8 @@ export default class AkariSub extends EventTarget {
 
     // Initialize worker after feature tests complete
     test.then(() => {
+      const initialTime = (this._video?.currentTime ?? 0) + this.timeOffset
+      const initialPlaybackRate = this._videoPlaybackRateForWorker()
       const initMessage = {
         target: 'init',
         wasmUrl: options.wasmUrl ?? 'akarisub-worker.wasm',
@@ -240,7 +242,10 @@ export default class AkariSub extends EventTarget {
         adaptiveBlendLayouts: options.adaptiveBlendLayouts ?? false,
         rawAssImageGpu: options.rawAssImageGpu ?? false,
         onDemandRender: this._onDemandRender,
-        initialTime: (this._video?.currentTime ?? 0) + this.timeOffset,
+        initialTime,
+        initialIsPaused: this._isVideoPausedForWorker(),
+        initialPlaybackRate,
+        initialTimeSnapshotAtMs: Date.now(),
         width: this._canvasctrl.width || 0,
         height: this._canvasctrl.height || 0,
         blendMode: options.blendMode ?? 'wasm',
@@ -889,6 +894,20 @@ export default class AkariSub extends EventTarget {
     return Math.max(0, this._smoothedDemandLatencyMs / 1000 - displayLeadSeconds)
   }
 
+  private _isVideoPausedForWorker(): boolean {
+    if (!this._video) return true
+
+    // Non-RVFC mode tracks waiting/seeking state through _playstate. In RVFC
+    // mode that state is intentionally unused, so only the element's paused
+    // bit should be sent to the worker.
+    return this._onDemandRender ? this._video.paused : this._video.paused || this._playstate
+  }
+
+  private _videoPlaybackRateForWorker(): number {
+    const playbackRate = this._video?.playbackRate ?? 1
+    return Number.isFinite(playbackRate) ? playbackRate : 1
+  }
+
   private _enqueueDemand(metadata: { mediaTime: number; width: number; height: number }): void {
     const queue = this._pendingDemandTimes
 
@@ -1156,14 +1175,21 @@ export default class AkariSub extends EventTarget {
     this._workerReady = true
     this._init()
 
-    if (this._onDemandRender && this._video) {
-      this.setCurrentTime(this._video.paused, this._video.currentTime + this.timeOffset, this._video.playbackRate)
+    if (this._video) {
+      const currentTime = this._video.currentTime
+      const playbackRate = this._videoPlaybackRateForWorker()
+      this.setCurrentTime(this._isVideoPausedForWorker(), currentTime + this.timeOffset, playbackRate)
+
+      if (!this._onDemandRender) {
+        this.dispatchEvent(new CustomEvent('ready'))
+        return
+      }
 
       const pending =
         this._pendingDemandTimes.length > 0
           ? this._pendingDemandTimes[this._pendingDemandTimes.length - 1]
           : {
-              mediaTime: this._video.currentTime + this.renderAhead * (this._video.playbackRate || 1),
+              mediaTime: currentTime + this.renderAhead * playbackRate,
               width: this._video.videoWidth,
               height: this._video.videoHeight
             }
@@ -1193,8 +1219,22 @@ export default class AkariSub extends EventTarget {
    * Send data and execute function in the worker.
    */
   async sendMessage(target: string, data: Record<string, any> = {}, transferable?: Transferable[]): Promise<void> {
+    if (this._workerReady) {
+      this._postWorkerMessage(target, data, transferable)
+      return
+    }
+
     await this._loaded
 
+    // While the worker is initializing, real video clocks can advance. The
+    // ready handler sends a fresh clock snapshot synchronously, so do not replay
+    // stale pre-ready time/rate/paused messages after that newer snapshot.
+    if (target === 'video' && this._video) return
+
+    this._postWorkerMessage(target, data, transferable)
+  }
+
+  private _postWorkerMessage(target: string, data: Record<string, any> = {}, transferable?: Transferable[]): void {
     if (transferable) {
       this._worker.postMessage({ target, transferable, ...data }, [...transferable])
     } else {

@@ -314,6 +314,9 @@ export interface WorkerInitMessage {
   rawAssImageGpu: boolean
   onDemandRender: boolean
   initialTime: number
+  initialIsPaused: boolean
+  initialPlaybackRate: number
+  initialTimeSnapshotAtMs: number
   width: number
   height: number
   blendMode: 'js' | 'wasm'
