@@ -76,8 +76,8 @@ public:
   RenderResult *next;
 } RenderResult;
 
-// maximum blend regions among adaptive layouts below (2x2)
-#define MAX_BLEND_STORAGES (2 * 2)
+// maximum blend regions among adaptive layouts below (4x4)
+#define MAX_BLEND_STORAGES (4 * 4)
 struct RenderBlendStorage {
   RenderResult next;
   ReusableBuffer buf;
@@ -743,10 +743,11 @@ public:
       int grid_x;
       int grid_y;
     };
-    const BlendLayout layouts[] = {{1, 2}, {2, 2}, {2, 1}, {1, 1}};
+    const BlendLayout layouts[] = {{1, 2}, {2, 2}, {2, 1}, {1, 4}, {4, 1},
+                                   {2, 4}, {4, 2}, {4, 4}, {1, 1}};
     constexpr int LAYOUT_COUNT = sizeof(layouts) / sizeof(layouts[0]);
     const int BLUR_MERGE_MARGIN = 0;
-    const size_t PLANE_OVERHEAD_PIXELS = 8192;
+    const size_t PLANE_OVERHEAD_PIXELS = 4096;
     BoundingBox layoutBoxes[LAYOUT_COUNT][MAX_BLEND_STORAGES];
     int bestLayout = -1;
     size_t bestCost = (size_t)-1;
