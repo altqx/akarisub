@@ -215,7 +215,7 @@ The default options are best, and automatically fallback to the next fastest opt
 | `dropAllAnimations` | boolean | `false` | Discard all animated tags for performance |
 | `dropAllBlur` | boolean | `false` | Drop all blur effects (~10x performance gain) |
 | `clampPos` | boolean | `false` | Clamp `\pos` values to script resolution |
-| `renderAhead` | number | `0.008` | Extra seconds to render ahead, compensates pipeline latency |
+| `renderAhead` | number | `0` | Optional extra seconds to render ahead; normally leave at 0 because RVFC `mediaTime` is already frame-aligned |
 | `workerUrl` | string | `'akarisub-worker.js'` | URL to the worker script |
 | `wasmUrl` | string | `'akarisub-worker.wasm'` | URL to the WASM binary |
 | `subUrl` | string | - | URL of the subtitle file to play |
@@ -310,7 +310,7 @@ The default options are best, and automatically fallback to the next fastest opt
 | `prescaleHeightLimit` | number | Height limit for prescaling |
 | `maxRenderHeight` | number | Maximum render height |
 | `timeOffset` | number | Subtitle time offset in seconds |
-| `renderAhead` | number | Extra seconds to render ahead of the video clock |
+| `renderAhead` | number | Optional extra seconds to render ahead of the video clock |
 | `busy` | boolean | Whether the renderer is currently busy |
 | `rendererType` | `'webgpu'` \| `'webgl2'` \| `'canvas2d'` | Active renderer backend (read-only) |
 | `isUsingGPURenderer` | boolean | Whether a hardware-accelerated renderer is active (read-only) |

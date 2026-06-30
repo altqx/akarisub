@@ -198,7 +198,7 @@ export interface AkariSubOptions {
   libassGlyphLimit?: number
   /** Callback invoked when all GPU renderers (WebGPU, WebGL2) are unavailable and the renderer falls back to Canvas2D */
   onCanvasFallback?: () => void
-  /** Additional time in seconds to render subtitles ahead for pipeline latency compensation (default: 0.008) */
+  /** Additional time in seconds to render subtitles ahead; opt-in only because RVFC mediaTime is already frame-aligned (default: 0) */
   renderAhead?: number
   /** Pre-render early track windows after load to warm libass caches (default: false) */
   fullTrackWarmup?: boolean

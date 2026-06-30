@@ -29,7 +29,7 @@ import { WebGL2Renderer, isWebGL2Supported } from './webgl2-renderer'
 
 type AnyGPURenderer = WebGPURenderer | WebGL2Renderer
 
-const DEFAULT_RENDER_AHEAD = 0.008
+const DEFAULT_RENDER_AHEAD = 0
 
 const isLikelyWebKit = (): boolean => {
   if (typeof navigator === 'undefined') return false
@@ -1047,10 +1047,9 @@ export default class AkariSub extends EventTarget {
 
     const playbackRate = this._videoPlaybackRateForWorker()
     // RVFC metadata.mediaTime is the frame timestamp supplied by the browser.
-    // Do not feed measured subtitle-render latency back into the requested media
-    // time: a single slow render can otherwise make all later subtitles render
-    // tens of milliseconds in the future and visibly desync. Keep only the
-    // caller-configured fixed renderAhead bias.
+    // Do not feed render latency or a default lead back into the requested media
+    // time: either shifts subtitle event boundaries ahead of the video frame and
+    // can visibly desync. Only apply an explicit caller-configured renderAhead.
     const renderLeadSeconds = this._isVideoPausedForWorker() ? 0 : this.renderAhead
     const renderTime = metadata.mediaTime + renderLeadSeconds * playbackRate
 
