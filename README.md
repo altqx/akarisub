@@ -155,22 +155,22 @@ console.log(`Events: ${eventCount}, Styles: ${styleCount}`)
 
 **Stats Reference:**
 
-| Property | Type | Description |
-|----------|------|-------------|
-| `framesRendered` | number | Total frames rendered since reset |
-| `framesDropped` | number | Frames dropped due to slow rendering |
-| `avgRenderTime` | number | Average render time in milliseconds |
-| `maxRenderTime` | number | Maximum render time in milliseconds |
-| `minRenderTime` | number | Minimum render time in milliseconds |
-| `lastRenderTime` | number | Most recent render time in milliseconds |
-| `renderFps` | number | Estimated render FPS based on timing |
-| `usingWorker` | boolean | Whether using Web Worker |
-| `offscreenRender` | boolean | Whether offscreen rendering is enabled |
-| `onDemandRender` | boolean | Whether on-demand rendering is enabled |
-| `pendingRenders` | number | Number of pending render operations |
-| `totalEvents` | number | Total subtitle events in current track |
-| `cacheHits` | number | Number of cache hits (unchanged frames) |
-| `cacheMisses` | number | Number of cache misses (rendered frames) |
+| Property          | Type    | Description                              |
+| ----------------- | ------- | ---------------------------------------- |
+| `framesRendered`  | number  | Total frames rendered since reset        |
+| `framesDropped`   | number  | Frames dropped due to slow rendering     |
+| `avgRenderTime`   | number  | Average render time in milliseconds      |
+| `maxRenderTime`   | number  | Maximum render time in milliseconds      |
+| `minRenderTime`   | number  | Minimum render time in milliseconds      |
+| `lastRenderTime`  | number  | Most recent render time in milliseconds  |
+| `renderFps`       | number  | Estimated render FPS based on timing     |
+| `usingWorker`     | boolean | Whether using Web Worker                 |
+| `offscreenRender` | boolean | Whether offscreen rendering is enabled   |
+| `onDemandRender`  | boolean | Whether on-demand rendering is enabled   |
+| `pendingRenders`  | number  | Number of pending render operations      |
+| `totalEvents`     | number  | Total subtitle events in current track   |
+| `cacheHits`       | number  | Number of cache hits (unchanged frames)  |
+| `cacheMisses`     | number  | Number of cache misses (rendered frames) |
 
 ## GPU Rendering
 
@@ -198,173 +198,173 @@ if (renderer.isUsingGPURenderer) {
 
 The default options are best, and automatically fallback to the next fastest options in line, when the API's they use are unsupported. You can however forcefully change this behavior by specifying options.
 
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `video` | HTMLVideoElement | - | Video to use as target for rendering and event listeners |
-| `canvas` | HTMLCanvasElement | - | Canvas to use for manual handling (optional if video is provided) |
-| `blendMode` | `'js'` \| `'wasm'` | `'wasm'` | Image blending mode. WASM is better for low-end devices, JS for hardware acceleration |
-| `asyncRender` | boolean | auto | Render via ImageBitmap. Defaults to `true` on Canvas2D paths and `false` when a GPU renderer is active (raw buffers upload with fewer copies) or on WebKit |
-| `offscreenRender` | boolean | `true` | Render fully on the worker, greatly reduces CPU usage |
-| `onDemandRender` | boolean | `true` | Render subtitles as the video player renders frames |
-| `targetFps` | number | `24` | Target FPS when not using onDemandRender |
-| `timeOffset` | number | `0` | Subtitle time offset in seconds |
-| `debug` | boolean | `false` | Enable debug logging |
-| `prescaleFactor` | number | `1.0` | Scale factor for subtitles canvas |
-| `prescaleHeightLimit` | number | `1080` | Height limit for prescaling in pixels |
-| `maxRenderHeight` | number | `0` | Maximum render height (0 = no limit) |
-| `dropAllAnimations` | boolean | `false` | Discard all animated tags for performance |
-| `dropAllBlur` | boolean | `false` | Drop all blur effects (~10x performance gain) |
-| `clampPos` | boolean | `false` | Clamp `\pos` values to script resolution |
-| `renderAhead` | number | `0` | Optional extra seconds to render ahead; normally leave at 0 because RVFC `mediaTime` is already frame-aligned |
-| `workerUrl` | string | `'akarisub-worker.js'` | URL to the worker script |
-| `wasmUrl` | string | `'akarisub-worker.wasm'` | URL to the WASM binary |
-| `subUrl` | string | - | URL of the subtitle file to play |
-| `subContent` | string \| Uint8Array \| ArrayBuffer | - | Content of the subtitle file to play |
-| `encryptedSubContent` | EncryptedSubtitleContent | - | AES-GCM encrypted subtitle payload, decrypted inside the worker |
-| `fonts` | (string \| Uint8Array)[] | - | Array of font URLs or Uint8Arrays to force load |
-| `availableFonts` | Record<string, string \| Uint8Array> | `{'liberation sans': './default.woff2'}` | Available fonts map (lowercase name → URL/data) |
-| `fallbackFonts` | string[] | `['liberation sans']` | Fallback font families in order, used for the fontconfig cascade |
-| `useLocalFonts` | boolean | `true` | Use Local Font Access API if available |
-| `libassMemoryLimit` | number | `128` | libass bitmap cache memory limit in MiB |
-| `libassGlyphLimit` | number | `2048` | libass glyph cache limit |
-| `fullTrackWarmup` | boolean | `false` | Pre-render early track windows after load to warm libass caches |
-| `onCanvasFallback` | function | - | Callback when no GPU renderer is available (Canvas2D fallback) |
+| Option                | Type                                 | Default                                  | Description                                                                                                                                                |
+| --------------------- | ------------------------------------ | ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `video`               | HTMLVideoElement                     | -                                        | Video to use as target for rendering and event listeners                                                                                                   |
+| `canvas`              | HTMLCanvasElement                    | -                                        | Canvas to use for manual handling (optional if video is provided)                                                                                          |
+| `blendMode`           | `'js'` \| `'wasm'`                   | `'wasm'`                                 | Image blending mode. WASM is better for low-end devices, JS for hardware acceleration                                                                      |
+| `asyncRender`         | boolean                              | auto                                     | Render via ImageBitmap. Defaults to `true` on Canvas2D paths and `false` when a GPU renderer is active (raw buffers upload with fewer copies) or on WebKit |
+| `offscreenRender`     | boolean                              | `true`                                   | Render fully on the worker, greatly reduces CPU usage                                                                                                      |
+| `onDemandRender`      | boolean                              | `true`                                   | Render subtitles as the video player renders frames                                                                                                        |
+| `targetFps`           | number                               | `24`                                     | Target FPS when not using onDemandRender                                                                                                                   |
+| `timeOffset`          | number                               | `0`                                      | Subtitle time offset in seconds                                                                                                                            |
+| `debug`               | boolean                              | `false`                                  | Enable debug logging                                                                                                                                       |
+| `prescaleFactor`      | number                               | `1.0`                                    | Scale factor for subtitles canvas                                                                                                                          |
+| `prescaleHeightLimit` | number                               | `1080`                                   | Height limit for prescaling in pixels                                                                                                                      |
+| `maxRenderHeight`     | number                               | `0`                                      | Maximum render height (0 = no limit)                                                                                                                       |
+| `dropAllAnimations`   | boolean                              | `false`                                  | Discard all animated tags for performance                                                                                                                  |
+| `dropAllBlur`         | boolean                              | `false`                                  | Drop all blur effects (~10x performance gain)                                                                                                              |
+| `clampPos`            | boolean                              | `false`                                  | Clamp `\pos` values to script resolution                                                                                                                   |
+| `renderAhead`         | number                               | `0`                                      | Optional extra seconds to render ahead; normally leave at 0 because RVFC `mediaTime` is already frame-aligned                                              |
+| `workerUrl`           | string                               | `'akarisub-worker.js'`                   | URL to the worker script                                                                                                                                   |
+| `wasmUrl`             | string                               | `'akarisub-worker.wasm'`                 | URL to the WASM binary                                                                                                                                     |
+| `subUrl`              | string                               | -                                        | URL of the subtitle file to play                                                                                                                           |
+| `subContent`          | string \| Uint8Array \| ArrayBuffer  | -                                        | Content of the subtitle file to play                                                                                                                       |
+| `encryptedSubContent` | EncryptedSubtitleContent             | -                                        | AES-GCM encrypted subtitle payload, decrypted inside the worker                                                                                            |
+| `fonts`               | (string \| Uint8Array)[]             | -                                        | Array of font URLs or Uint8Arrays to force load                                                                                                            |
+| `availableFonts`      | Record<string, string \| Uint8Array> | `{'liberation sans': './default.woff2'}` | Available fonts map (lowercase name → URL/data)                                                                                                            |
+| `fallbackFonts`       | string[]                             | `['liberation sans']`                    | Fallback font families in order, used for the fontconfig cascade                                                                                           |
+| `useLocalFonts`       | boolean                              | `true`                                   | Use Local Font Access API if available                                                                                                                     |
+| `libassMemoryLimit`   | number                               | `128`                                    | libass bitmap cache memory limit in MiB                                                                                                                    |
+| `libassGlyphLimit`    | number                               | `2048`                                   | libass glyph cache limit                                                                                                                                   |
+| `fullTrackWarmup`     | boolean                              | `false`                                  | Pre-render early track windows after load to warm libass caches                                                                                            |
+| `onCanvasFallback`    | function                             | -                                        | Callback when no GPU renderer is available (Canvas2D fallback)                                                                                             |
 
 ## Methods
 
 ### Track Management
 
-| Method | Parameters | Description |
-|--------|------------|-------------|
-| `setTrackByUrl(url)` | `url: string` | Load subtitle from URL |
-| `setTrack(content)` | `content: string \| Uint8Array \| ArrayBuffer` | Set subtitle from content |
-| `setEncryptedTrack(content)` | `content: EncryptedSubtitleContent` | Set subtitle from an encrypted payload (decrypted in the worker) |
-| `freeTrack()` | - | Remove current subtitles |
+| Method                       | Parameters                                     | Description                                                      |
+| ---------------------------- | ---------------------------------------------- | ---------------------------------------------------------------- |
+| `setTrackByUrl(url)`         | `url: string`                                  | Load subtitle from URL                                           |
+| `setTrack(content)`          | `content: string \| Uint8Array \| ArrayBuffer` | Set subtitle from content                                        |
+| `setEncryptedTrack(content)` | `content: EncryptedSubtitleContent`            | Set subtitle from an encrypted payload (decrypted in the worker) |
+| `freeTrack()`                | -                                              | Remove current subtitles                                         |
 
 ### Playback Control
 
-| Method | Parameters | Description |
-|--------|------------|-------------|
-| `setIsPaused(isPaused)` | `isPaused: boolean` | Set playback pause state |
-| `setRate(rate)` | `rate: number` | Set playback rate (speed multiplier) |
+| Method                                           | Parameters                                                | Description                               |
+| ------------------------------------------------ | --------------------------------------------------------- | ----------------------------------------- |
+| `setIsPaused(isPaused)`                          | `isPaused: boolean`                                       | Set playback pause state                  |
+| `setRate(rate)`                                  | `rate: number`                                            | Set playback rate (speed multiplier)      |
 | `setCurrentTime(isPaused?, currentTime?, rate?)` | `isPaused?: boolean, currentTime?: number, rate?: number` | Set current time, playback state and rate |
 
 ### Video & Canvas
 
-| Method | Parameters | Description |
-|--------|------------|-------------|
-| `setVideo(video)` | `video: HTMLVideoElement` | Change target video element |
-| `resize(width?, height?, top?, left?, force?)` | `width?: number, height?: number, top?: number, left?: number, force?: boolean` | Resize the canvas |
+| Method                                         | Parameters                                                                      | Description                 |
+| ---------------------------------------------- | ------------------------------------------------------------------------------- | --------------------------- |
+| `setVideo(video)`                              | `video: HTMLVideoElement`                                                       | Change target video element |
+| `resize(width?, height?, top?, left?, force?)` | `width?: number, height?: number, top?: number, left?: number, force?: boolean` | Resize the canvas           |
 
 ### Event Management
 
-| Method | Parameters | Returns | Description |
-|--------|------------|---------|-------------|
-| `createEvent(event)` | `event: Partial<ASSEvent>` | `void` | Create a new ASS event |
-| `setEvent(event, index)` | `event: Partial<ASSEvent>, index: number` | `void` | Overwrite event at index |
-| `removeEvent(index)` | `index: number` | `void` | Remove event at index |
-| `getEvents()` | - | `Promise<ASSEvent[]>` | Get all ASS events |
-| `getEventCount()` | - | `Promise<number>` | Get event count (lightweight) |
+| Method                   | Parameters                                | Returns               | Description                   |
+| ------------------------ | ----------------------------------------- | --------------------- | ----------------------------- |
+| `createEvent(event)`     | `event: Partial<ASSEvent>`                | `void`                | Create a new ASS event        |
+| `setEvent(event, index)` | `event: Partial<ASSEvent>, index: number` | `void`                | Overwrite event at index      |
+| `removeEvent(index)`     | `index: number`                           | `void`                | Remove event at index         |
+| `getEvents()`            | -                                         | `Promise<ASSEvent[]>` | Get all ASS events            |
+| `getEventCount()`        | -                                         | `Promise<number>`     | Get event count (lightweight) |
 
 ### Style Management
 
-| Method | Parameters | Returns | Description |
-|--------|------------|---------|-------------|
-| `createStyle(style)` | `style: Partial<ASSStyle>` | `void` | Create a new ASS style |
-| `setStyle(style, index)` | `style: Partial<ASSStyle>, index: number` | `void` | Overwrite style at index |
-| `removeStyle(index)` | `index: number` | `void` | Remove style at index |
-| `getStyles()` | - | `Promise<ASSStyle[]>` | Get all ASS styles |
-| `getStyleCount()` | - | `Promise<number>` | Get style count (lightweight) |
-| `styleOverride(style)` | `style: Partial<ASSStyle>` | `void` | Set a style override |
-| `disableStyleOverride()` | - | `void` | Disable style override |
+| Method                   | Parameters                                | Returns               | Description                   |
+| ------------------------ | ----------------------------------------- | --------------------- | ----------------------------- |
+| `createStyle(style)`     | `style: Partial<ASSStyle>`                | `void`                | Create a new ASS style        |
+| `setStyle(style, index)` | `style: Partial<ASSStyle>, index: number` | `void`                | Overwrite style at index      |
+| `removeStyle(index)`     | `index: number`                           | `void`                | Remove style at index         |
+| `getStyles()`            | -                                         | `Promise<ASSStyle[]>` | Get all ASS styles            |
+| `getStyleCount()`        | -                                         | `Promise<number>`     | Get style count (lightweight) |
+| `styleOverride(style)`   | `style: Partial<ASSStyle>`                | `void`                | Set a style override          |
+| `disableStyleOverride()` | -                                         | `void`                | Disable style override        |
 
 ### Font Management
 
-| Method | Parameters | Description |
-|--------|------------|-------------|
-| `addFont(font)` | `font: string \| Uint8Array` | Add a font to the renderer |
-| `setDefaultFont(font)` | `font: string` | Change the default font family |
+| Method                 | Parameters                   | Description                    |
+| ---------------------- | ---------------------------- | ------------------------------ |
+| `addFont(font)`        | `font: string \| Uint8Array` | Add a font to the renderer     |
+| `setDefaultFont(font)` | `font: string`               | Change the default font family |
 
 ### Statistics & Debugging
 
-| Method | Parameters | Returns | Description |
-|--------|------------|---------|-------------|
-| `getStats()` | - | `Promise<PerformanceStats>` | Get performance statistics |
-| `resetStats()` | - | `Promise<void>` | Reset statistics counters |
-| `getEventCount()` | - | `Promise<number>` | Get event count (lightweight) |
-| `getStyleCount()` | - | `Promise<number>` | Get style count (lightweight) |
+| Method            | Parameters | Returns                     | Description                   |
+| ----------------- | ---------- | --------------------------- | ----------------------------- |
+| `getStats()`      | -          | `Promise<PerformanceStats>` | Get performance statistics    |
+| `resetStats()`    | -          | `Promise<void>`             | Reset statistics counters     |
+| `getEventCount()` | -          | `Promise<number>`           | Get event count (lightweight) |
+| `getStyleCount()` | -          | `Promise<number>`           | Get style count (lightweight) |
 
 ### Lifecycle
 
-| Method | Parameters | Description |
-|--------|------------|-------------|
-| `destroy(err?)` | `err?: Error \| string` | Destroy the renderer and cleanup |
-| `sendMessage(target, data?, transferable?)` | `target: string, data?: Record<string, any>, transferable?: Transferable[]` | Send data to worker |
+| Method                                      | Parameters                                                                  | Description                      |
+| ------------------------------------------- | --------------------------------------------------------------------------- | -------------------------------- |
+| `destroy(err?)`                             | `err?: Error \| string`                                                     | Destroy the renderer and cleanup |
+| `sendMessage(target, data?, transferable?)` | `target: string, data?: Record<string, any>, transferable?: Transferable[]` | Send data to worker              |
 
 ## Properties
 
-| Property | Type | Description |
-|----------|------|-------------|
-| `debug` | boolean | Enable/disable debug logging |
-| `prescaleFactor` | number | Scale factor for subtitles |
-| `prescaleHeightLimit` | number | Height limit for prescaling |
-| `maxRenderHeight` | number | Maximum render height |
-| `timeOffset` | number | Subtitle time offset in seconds |
-| `renderAhead` | number | Optional extra seconds to render ahead of the video clock |
-| `busy` | boolean | Whether the renderer is currently busy |
-| `rendererType` | `'webgpu'` \| `'webgl2'` \| `'canvas2d'` | Active renderer backend (read-only) |
-| `isUsingGPURenderer` | boolean | Whether a hardware-accelerated renderer is active (read-only) |
-| `isUsingWebGPU` | boolean | *Deprecated* - use `rendererType === 'webgpu'` |
+| Property              | Type                                     | Description                                                   |
+| --------------------- | ---------------------------------------- | ------------------------------------------------------------- |
+| `debug`               | boolean                                  | Enable/disable debug logging                                  |
+| `prescaleFactor`      | number                                   | Scale factor for subtitles                                    |
+| `prescaleHeightLimit` | number                                   | Height limit for prescaling                                   |
+| `maxRenderHeight`     | number                                   | Maximum render height                                         |
+| `timeOffset`          | number                                   | Subtitle time offset in seconds                               |
+| `renderAhead`         | number                                   | Optional extra seconds to render ahead of the video clock     |
+| `busy`                | boolean                                  | Whether the renderer is currently busy                        |
+| `rendererType`        | `'webgpu'` \| `'webgl2'` \| `'canvas2d'` | Active renderer backend (read-only)                           |
+| `isUsingGPURenderer`  | boolean                                  | Whether a hardware-accelerated renderer is active (read-only) |
+| `isUsingWebGPU`       | boolean                                  | _Deprecated_ - use `rendererType === 'webgpu'`                |
 
 ## Type Definitions
 
 ### ASSEvent
 
-| Property | Type | Description |
-|----------|------|-------------|
-| `Start` | number | Start time in milliseconds |
-| `Duration` | number | Duration in milliseconds |
-| `Style` | string | Style name |
-| `Name` | string | Character name (informational) |
-| `MarginL` | number | Left margin override in pixels |
-| `MarginR` | number | Right margin override in pixels |
-| `MarginV` | number | Bottom margin override in pixels |
-| `Effect` | string | Transition effect |
-| `Text` | string | Subtitle text content |
-| `ReadOrder` | number | Read order number |
-| `Layer` | number | Z-index layer |
-| `_index` | number | Internal index (optional) |
+| Property    | Type   | Description                      |
+| ----------- | ------ | -------------------------------- |
+| `Start`     | number | Start time in milliseconds       |
+| `Duration`  | number | Duration in milliseconds         |
+| `Style`     | string | Style name                       |
+| `Name`      | string | Character name (informational)   |
+| `MarginL`   | number | Left margin override in pixels   |
+| `MarginR`   | number | Right margin override in pixels  |
+| `MarginV`   | number | Bottom margin override in pixels |
+| `Effect`    | string | Transition effect                |
+| `Text`      | string | Subtitle text content            |
+| `ReadOrder` | number | Read order number                |
+| `Layer`     | number | Z-index layer                    |
+| `_index`    | number | Internal index (optional)        |
 
 ### ASSStyle
 
-| Property | Type | Description |
-|----------|------|-------------|
-| `Name` | string | Style name (case sensitive) |
-| `FontName` | string | Font family name |
-| `FontSize` | number | Font size |
-| `PrimaryColour` | number | Primary color (RGBA as uint32) |
-| `SecondaryColour` | number | Secondary color (RGBA as uint32) |
-| `OutlineColour` | number | Outline color (RGBA as uint32) |
-| `BackColour` | number | Background/shadow color (RGBA as uint32) |
-| `Bold` | number | Bold (-1 = true, 0 = false) |
-| `Italic` | number | Italic (-1 = true, 0 = false) |
-| `Underline` | number | Underline (-1 = true, 0 = false) |
-| `StrikeOut` | number | StrikeOut (-1 = true, 0 = false) |
-| `ScaleX` | number | Width scale (percent) |
-| `ScaleY` | number | Height scale (percent) |
-| `Spacing` | number | Extra spacing between characters (pixels) |
-| `Angle` | number | Rotation angle (degrees) |
-| `BorderStyle` | number | Border style (1 = outline + shadow, 3 = opaque box) |
-| `Outline` | number | Outline width (0-4 pixels) |
-| `Shadow` | number | Shadow depth (0-4 pixels) |
-| `Alignment` | number | Alignment (1-9, numpad style) |
-| `MarginL` | number | Left margin (pixels) |
-| `MarginR` | number | Right margin (pixels) |
-| `MarginV` | number | Vertical margin (pixels) |
-| `Encoding` | number | Font encoding |
-| `treat_fontname_as_pattern` | number | Treat font name as pattern |
-| `Blur` | number | Blur amount |
-| `Justify` | number | Text justification |
+| Property                    | Type   | Description                                         |
+| --------------------------- | ------ | --------------------------------------------------- |
+| `Name`                      | string | Style name (case sensitive)                         |
+| `FontName`                  | string | Font family name                                    |
+| `FontSize`                  | number | Font size                                           |
+| `PrimaryColour`             | number | Primary color (RGBA as uint32)                      |
+| `SecondaryColour`           | number | Secondary color (RGBA as uint32)                    |
+| `OutlineColour`             | number | Outline color (RGBA as uint32)                      |
+| `BackColour`                | number | Background/shadow color (RGBA as uint32)            |
+| `Bold`                      | number | Bold (-1 = true, 0 = false)                         |
+| `Italic`                    | number | Italic (-1 = true, 0 = false)                       |
+| `Underline`                 | number | Underline (-1 = true, 0 = false)                    |
+| `StrikeOut`                 | number | StrikeOut (-1 = true, 0 = false)                    |
+| `ScaleX`                    | number | Width scale (percent)                               |
+| `ScaleY`                    | number | Height scale (percent)                              |
+| `Spacing`                   | number | Extra spacing between characters (pixels)           |
+| `Angle`                     | number | Rotation angle (degrees)                            |
+| `BorderStyle`               | number | Border style (1 = outline + shadow, 3 = opaque box) |
+| `Outline`                   | number | Outline width (0-4 pixels)                          |
+| `Shadow`                    | number | Shadow depth (0-4 pixels)                           |
+| `Alignment`                 | number | Alignment (1-9, numpad style)                       |
+| `MarginL`                   | number | Left margin (pixels)                                |
+| `MarginR`                   | number | Right margin (pixels)                               |
+| `MarginV`                   | number | Vertical margin (pixels)                            |
+| `Encoding`                  | number | Font encoding                                       |
+| `treat_fontname_as_pattern` | number | Treat font name as pattern                          |
+| `Blur`                      | number | Blur amount                                         |
+| `Justify`                   | number | Text justification                                  |
 
 # How to build?
 
