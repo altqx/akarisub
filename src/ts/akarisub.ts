@@ -33,20 +33,10 @@ interface DemandMetadata {
   mediaTime: number
   width: number
   height: number
-  expectedDisplayTime?: number
-  playbackRate?: number
   force?: boolean
 }
 
-interface DemandTiming {
-  expectedDisplayTime: number
-  playbackRate: number
-}
-
 const DEFAULT_RENDER_AHEAD = 0
-const MAX_DISPLAY_LAG_COMPENSATION_SECONDS = 0.05
-const MAX_OBSERVED_DISPLAY_LAG_MS = 250
-const DISPLAY_LAG_DECAY = 0.75
 
 const isLikelyWebKit = (): boolean => {
   if (typeof navigator === 'undefined') return false
@@ -111,8 +101,6 @@ export default class AkariSub extends EventTarget {
   private _ro?: ResizeObserver
   private _worker: Worker
   private _pendingDemandTimes: DemandMetadata[] = []
-  private _demandTimings = new Map<number, DemandTiming>()
-  private _displayLagCompensationSeconds: number = 0
   private _rvfcHandle: number | null = null
   private _rvfcGeneration: number = 0
   private _renderEpoch: number = 0
@@ -880,9 +868,7 @@ export default class AkariSub extends EventTarget {
     }
   }
 
-  private _unbusy(data: { requestId?: number; renderEpoch?: number } = {}): void {
-    this._observeDemandCompletion(data.requestId, data.renderEpoch)
-
+  private _unbusy(): void {
     if (this._pendingDemandTimes.length > 0) {
       if (this._pendingDemandTimes.length > 1) {
         const latestDemand = this._pendingDemandTimes[this._pendingDemandTimes.length - 1]
@@ -904,7 +890,6 @@ export default class AkariSub extends EventTarget {
   private _bumpRenderEpoch(): void {
     this._renderEpoch++
     this._pendingDemandTimes.length = 0
-    this._demandTimings.clear()
   }
 
   private _sendMutatingMessage(target: string, data: Record<string, any> = {}, transferable?: Transferable[]): void {
@@ -1073,53 +1058,21 @@ export default class AkariSub extends EventTarget {
 
     const playbackRate = this._videoPlaybackRateForWorker()
     // RVFC metadata.mediaTime is the frame timestamp supplied by the browser.
-    // Do not feed raw render duration back into media time: it overcompensates
-    // whenever the callback arrives before the frame's expected display time.
-    // Instead, only carry forward observed positive display lateness: if subtitle
-    // painting missed expectedDisplayTime by ~10 ms, ask libass for the media time
-    // that will be visible when the overlay actually reaches the compositor.
+    // Keep the default path frame-exact. Even a few milliseconds of automatic
+    // media-time compensation can move ASS event boundaries across timing-
+    // sensitive signs; callers that prefer subjective lead can opt in with
+    // renderAhead instead.
     const renderLeadSeconds = this._isVideoPausedForWorker() ? 0 : this.renderAhead
-    const displayLagCompensation = this._isVideoPausedForWorker() ? 0 : this._displayLagCompensationSeconds
-    const renderTime = metadata.mediaTime + renderLeadSeconds * playbackRate + displayLagCompensation
+    const renderTime = metadata.mediaTime + renderLeadSeconds * playbackRate
 
     const demandData = {
       mediaTime: renderTime,
       width: metadata.width,
-      height: metadata.height,
-      expectedDisplayTime: metadata.expectedDisplayTime,
-      playbackRate
+      height: metadata.height
     }
 
     this._requestDemandRender(demandData)
     this._scheduleRVFC(this._video)
-  }
-
-  private _observeDemandCompletion(requestId?: number, renderEpoch?: number): void {
-    if (requestId == null) return
-
-    const timing = this._demandTimings.get(requestId)
-    if (!timing) return
-    this._demandTimings.delete(requestId)
-
-    if (renderEpoch != null && renderEpoch !== this._renderEpoch) return
-
-    const paintedAt = performance.now()
-    const lateMs = paintedAt - timing.expectedDisplayTime
-    if (!Number.isFinite(lateMs) || Math.abs(lateMs) > MAX_OBSERVED_DISPLAY_LAG_MS) return
-
-    const lateSeconds = Math.max(
-      0,
-      Math.min(MAX_DISPLAY_LAG_COMPENSATION_SECONDS, (lateMs / 1000) * Math.max(0, timing.playbackRate))
-    )
-
-    if (lateSeconds > this._displayLagCompensationSeconds) {
-      this._displayLagCompensationSeconds = lateSeconds
-      return
-    }
-
-    this._displayLagCompensationSeconds =
-      this._displayLagCompensationSeconds * DISPLAY_LAG_DECAY + lateSeconds * (1 - DISPLAY_LAG_DECAY)
-    if (this._displayLagCompensationSeconds < 0.001) this._displayLagCompensationSeconds = 0
   }
 
   private _demandRender(metadata: DemandMetadata): void {
@@ -1129,18 +1082,10 @@ export default class AkariSub extends EventTarget {
       this.resize()
     }
 
-    const requestId = this._nextDemandId++
-    if (metadata.expectedDisplayTime != null && Number.isFinite(metadata.expectedDisplayTime)) {
-      this._demandTimings.set(requestId, {
-        expectedDisplayTime: metadata.expectedDisplayTime,
-        playbackRate: metadata.playbackRate ?? this._videoPlaybackRateForWorker()
-      })
-    }
-
     this.sendMessage('demand', {
       time: metadata.mediaTime + this.timeOffset,
       force: metadata.force,
-      requestId,
+      requestId: this._nextDemandId++,
       renderEpoch: this._renderEpoch
     })
   }
@@ -1295,7 +1240,7 @@ export default class AkariSub extends EventTarget {
         console.log('Bitmaps: ' + count + ' Total: ' + (total | 0) + 'ms', data.times)
       }
     } finally {
-      this._unbusy(data)
+      this._unbusy()
     }
   }
 
