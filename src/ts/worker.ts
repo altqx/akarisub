@@ -1709,10 +1709,20 @@ const render = (time: number, force?: boolean | number, requestId?: number, rend
   }
 }
 
-self.demand = ({ time, requestId, renderEpoch }: { time: number; requestId?: number; renderEpoch?: number }): void => {
+self.demand = ({
+  time,
+  force: demandForce,
+  requestId,
+  renderEpoch
+}: {
+  time: number
+  force?: boolean
+  requestId?: number
+  renderEpoch?: number
+}): void => {
   lastCurrentTime = time
   lastCurrentTimeReceivedAt = nowMs()
-  const force = consumeNextRenderForce()
+  const force = demandForce ? 1 : consumeNextRenderForce()
   render(time, force, requestId, renderEpoch)
 }
 

@@ -35,6 +35,7 @@ interface DemandMetadata {
   height: number
   expectedDisplayTime?: number
   playbackRate?: number
+  force?: boolean
 }
 
 interface DemandTiming {
@@ -885,6 +886,7 @@ export default class AkariSub extends EventTarget {
     if (this._pendingDemandTimes.length > 0) {
       if (this._pendingDemandTimes.length > 1) {
         const latestDemand = this._pendingDemandTimes[this._pendingDemandTimes.length - 1]
+        latestDemand.force = latestDemand.force || this._pendingDemandTimes.some((demand) => demand.force)
         this._pendingDemandTimes.length = 0
         this._pendingDemandTimes.push(latestDemand)
       }
@@ -1027,7 +1029,8 @@ export default class AkariSub extends EventTarget {
       this._requestDemandRender({
         mediaTime: currentTime - this.timeOffset,
         width: this._video.videoWidth || this._videoWidth || 0,
-        height: this._video.videoHeight || this._videoHeight || 0
+        height: this._video.videoHeight || this._videoHeight || 0,
+        force: true
       })
     }
   }
@@ -1052,12 +1055,14 @@ export default class AkariSub extends EventTarget {
     if (queue.length > 0) {
       const lastQueued = queue[queue.length - 1]
       if (Math.abs(lastQueued.mediaTime - metadata.mediaTime) > 0.25) {
+        metadata.force = metadata.force || queue.some((demand) => demand.force)
         queue.length = 0
       }
     }
 
     if (queue.length >= AkariSub.MAX_PENDING_DEMANDS) {
-      queue.shift()
+      const dropped = queue.shift()
+      if (dropped?.force) metadata.force = true
     }
 
     queue.push(metadata)
@@ -1134,6 +1139,7 @@ export default class AkariSub extends EventTarget {
 
     this.sendMessage('demand', {
       time: metadata.mediaTime + this.timeOffset,
+      force: metadata.force,
       requestId,
       renderEpoch: this._renderEpoch
     })

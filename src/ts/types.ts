@@ -351,7 +351,7 @@ export type WorkerInboundMessage =
   | { target: 'setEncryptedTrack'; content: EncryptedSubtitleContent }
   | { target: 'setTrackByUrl'; url: string }
   | { target: 'freeTrack' }
-  | { target: 'demand'; time: number; requestId?: number; renderEpoch?: number }
+  | { target: 'demand'; time: number; force?: boolean; requestId?: number; renderEpoch?: number }
   | { target: 'destroy' }
   | { target: 'addFont'; font: string | Uint8Array }
   | { target: 'defaultFont'; font: string }
