@@ -1517,7 +1517,7 @@ const render = (time: number, force?: boolean | number, requestId?: number, rend
     self.height === lastRenderedRequestHeight
   ) {
     metrics.cacheHits++
-    postMessage({ target: 'unbusy' })
+    postMessage({ target: 'unbusy', requestId, renderEpoch })
     return
   }
 
@@ -1528,7 +1528,7 @@ const render = (time: number, force?: boolean | number, requestId?: number, rend
   // Inside a known-empty window the output cannot change: skip the WASM call
   if (!force && emptyWindowFrom >= 0 && time >= emptyWindowFrom && time < emptyWindowUntil) {
     metrics.cacheHits++
-    postMessage({ target: 'unbusy' })
+    postMessage({ target: 'unbusy', requestId, renderEpoch })
     return
   }
 
@@ -1662,7 +1662,7 @@ const render = (time: number, force?: boolean | number, requestId?: number, rend
             render(time, force, requestId, renderEpoch)
           } else {
             metrics.pendingRenders--
-            postMessage({ target: 'unbusy' })
+            postMessage({ target: 'unbusy', requestId, renderEpoch })
             completeRenderCycle()
           }
         })
@@ -1704,7 +1704,7 @@ const render = (time: number, force?: boolean | number, requestId?: number, rend
     }
   } else {
     metrics.pendingRenders--
-    postMessage({ target: 'unbusy' })
+    postMessage({ target: 'unbusy', requestId, renderEpoch })
     completeRenderCycle()
   }
 }
@@ -1854,7 +1854,7 @@ const paintImages = ({
         postMessage(result, [bitmap])
         completeRenderCycle()
       } catch {
-        postMessage({ target: 'unbusy' })
+        postMessage({ target: 'unbusy', requestId, renderEpoch })
         completeRenderCycle()
       }
     } else {
@@ -1864,7 +1864,7 @@ const paintImages = ({
         for (const key in times) total += (times as any)[key] || 0
         console.log('Bitmaps: ' + imageCount + ' Total: ' + (total | 0) + 'ms', times)
       }
-      postMessage({ target: 'unbusy' })
+      postMessage({ target: 'unbusy', requestId, renderEpoch })
       completeRenderCycle()
     }
   } else {
