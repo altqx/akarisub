@@ -284,13 +284,15 @@ export interface RenderMessage {
   width: number
   height: number
   colorSpace: string | null
+  requestId?: number
+  renderEpoch?: number
 }
 
 /** Worker -> Main thread messages */
 export type WorkerOutboundMessage =
   | { target: 'ready' }
   | { target: 'trackReady' }
-  | { target: 'unbusy' }
+  | { target: 'unbusy'; requestId?: number; renderEpoch?: number }
   | { target: 'console'; command: string; content: string }
   | { target: 'getLocalFont'; font: string }
   | { target: 'verifyColorSpace'; subtitleColorSpace: string | null }
@@ -349,7 +351,7 @@ export type WorkerInboundMessage =
   | { target: 'setEncryptedTrack'; content: EncryptedSubtitleContent }
   | { target: 'setTrackByUrl'; url: string }
   | { target: 'freeTrack' }
-  | { target: 'demand'; time: number }
+  | { target: 'demand'; time: number; requestId?: number; renderEpoch?: number }
   | { target: 'destroy' }
   | { target: 'addFont'; font: string | Uint8Array }
   | { target: 'defaultFont'; font: string }

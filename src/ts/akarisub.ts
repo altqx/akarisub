@@ -96,6 +96,10 @@ export default class AkariSub extends EventTarget {
   private _ro?: ResizeObserver
   private _worker: Worker
   private _pendingDemandTimes: Array<{ mediaTime: number; width: number; height: number }> = []
+  private _rvfcHandle: number | null = null
+  private _rvfcGeneration: number = 0
+  private _renderEpoch: number = 0
+  private _nextDemandId: number = 1
   private readonly _isLikelyWebKit: boolean
   private _activeDemandStartedAt: number = 0
   private _smoothedDemandLatencyMs: number
@@ -554,7 +558,7 @@ export default class AkariSub extends EventTarget {
 
       if (this._onDemandRender) {
         if (!this._destroyed && this._video === video) {
-          ;(video as any).requestVideoFrameCallback(this._boundHandleRVFC)
+          this._scheduleRVFC(video)
         }
       } else {
         video.addEventListener('resize', this._boundResize, false)
@@ -598,6 +602,7 @@ export default class AkariSub extends EventTarget {
    * Overwrites the current subtitle content by URL.
    */
   setTrackByUrl(url: string): void {
+    this._bumpRenderEpoch()
     this.sendMessage('setTrackByUrl', { url })
     this._reAttachOffscreen()
     if (this._ctx) this._ctx.filter = 'none'
@@ -607,6 +612,7 @@ export default class AkariSub extends EventTarget {
    * Overwrites the current subtitle content.
    */
   setTrack(content: string | Uint8Array | ArrayBuffer): void {
+    this._bumpRenderEpoch()
     this.sendMessage('setTrack', { content }, AkariSub._getSubtitleTransfers(content))
     this._reAttachOffscreen()
     if (this._ctx) this._ctx.filter = 'none'
@@ -618,6 +624,7 @@ export default class AkariSub extends EventTarget {
    * materialized in the main thread.
    */
   setEncryptedTrack(content: EncryptedSubtitleContent): void {
+    this._bumpRenderEpoch()
     this.sendMessage('setEncryptedTrack', { content }, AkariSub._getSubtitleTransfers(undefined, content))
     this._reAttachOffscreen()
     if (this._ctx) this._ctx.filter = 'none'
@@ -627,7 +634,7 @@ export default class AkariSub extends EventTarget {
    * Free currently used subtitle track.
    */
   freeTrack(): void {
-    this.sendMessage('freeTrack')
+    this._sendMutatingMessage('freeTrack')
   }
 
   // ==========================================================================
@@ -679,21 +686,21 @@ export default class AkariSub extends EventTarget {
    * Create a new ASS event directly.
    */
   createEvent(event: Partial<ASSEvent>): void {
-    this.sendMessage('createEvent', { event })
+    this._sendMutatingMessage('createEvent', { event })
   }
 
   /**
    * Overwrite the data of the event with the specified index.
    */
   setEvent(event: Partial<ASSEvent>, index: number): void {
-    this.sendMessage('setEvent', { event, index })
+    this._sendMutatingMessage('setEvent', { event, index })
   }
 
   /**
    * Remove the event with the specified index.
    */
   removeEvent(index: number): void {
-    this.sendMessage('removeEvent', { index })
+    this._sendMutatingMessage('removeEvent', { index })
   }
 
   /**
@@ -712,35 +719,35 @@ export default class AkariSub extends EventTarget {
    * Set a style override.
    */
   styleOverride(style: Partial<ASSStyle>): void {
-    this.sendMessage('styleOverride', { style })
+    this._sendMutatingMessage('styleOverride', { style })
   }
 
   /**
    * Disable style override.
    */
   disableStyleOverride(): void {
-    this.sendMessage('disableStyleOverride')
+    this._sendMutatingMessage('disableStyleOverride')
   }
 
   /**
    * Create a new ASS style directly.
    */
   createStyle(style: Partial<ASSStyle>): void {
-    this.sendMessage('createStyle', { style })
+    this._sendMutatingMessage('createStyle', { style })
   }
 
   /**
    * Overwrite the data of the style with the specified index.
    */
   setStyle(style: Partial<ASSStyle>, index: number): void {
-    this.sendMessage('setStyle', { style, index })
+    this._sendMutatingMessage('setStyle', { style, index })
   }
 
   /**
    * Remove the style with the specified index.
    */
   removeStyle(index: number): void {
-    this.sendMessage('removeStyle', { index })
+    this._sendMutatingMessage('removeStyle', { index })
   }
 
   /**
@@ -759,14 +766,14 @@ export default class AkariSub extends EventTarget {
    * Adds a font to the renderer.
    */
   addFont(font: string | Uint8Array): void {
-    this.sendMessage('addFont', { font })
+    this._sendMutatingMessage('addFont', { font })
   }
 
   /**
    * Changes the font family of the default font.
    */
   setDefaultFont(font: string): void {
-    this.sendMessage('defaultFont', { font })
+    this._sendMutatingMessage('defaultFont', { font })
   }
 
   // ==========================================================================
@@ -881,6 +888,65 @@ export default class AkariSub extends EventTarget {
     this.busy = false
   }
 
+  private _bumpRenderEpoch(): void {
+    this._renderEpoch++
+    this._pendingDemandTimes.length = 0
+  }
+
+  private _sendMutatingMessage(target: string, data: Record<string, any> = {}, transferable?: Transferable[]): void {
+    this._bumpRenderEpoch()
+    void this.sendMessage(target, data, transferable).then(() => {
+      this._syncVideoClock()
+    })
+  }
+
+  private _cancelRVFC(): void {
+    this._rvfcGeneration++
+
+    if (this._video && this._rvfcHandle != null) {
+      const cancelVideoFrameCallback = (this._video as any).cancelVideoFrameCallback
+      if (typeof cancelVideoFrameCallback === 'function') {
+        try {
+          cancelVideoFrameCallback.call(this._video, this._rvfcHandle)
+        } catch {
+          // Some browser/polyfill combinations can throw for already-fired
+          // handles. The generation guard below still rejects stale callbacks.
+        }
+      }
+    }
+
+    this._rvfcHandle = null
+  }
+
+  private _scheduleRVFC(video: HTMLVideoElement | undefined = this._video): void {
+    if (!this._onDemandRender || !video || this._destroyed) return
+
+    const requestVideoFrameCallback = (video as any).requestVideoFrameCallback
+    if (typeof requestVideoFrameCallback !== 'function') return
+
+    const generation = this._rvfcGeneration
+    this._rvfcHandle = requestVideoFrameCallback.call(
+      video,
+      (now: number, metadata: VideoFrameCallbackMetadata): void => {
+        if (this._video === video && generation === this._rvfcGeneration) {
+          this._rvfcHandle = null
+        }
+
+        if (this._destroyed || this._video !== video || generation !== this._rvfcGeneration) return
+
+        this._handleRVFC(now, metadata)
+      }
+    )
+  }
+
+  private _closeRenderImages(images: RenderImage[]): void {
+    for (const image of images) {
+      if (image.image instanceof ImageBitmap) {
+        image.image.close()
+      }
+    }
+  }
+
   private _markDemandDispatched(): void {
     if (!this._onDemandRender) return
     this._activeDemandStartedAt = performance.now()
@@ -969,7 +1035,7 @@ export default class AkariSub extends EventTarget {
       event?.type === 'ended'
 
     if (shouldRenderExactFrame) {
-      this._pendingDemandTimes.length = 0
+      this._bumpRenderEpoch()
       this._requestDemandRender({
         mediaTime: currentTime - this.timeOffset,
         width: this._video.videoWidth || this._videoWidth || 0,
@@ -1024,7 +1090,7 @@ export default class AkariSub extends EventTarget {
     }
 
     this._requestDemandRender(demandData)
-    ;(this._video as any).requestVideoFrameCallback(this._boundHandleRVFC)
+    this._scheduleRVFC(this._video)
   }
 
   private _demandRender(metadata: { mediaTime: number; width: number; height: number }): void {
@@ -1035,7 +1101,11 @@ export default class AkariSub extends EventTarget {
     }
 
     this._markDemandDispatched()
-    this.sendMessage('demand', { time: metadata.mediaTime + this.timeOffset })
+    this.sendMessage('demand', {
+      time: metadata.mediaTime + this.timeOffset,
+      requestId: this._nextDemandId++,
+      renderEpoch: this._renderEpoch
+    })
   }
 
   private _detachOffscreen(): void {
@@ -1100,8 +1170,15 @@ export default class AkariSub extends EventTarget {
     width: number
     height: number
     colorSpace: SubtitleColorSpace
+    requestId?: number
+    renderEpoch?: number
   }): void {
     try {
+      if (data.renderEpoch != null && data.renderEpoch !== this._renderEpoch) {
+        this._closeRenderImages(data.images)
+        return
+      }
+
       const dataWidth = data.width
       const dataHeight = data.height
 
@@ -1258,14 +1335,17 @@ export default class AkariSub extends EventTarget {
         return
       }
 
-      const pending =
-        this._pendingDemandTimes.length > 0
-          ? this._pendingDemandTimes[this._pendingDemandTimes.length - 1]
-          : {
-              mediaTime: currentTime + (isPaused ? 0 : this.renderAhead * playbackRate),
-              width: this._video.videoWidth,
-              height: this._video.videoHeight
-            }
+      const latestPending = this._pendingDemandTimes[this._pendingDemandTimes.length - 1]
+      const expectedPlayingDemandTime = currentTime + this.renderAhead * playbackRate
+      const canUsePendingDemand =
+        !isPaused && latestPending && Math.abs(latestPending.mediaTime - expectedPlayingDemandTime) <= 0.25
+      const pending = canUsePendingDemand
+        ? latestPending
+        : {
+            mediaTime: currentTime + (isPaused ? 0 : this.renderAhead * playbackRate),
+            width: this._video.videoWidth,
+            height: this._video.videoHeight
+          }
 
       this._pendingDemandTimes.length = 0
       this.busy = true
@@ -1387,6 +1467,8 @@ export default class AkariSub extends EventTarget {
   }
 
   private _removeListeners(): void {
+    this._cancelRVFC()
+
     if (this._video) {
       if (this._ro) this._ro.unobserve(this._video)
       if (this._ctx) this._ctx.filter = 'none'

@@ -72,8 +72,15 @@ const pendingFallbackFonts: { data: Uint8Array; name: string }[] = []
 let debug = false
 let clampPos = false
 let renderInFlight = false
+interface QueuedRender {
+  time: number
+  force: 0 | 1
+  requestId?: number
+  renderEpoch?: number
+}
+
 const MAX_QUEUED_RENDERS = 3
-const queuedRenders: Array<{ time: number; force: 0 | 1 }> = []
+const queuedRenders: QueuedRender[] = []
 
 self.width = 0
 self.height = 0
@@ -123,7 +130,9 @@ let dropAllBlur = false
 let fullTrackWarmupEnabled = false
 let hasBitmapBug = false
 let _Module: AkariSubModule | null = null
-let forceNextDemandRender = false
+let forceNextRender = false
+let trackGeneration = 0
+let fullTrackWarmupGeneration = 0
 
 const TEXT_ENCODER = new TextEncoder()
 const TEXT_DECODER = new TextDecoder()
@@ -651,8 +660,8 @@ const refreshRrcViews = (): void => {
   rrcViewsCapacity = rrcBufCapacity
 }
 
-const prewarmRenderer = (time: number): void => {
-  if (!akariSubHandle) return
+const prewarmRenderer = (time: number, generation: number = trackGeneration): void => {
+  if (!akariSubHandle || generation !== trackGeneration) return
 
   const api = requireApi()
   const handle = requireHandle()
@@ -663,6 +672,11 @@ const prewarmRenderer = (time: number): void => {
   } else {
     api.renderImageCollect(handle, time, 0, rrcBufPtr, rrcBufCapacity)
   }
+
+  // Prewarming uses the visible libass renderer and can advance libass'
+  // internal changed-frame baseline without painting the result. Force the next
+  // visible render so a changed=0 response cannot leave stale/blank output.
+  markNextRenderForced()
 }
 
 const syncTotalEventsMetric = (): void => {
@@ -702,6 +716,26 @@ const invalidateEmptyWindow = (): void => {
   lastRenderedRequestTime = Number.NaN
 }
 
+const markNextRenderForced = (): void => {
+  forceNextRender = true
+  invalidateEmptyWindow()
+}
+
+const consumeNextRenderForce = (): 0 | 1 => {
+  if (!forceNextRender) return 0
+  forceNextRender = false
+  return 1
+}
+
+const advanceTrackGeneration = (): number => {
+  trackGeneration++
+  fullTrackWarmupGeneration = trackGeneration
+  fullTrackWarmupPromise = null
+  fullTrackWarmupStarted = false
+  markNextRenderForced()
+  return trackGeneration
+}
+
 const computeEmptyWindow = (time: number): void => {
   if (!akariSubHandle || !_Module) return
 
@@ -719,33 +753,35 @@ const computeEmptyWindow = (time: number): void => {
   }
 }
 
-const prewarmEntireTrack = async (): Promise<void> => {
-  if (!akariSubHandle) return
+const prewarmEntireTrack = async (generation: number): Promise<void> => {
+  if (!akariSubHandle || generation !== trackGeneration) return
 
   const range = getTrackEventTimeRange()
-  if (!range) return
+  if (!range || generation !== trackGeneration) return
 
   const cappedEnd = Math.min(range.end, range.start + FULL_WARMUP_CAP_SECONDS)
 
   let ticks = 0
 
   for (let time = range.start; time <= cappedEnd; time += fullTrackWarmupStepSeconds) {
-    if (!akariSubHandle) return
+    if (!akariSubHandle || generation !== trackGeneration) return
 
     if (onDemandRenderMode && (renderInFlight || queuedRenders.length > 0 || metrics.pendingRenders > 0)) {
       await sleep(0)
+      if (generation !== trackGeneration) return
       continue
     }
 
-    prewarmRenderer(time)
+    prewarmRenderer(time, generation)
     ticks++
 
     if (onDemandRenderMode || ticks % FULL_WARMUP_YIELD_EVERY === 0) {
       await sleep(0)
+      if (generation !== trackGeneration) return
     }
   }
 
-  prewarmRenderer(cappedEnd)
+  prewarmRenderer(cappedEnd, generation)
 }
 
 const getWarmupAnchorTime = (fallbackTime: number): number => {
@@ -765,25 +801,30 @@ const stopWarmup = (): void => {
 const scheduleFullTrackWarmup = (): void => {
   if (!fullTrackWarmupEnabled || fullTrackWarmupStarted || fullTrackWarmupPromise || !akariSubHandle) return
   fullTrackWarmupStarted = true
+  const generation = trackGeneration
+  fullTrackWarmupGeneration = generation
 
   fullTrackWarmupPromise = (async () => {
     await sleep(0)
+    if (generation !== trackGeneration) return
 
     try {
-      await prewarmEntireTrack()
+      await prewarmEntireTrack(generation)
     } catch (e) {
       if (debug) console.warn('[AkariSub] Full track warmup failed, continuing:', e)
     }
 
     try {
-      if (akariSubHandle) {
-        prewarmRenderer(getCurrentTime())
+      if (akariSubHandle && generation === trackGeneration) {
+        prewarmRenderer(getCurrentTime(), generation)
       }
     } catch (e) {
       if (debug) console.warn('[AkariSub] Post-warmup re-prime failed, continuing:', e)
     }
   })().finally(() => {
-    fullTrackWarmupPromise = null
+    if (fullTrackWarmupGeneration === generation) {
+      fullTrackWarmupPromise = null
+    }
   })
 }
 
@@ -1076,6 +1117,7 @@ const scheduleReloadFonts = (): void => {
     if (akariSubHandle) {
       const api = requireApi()
       api.reloadFonts(akariSubHandle)
+      markNextRenderForced()
     }
   }, 16)
 }
@@ -1252,15 +1294,14 @@ const finishTrackLoad = (): void => {
   syncTotalEventsMetric()
   firstTrackEventStartTime = getFirstEventStartTime()
   subtitleColorSpace = libassYCbCrMap[api.getTrackColorSpace(handle)]
-  forceNextDemandRender = true
+  markNextRenderForced()
   postMessage({ target: 'verifyColorSpace', subtitleColorSpace })
   postMessage({ target: 'trackReady' })
 }
 
 self.setTrack = ({ content }: { content: string | Uint8Array | ArrayBuffer }): void => {
   stopWarmup()
-  fullTrackWarmupPromise = null
-  fullTrackWarmupStarted = false
+  advanceTrackGeneration()
   protectedTrackContent = false
 
   if (isBinaryContent(content)) {
@@ -1280,8 +1321,7 @@ self.setTrack = ({ content }: { content: string | Uint8Array | ArrayBuffer }): v
 
 self.setEncryptedTrack = async ({ content }: { content: EncryptedSubtitleContent }): Promise<void> => {
   stopWarmup()
-  fullTrackWarmupPromise = null
-  fullTrackWarmupStarted = false
+  advanceTrackGeneration()
   protectedTrackContent = true
 
   const decrypted = await decryptSubtitleContent(content)
@@ -1299,13 +1339,14 @@ self.getColorSpace = (): void => {
 
 self.freeTrack = (): void => {
   stopWarmup()
-  fullTrackWarmupPromise = null
+  advanceTrackGeneration()
   firstTrackEventStartTime = null
   protectedTrackContent = false
   const api = requireApi()
   const handle = requireHandle()
   api.removeTrack(handle)
   syncTotalEventsMetric()
+  markNextRenderForced()
 }
 
 self.setTrackByUrl = ({ url }: { url: string }): void => {
@@ -1426,13 +1467,14 @@ const flushQueuedRender = (): void => {
     const dropped = queuedRenders.length - 1
     metrics.framesDropped += dropped
     const latest = queuedRenders[queuedRenders.length - 1]
+    latest.force = queuedRenders.some((item) => item.force) ? 1 : latest.force
     queuedRenders.length = 0
     queuedRenders.push(latest)
   }
 
   const next = queuedRenders.shift()
   if (!next) return
-  render(next.time, next.force)
+  render(next.time, next.force, next.requestId, next.renderEpoch)
 }
 
 const completeRenderCycle = (): void => {
@@ -1442,21 +1484,23 @@ const completeRenderCycle = (): void => {
   if (!hadQueuedRender && !renderInFlight) scheduleFullTrackWarmup()
 }
 
-const render = (time: number, force?: boolean | number): void => {
+const render = (time: number, force?: boolean | number, requestId?: number, renderEpoch?: number): void => {
   if (renderInFlight) {
-    const queuedItem = { time, force: force ? (1 as const) : (0 as const) }
+    const queuedItem: QueuedRender = { time, force: force ? 1 : 0, requestId, renderEpoch }
 
     if (queuedItem.force) {
       queuedRenders.length = 0
     } else {
       const lastQueued = queuedRenders[queuedRenders.length - 1]
       if (lastQueued && Math.abs(lastQueued.time - queuedItem.time) > 0.25) {
+        queuedItem.force = queuedRenders.some((item) => item.force) ? 1 : queuedItem.force
         queuedRenders.length = 0
       }
     }
 
     if (queuedRenders.length >= MAX_QUEUED_RENDERS) {
-      queuedRenders.shift()
+      const dropped = queuedRenders.shift()
+      if (dropped?.force) queuedItem.force = 1
       metrics.framesDropped++
     }
     queuedRenders.push(queuedItem)
@@ -1564,10 +1608,10 @@ const render = (time: number, force?: boolean | number): void => {
     }
 
     if (useRawAssImagePath) {
-      return paintRawAssImages({ meta, count: written, times })
+      return paintRawAssImages({ meta, count: written, times, requestId, renderEpoch })
     }
 
-    if (written === 0) return paintImages({ images, buffers, times })
+    if (written === 0) return paintImages({ images, buffers, times, requestId, renderEpoch })
 
     const useAsyncBitmapPath = asyncRender
 
@@ -1607,7 +1651,7 @@ const render = (time: number, force?: boolean | number): void => {
             images[i].image = bitmaps[i]
           }
           if (debug) times.JSBitmapGenerationTime = Date.now() - (times.JSRenderTime || 0)
-          paintImages({ images, buffers: bitmaps, times })
+          paintImages({ images, buffers: bitmaps, times, requestId, renderEpoch })
         })
         .catch(() => {
           if (asyncRenderOptions) {
@@ -1615,7 +1659,7 @@ const render = (time: number, force?: boolean | number): void => {
             console.warn('[AkariSub] createImageBitmap options not supported, disabling')
             metrics.pendingRenders--
             completeRenderCycle()
-            render(time, force)
+            render(time, force, requestId, renderEpoch)
           } else {
             metrics.pendingRenders--
             postMessage({ target: 'unbusy' })
@@ -1656,7 +1700,7 @@ const render = (time: number, force?: boolean | number): void => {
         }
         images[i] = item
       }
-      paintImages({ images, buffers, times })
+      paintImages({ images, buffers, times, requestId, renderEpoch })
     }
   } else {
     metrics.pendingRenders--
@@ -1665,23 +1709,34 @@ const render = (time: number, force?: boolean | number): void => {
   }
 }
 
-self.demand = ({ time }: { time: number }): void => {
+self.demand = ({ time, requestId, renderEpoch }: { time: number; requestId?: number; renderEpoch?: number }): void => {
   lastCurrentTime = time
   lastCurrentTimeReceivedAt = nowMs()
-  const force = forceNextDemandRender ? 1 : 0
-  forceNextDemandRender = false
-  render(time, force)
+  const force = consumeNextRenderForce()
+  render(time, force, requestId, renderEpoch)
 }
 
 const renderLoop = (force?: boolean | number): void => {
   rafId = null
-  render(getCurrentTime(), force)
+  render(getCurrentTime(), force || consumeNextRenderForce())
   if (!_isPaused) {
     rafId = requestAnimationFrame(renderLoop)
   }
 }
 
-const paintRawAssImages = ({ times, meta, count }: { times: RenderTimes; meta: Int32Array; count: number }): void => {
+const paintRawAssImages = ({
+  times,
+  meta,
+  count,
+  requestId,
+  renderEpoch
+}: {
+  times: RenderTimes
+  meta: Int32Array
+  count: number
+  requestId?: number
+  renderEpoch?: number
+}): void => {
   metrics.pendingRenders--
   const width = self.width
   const height = self.height
@@ -1701,18 +1756,22 @@ const paintRawAssImages = ({ times, meta, count }: { times: RenderTimes; meta: I
   } catch (error) {
     console.error('[AkariSub] Raw ASS_Image WebGL2 render failed:', error)
   }
-  postMessage({ target: 'unbusy' })
+  postMessage({ target: 'unbusy', requestId, renderEpoch })
   completeRenderCycle()
 }
 
 const paintImages = ({
   times,
   images,
-  buffers
+  buffers,
+  requestId,
+  renderEpoch
 }: {
   times: RenderTimes
   images: RenderResultItem[]
   buffers: (ArrayBuffer | ImageBitmap)[]
+  requestId?: number
+  renderEpoch?: number
 }): void => {
   metrics.pendingRenders--
 
@@ -1727,7 +1786,9 @@ const paintImages = ({
     times,
     width,
     height,
-    colorSpace: subtitleColorSpace
+    colorSpace: subtitleColorSpace,
+    requestId,
+    renderEpoch
   }
 
   if (offscreenRender) {
@@ -2221,19 +2282,21 @@ self.init = async (data: any): Promise<void> => {
 
     if (blockingFullTrackWarmup && fullTrackWarmupEnabled && !fullTrackWarmupStarted) {
       fullTrackWarmupStarted = true
+      const generation = trackGeneration
+      fullTrackWarmupGeneration = generation
       try {
-        await prewarmEntireTrack()
+        await prewarmEntireTrack(generation)
       } catch (e) {
         if (debug) console.warn('[AkariSub] Full track warmup failed, continuing:', e)
       }
       try {
-        prewarmRenderer(getCurrentTime())
+        prewarmRenderer(getCurrentTime(), generation)
       } catch (e) {
         if (debug) console.warn('[AkariSub] Post-warmup re-prime failed, continuing:', e)
       }
     }
 
-    forceNextDemandRender = true
+    markNextRenderForced()
 
     postMessage({ target: 'ready' })
     postMessage({ target: 'verifyColorSpace', subtitleColorSpace })
@@ -2333,7 +2396,7 @@ self.video = ({
 
 self.destroy = (): void => {
   stopWarmup()
-  fullTrackWarmupPromise = null
+  advanceTrackGeneration()
   firstTrackEventStartTime = null
 
   rawAssWebGL2Renderer?.destroy()
@@ -2461,6 +2524,7 @@ self.createEvent = ({ event }: { event: Partial<ASSEvent> }): void => {
   const index = requireApi().allocEvent(requireHandle())
   if (index >= 0) applyEventFields(index, event)
   syncTotalEventsMetric()
+  markNextRenderForced()
 }
 
 self.getEvents = (): void => {
@@ -2481,11 +2545,13 @@ self.getEvents = (): void => {
 
 self.setEvent = ({ event, index }: { event: Partial<ASSEvent>; index: number }): void => {
   applyEventFields(index, event)
+  markNextRenderForced()
 }
 
 self.removeEvent = ({ index }: { index: number }): void => {
   requireApi().removeEvent(requireHandle(), index)
   syncTotalEventsMetric()
+  markNextRenderForced()
 }
 
 // =============================================================================
@@ -2495,6 +2561,7 @@ self.removeEvent = ({ index }: { index: number }): void => {
 self.createStyle = ({ style }: { style: Partial<ASSStyle> }): any => {
   const index = requireApi().allocStyle(requireHandle())
   if (index >= 0) applyStyleFields(index, style)
+  markNextRenderForced()
   return index
 }
 
@@ -2510,10 +2577,12 @@ self.getStyles = (): void => {
 
 self.setStyle = ({ style, index }: { style: Partial<ASSStyle>; index: number }): void => {
   applyStyleFields(index, style)
+  markNextRenderForced()
 }
 
 self.removeStyle = ({ index }: { index: number }): void => {
   requireApi().removeStyle(requireHandle(), index)
+  markNextRenderForced()
 }
 
 self.styleOverride = (data: { style: Partial<ASSStyle> }): void => {
@@ -2521,16 +2590,19 @@ self.styleOverride = (data: { style: Partial<ASSStyle> }): void => {
   if (typeof index === 'number' && index >= 0) {
     requireApi().styleOverrideIndex(requireHandle(), index)
   }
+  markNextRenderForced()
 }
 
 self.disableStyleOverride = (): void => {
   requireApi().disableStyleOverride(requireHandle())
+  markNextRenderForced()
 }
 
 self.defaultFont = ({ font }: { font: string }): void => {
   withCString(font, (fontPtr) => {
     requireApi().setDefaultFont(requireHandle(), fontPtr)
   })
+  markNextRenderForced()
 }
 
 // =============================================================================
