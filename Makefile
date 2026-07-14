@@ -22,7 +22,10 @@ WASM_FEATURES = \
 
 # Base compiler flags for all C/C++ compilation
 # -fno-unwind-tables/-fno-asynchronous-unwind-tables: no exceptions = no need for unwind info
-BASE_CFLAGS = -O3 -flto -fno-exceptions -fno-unwind-tables -fno-asynchronous-unwind-tables -fno-math-errno -ffast-math
+BASE_CFLAGS = -O3 -flto -fno-exceptions -fno-unwind-tables -fno-asynchronous-unwind-tables -fno-math-errno -ffast-math \
+	-ffile-prefix-map=$(BASE_DIR)=/src/akarisub/ \
+	-fmacro-prefix-map=$(BASE_DIR)=/src/akarisub/ \
+	-fdebug-prefix-map=$(BASE_DIR)=/src/akarisub/
 
 export CFLAGS = $(BASE_CFLAGS) -s USE_PTHREADS=0 $(WASM_FEATURES)
 export CXXFLAGS = $(CFLAGS)
@@ -180,6 +183,9 @@ $(DIST_DIR)/lib/libfontconfig.a: $(DIST_DIR)/lib/libfreetype.a $(DIST_DIR)/lib/l
 		--disable-cache-build \
 		--with-default-fonts=/fonts \
 		--with-baseconfigdir=/etc/fonts \
+		--with-cache-dir=/var/cache/fontconfig \
+		--with-templatedir=/etc/fonts/conf.avail \
+		--with-configdir=/etc/fonts/conf.d \
 	&& \
 	$(JSO_MAKE) -C fc-const/ && \
 	$(JSO_MAKE) -C src/ && \
