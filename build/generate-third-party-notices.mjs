@@ -68,12 +68,8 @@ const runtimeComponents = [
     source: 'dist/default.woff2',
     license: 'OFL-1.1',
     use: 'Bundled fallback font asset used by default renderer options.',
-    licenseFile: findFirstExisting([
-      '/usr/share/licenses/ttf-liberation/LICENSE',
-      '/usr/share/doc/fonts-liberation/copyright',
-      '/usr/share/doc/ttf-liberation/copyright'
-    ]),
-    displayLicenseFile: 'Liberation Fonts package license'
+    licenseFile: 'third_party/liberation-fonts/LICENSE',
+    displayLicenseFile: 'third_party/liberation-fonts/LICENSE'
   },
   {
     name: 'Emscripten runtime',
