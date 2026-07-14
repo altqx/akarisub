@@ -30,7 +30,7 @@
     "build:wasm": "make worker",
     "build:ts": "tsgo",
     "build:bundle": "bun build.ts",
-    "build": "bun run build:wasm && bun run build:ts && bun run build:bundle",
+    "build": "bun run license:third-party && bun run build:wasm && bun run build:ts && bun run build:bundle",
     "license:third-party": "bun build/generate-third-party-notices.mjs",
     "typecheck": "tsc --noEmit",
     "format": "bun run prettier . --write"
