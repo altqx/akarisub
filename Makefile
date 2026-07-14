@@ -4,6 +4,11 @@
 BASE_DIR:=$(dir $(realpath $(firstword $(MAKEFILE_LIST))))
 DIST_DIR:=$(BASE_DIR)dist/libraries
 
+# Keep generated archives and linker inputs stable across hosts.
+export LC_ALL := C
+export TZ := UTC
+export SOURCE_DATE_EPOCH ?= 0
+
 # WASM feature flags - targeting modern browsers (Chrome 114+, Firefox 120+, Safari 16.4+)
 WASM_FEATURES = \
 	-msimd128 \
@@ -122,7 +127,7 @@ $(DIST_DIR)/lib/libharfbuzz.a: build/lib/freetype/build_hb/dist_hb/lib/libfreety
 		-DHB_BUILD_UTILS=OFF \
 		-DHB_BUILD_SUBSET=OFF \
 	&& \
-	emmake make -j "$$(nproc)" install
+	emmake make -j "$(AKARISUB_BUILD_JOBS)" install
 
 # Freetype with Harfbuzz
 $(DIST_DIR)/lib/libfreetype.a: $(DIST_DIR)/lib/libharfbuzz.a $(DIST_DIR)/lib/libbrotlidec.a
