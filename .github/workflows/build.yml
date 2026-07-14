@@ -98,11 +98,21 @@ jobs:
       - name: Typecheck TypeScript
         run: bun run typecheck
 
-      - name: Build native dependencies
-        run: make
-
       - name: Build WASM and TypeScript bundles
         run: bun run build
+
+      - name: Verify reproducible clean WASM build
+        run: |
+          cp dist/akarisub-worker.wasm /tmp/akarisub-worker.first.wasm
+          cp -a . /tmp/akarisub-repro
+          cd /tmp/akarisub-repro
+          make clean
+          bun run build
+          cmp /tmp/akarisub-worker.first.wasm dist/akarisub-worker.wasm
+          if strings dist/akarisub-worker.wasm | grep -F "$GITHUB_WORKSPACE"; then
+            echo "WASM contains its checkout path" >&2
+            exit 1
+          fi
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4

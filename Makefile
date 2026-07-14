@@ -4,6 +4,11 @@
 BASE_DIR:=$(dir $(realpath $(firstword $(MAKEFILE_LIST))))
 DIST_DIR:=$(BASE_DIR)dist/libraries
 
+# Keep generated archives and linker inputs stable across hosts.
+export LC_ALL := C
+export TZ := UTC
+export SOURCE_DATE_EPOCH ?= 0
+
 # WASM feature flags - targeting modern browsers (Chrome 114+, Firefox 120+, Safari 16.4+)
 WASM_FEATURES = \
 	-msimd128 \
@@ -17,7 +22,10 @@ WASM_FEATURES = \
 
 # Base compiler flags for all C/C++ compilation
 # -fno-unwind-tables/-fno-asynchronous-unwind-tables: no exceptions = no need for unwind info
-BASE_CFLAGS = -O3 -flto -fno-exceptions -fno-unwind-tables -fno-asynchronous-unwind-tables -fno-math-errno -ffast-math
+BASE_CFLAGS = -O3 -flto -fno-exceptions -fno-unwind-tables -fno-asynchronous-unwind-tables -fno-math-errno -ffast-math \
+	-ffile-prefix-map=$(BASE_DIR)=/src/akarisub/ \
+	-fmacro-prefix-map=$(BASE_DIR)=/src/akarisub/ \
+	-fdebug-prefix-map=$(BASE_DIR)=/src/akarisub/
 
 export CFLAGS = $(BASE_CFLAGS) -s USE_PTHREADS=0 $(WASM_FEATURES)
 export CXXFLAGS = $(CFLAGS)
@@ -122,7 +130,7 @@ $(DIST_DIR)/lib/libharfbuzz.a: build/lib/freetype/build_hb/dist_hb/lib/libfreety
 		-DHB_BUILD_UTILS=OFF \
 		-DHB_BUILD_SUBSET=OFF \
 	&& \
-	emmake make -j "$$(nproc)" install
+	emmake make -j "$(AKARISUB_BUILD_JOBS)" install
 
 # Freetype with Harfbuzz
 $(DIST_DIR)/lib/libfreetype.a: $(DIST_DIR)/lib/libharfbuzz.a $(DIST_DIR)/lib/libbrotlidec.a
@@ -175,6 +183,9 @@ $(DIST_DIR)/lib/libfontconfig.a: $(DIST_DIR)/lib/libfreetype.a $(DIST_DIR)/lib/l
 		--disable-cache-build \
 		--with-default-fonts=/fonts \
 		--with-baseconfigdir=/etc/fonts \
+		--with-cache-dir=/var/cache/fontconfig \
+		--with-templatedir=/etc/fonts/conf.avail \
+		--with-configdir=/etc/fonts/conf.d \
 	&& \
 	$(JSO_MAKE) -C fc-const/ && \
 	$(JSO_MAKE) -C src/ && \

@@ -47,8 +47,11 @@ define CONFIGURE_CMAKE
 	emcmake cmake -S "$(or $(1),.)" -DCMAKE_INSTALL_PREFIX="$(DIST_DIR)"
 endef
 
-# FIXME: Propagate jobserver info with $(MAKE) and set up our makefile for fully parallel builds
-JSO_MAKE := emmake make -j "$(shell nproc)"
+# Archive member order from parallel nested builds can change the final LTO
+# link. Keep release output reproducible by default; developers may opt into
+# faster non-reproducible local builds explicitly.
+AKARISUB_BUILD_JOBS ?= 1
+JSO_MAKE := emmake make -j "$(AKARISUB_BUILD_JOBS)"
 
 ## Clean and git related
 
