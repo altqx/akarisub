@@ -241,8 +241,10 @@ function readPackageMetadata(name) {
     }
   }
 
-  if (name.startsWith('@typescript/native-preview-')) {
-    const parent = packageDirectory('@typescript/native-preview')
+  // Optional platform packages declared by typescript in bun.lock are not
+  // always installed; inherit license metadata from the main package.
+  if (name.startsWith('@typescript/typescript-')) {
+    const parent = packageDirectory('typescript')
     const packageJson = existsSync(join(parent, 'package.json'))
       ? JSON.parse(readFileSync(join(parent, 'package.json'), 'utf8'))
       : undefined
@@ -253,7 +255,7 @@ function readPackageMetadata(name) {
       source: packageSource(packageJson),
       licenseFile: findPackageLicenseFile(parent),
       displayLicenseFile: relativeToRoot(findPackageLicenseFile(parent)),
-      note: 'Optional platform package declared by @typescript/native-preview in bun.lock.'
+      note: 'Optional platform package declared by typescript in bun.lock.'
     }
   }
 
