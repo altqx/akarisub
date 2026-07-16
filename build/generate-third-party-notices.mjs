@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import {
   copyFileSync,
   existsSync,
@@ -77,8 +78,9 @@ const runtimeComponents = [
     license: 'MIT OR NCSA',
     use: 'Generated JavaScript runtime wrapper used by the WebAssembly worker.',
     version: readMiseToolVersion('emsdk'),
-    licenseFile: findEmscriptenLicense(),
-    displayLicenseFile: 'Emscripten LICENSE'
+    licenseFile: 'third_party/emscripten/LICENSE',
+    displayLicenseFile: 'third_party/emscripten/LICENSE',
+    normalizedLicenseSha256: '55009efbae65cad4741da6d66d859a4ad471db7b513d4e8451272b0b49e87e20'
   }
 ]
 
@@ -87,7 +89,12 @@ const noticeSources = new Map()
 function main() {
   const runtimeRows = runtimeComponents.map(component => {
     const version = component.version ?? gitDescribe(component.source)
-    addNoticeSource(component.name, component.licenseFile, component.displayLicenseFile)
+    addNoticeSource(
+      component.name,
+      component.licenseFile,
+      component.displayLicenseFile,
+      component.normalizedLicenseSha256
+    )
 
     return {
       name: component.name,
@@ -164,7 +171,7 @@ function renderNotice(runtimeRows, packageRows) {
   return lines.join('\n').replace(/\n+$/, '\n')
 }
 
-function addNoticeSource(title, licenseFile, displayLicenseFile) {
+function addNoticeSource(title, licenseFile, displayLicenseFile, normalizedSha256) {
   if (!licenseFile) {
     noticeSources.set(`missing:${title}`, {
       title,
@@ -178,10 +185,21 @@ function addNoticeSource(title, licenseFile, displayLicenseFile) {
   const key = absolute
   if (noticeSources.has(key)) return
 
+  const content = existsSync(absolute) ? normalize(readFileSync(absolute, 'utf8')) : ''
+  if (normalizedSha256) {
+    if (!content) throw new Error(`Required license text is missing: ${relativeToRoot(absolute)}`)
+    const digest = createHash('sha256').update(content).digest('hex')
+    if (digest !== normalizedSha256) {
+      throw new Error(
+        `License text digest mismatch for ${relativeToRoot(absolute)}: expected ${normalizedSha256}, got ${digest}`
+      )
+    }
+  }
+
   noticeSources.set(key, {
     title,
     displayPath: displayLicenseFile ?? relativeToRoot(absolute),
-    content: existsSync(absolute) ? normalize(readFileSync(absolute, 'utf8')) : ''
+    content
   })
 }
 
@@ -304,22 +322,6 @@ function readMiseToolVersion(tool) {
   } catch {
     return ''
   }
-}
-
-function findEmscriptenLicense() {
-  const version = readMiseToolVersion('emsdk')
-  const candidates = []
-  if (process.env.HOME && version) {
-    candidates.push(join(process.env.HOME, '.local/share/mise/installs/emsdk', version, 'upstream/emscripten/LICENSE'))
-  }
-  if (process.env.EMSDK) {
-    candidates.push(join(process.env.EMSDK, 'upstream/emscripten/LICENSE'))
-  }
-  return findFirstExisting(candidates)
-}
-
-function findFirstExisting(paths) {
-  return paths.find(path => path && existsSync(path)) ?? ''
 }
 
 function isAbsolutePath(path) {
