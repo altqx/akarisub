@@ -1094,7 +1094,7 @@ THE FONT SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR 
 
 ### Emscripten runtime
 
-License source: Emscripten LICENSE
+License source: third_party/emscripten/LICENSE
 
 Emscripten is available under 2 licenses, the MIT license and the
 University of Illinois/NCSA Open Source License.
