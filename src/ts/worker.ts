@@ -68,7 +68,9 @@ let availableFonts: Record<string, string | Uint8Array> = {}
 const fontMap_: Record<string, boolean> = {}
 let attachedFontId = 0 // For attached/preloaded fonts (higher priority)
 let fallbackFontId = 0 // For fallback fonts (lower priority)
-const pendingFallbackFonts: { data: Uint8Array; name: string }[] = []
+const MAX_FONT_BYTES = 32 * 1024 * 1024
+const FONT_FETCH_TIMEOUT_MS = 30_000
+const pendingFontFamilies = new Set<string>()
 let debug = false
 let clampPos = false
 let renderInFlight = false
@@ -1067,8 +1069,54 @@ const requireHandle = (): number => {
 
 // Fonts added via addFont are explicitly requested, so they should be attached (high priority).
 // A correlated acknowledgement prevents callers from treating rejected bytes as loaded.
-self.addFont = ({ font, requestId }: { font: string | Uint8Array; requestId: number }): void => {
+const readBoundedFontUrl = async (url: string): Promise<Uint8Array> => {
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), FONT_FETCH_TIMEOUT_MS)
+  try {
+    const response = await fetch(url, { signal: controller.signal })
+    if (!response.ok) throw new Error(`Font request failed with HTTP ${response.status}`)
+    const declaredLength = Number(response.headers.get('content-length'))
+    if (Number.isFinite(declaredLength) && declaredLength > MAX_FONT_BYTES) {
+      await response.body?.cancel()
+      throw new Error('Font files are limited to 32 MiB')
+    }
+    if (!response.body) {
+      const bytes = new Uint8Array(await response.arrayBuffer())
+      if (bytes.byteLength > MAX_FONT_BYTES) throw new Error('Font files are limited to 32 MiB')
+      return bytes
+    }
+
+    const reader = response.body.getReader()
+    const chunks: Uint8Array[] = []
+    let total = 0
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      total += value.byteLength
+      if (total > MAX_FONT_BYTES) {
+        await reader.cancel()
+        throw new Error('Font files are limited to 32 MiB')
+      }
+      chunks.push(value)
+    }
+    const result = new Uint8Array(total)
+    let offset = 0
+    for (const chunk of chunks) {
+      result.set(chunk, offset)
+      offset += chunk.byteLength
+    }
+    return result
+  } finally {
+    clearTimeout(timeout)
+  }
+}
+
+self.addFont = async ({ font, requestId }: { font: string | Uint8Array; requestId: number }): Promise<void> => {
   const respond = (bytes: Uint8Array): void => {
+    if (bytes.byteLength > MAX_FONT_BYTES) {
+      postMessage({ target: 'addFont', requestId, success: false, error: 'Font files are limited to 32 MiB' })
+      return
+    }
     const success = writeFontToFS(bytes, false)
     postMessage({
       target: 'addFont',
@@ -1077,15 +1125,17 @@ self.addFont = ({ font, requestId }: { font: string | Uint8Array; requestId: num
       error: success ? undefined : 'The renderer rejected the font bytes'
     })
   }
-  if (typeof font === 'string') {
-    readAsync(
-      font,
-      (fontData) => respond(new Uint8Array(fontData)),
-      () => postMessage({ target: 'addFont', requestId, success: false, error: 'The font could not be read' })
-    )
-  } else {
-    respond(font)
+  try {
+    respond(typeof font === 'string' ? await readBoundedFontUrl(font) : font)
+  } catch (cause) {
+    const error = cause instanceof Error ? cause.message : 'The font could not be read'
+    postMessage({ target: 'addFont', requestId, success: false, error })
   }
+}
+
+self.localFontResult = ({ font, success }: { font: string; success: boolean }): void => {
+  pendingFontFamilies.delete(font)
+  if (success) fontMap_[font] = true
 }
 
 const findAvailableFonts = (font: string): void => {
@@ -1093,38 +1143,39 @@ const findAvailableFonts = (font: string): void => {
   if (font.startsWith('@')) font = font.substring(1)
   if (fontMap_[font]) return
 
-  fontMap_[font] = true
-
   if (!availableFonts[font]) {
-    if (useLocalFonts) postMessage({ target: 'getLocalFont', font })
-  } else {
-    asyncWrite(availableFonts[font])
-  }
-}
-
-const asyncWrite = (font: string | Uint8Array, isFallback: boolean = true): void => {
-  if (typeof font === 'string') {
-    readAsync(
-      font,
-      (fontData) => {
-        writeFontToFS(new Uint8Array(fontData), isFallback)
-      },
-      console.error
-    )
-  } else {
-    writeFontToFS(font, isFallback)
-  }
-}
-
-// Synchronous font loading for critical fonts (fallback fonts)
-const syncWrite = (font: string | Uint8Array, isFallback: boolean = true): void => {
-  if (typeof font === 'string') {
-    const fontData = read_(font, true) as ArrayBuffer
-    if (fontData) {
-      writeFontToFSImmediate(new Uint8Array(fontData), isFallback)
+    if (useLocalFonts && !pendingFontFamilies.has(font)) {
+      pendingFontFamilies.add(font)
+      postMessage({ target: 'getLocalFont', font })
     }
   } else {
-    writeFontToFSImmediate(font, isFallback)
+    if (pendingFontFamilies.has(font)) return
+    pendingFontFamilies.add(font)
+    asyncWrite(availableFonts[font], true, (success) => {
+      pendingFontFamilies.delete(font)
+      if (success) fontMap_[font] = true
+    })
+  }
+}
+
+const asyncWrite = (
+  font: string | Uint8Array,
+  isFallback: boolean = true,
+  settled?: (success: boolean) => void,
+): void => {
+  if (typeof font === 'string') {
+    void readBoundedFontUrl(font)
+      .then((fontData) => {
+        const success = writeFontToFS(fontData, isFallback)
+        settled?.(success)
+      })
+      .catch((error) => {
+        console.error(error)
+        settled?.(false)
+      })
+  } else {
+    const success = writeFontToFS(font, isFallback)
+    settled?.(success)
   }
 }
 
@@ -1149,6 +1200,10 @@ const scheduleReloadFonts = (): void => {
 const addFontAsEmbedded = (uint8: Uint8Array, name: string): boolean => {
   if (!_Module || !akariSubHandle) {
     if (debug) console.warn('[AkariSub] Cannot add embedded font, module or AkariSub not ready:', name)
+    return false
+  }
+  if (uint8.byteLength > MAX_FONT_BYTES) {
+    if (debug) console.warn('[AkariSub] Rejected oversized embedded font:', name)
     return false
   }
 
@@ -1187,7 +1242,20 @@ const addFontAsEmbedded = (uint8: Uint8Array, name: string): boolean => {
 }
 
 /**
- * Write a font to the virtual filesystem so fontconfig can index it.
+ * Admit a font through FreeType/libass before retaining a MEMFS copy.
+ */
+const admitAndPersistFont = (uint8: Uint8Array, fontDir: string, fontFileName: string): boolean => {
+  if (!_Module || !akariSubHandle || !addFontAsEmbedded(uint8, fontFileName)) return false
+  try {
+    _Module.FS_createDataFile(fontDir, fontFileName, uint8, true, true, true)
+  } catch (e) {
+    console.warn('Failed to write font to filesystem:', fontDir + '/' + fontFileName, e)
+  }
+  return true
+}
+
+/**
+ * Write an admitted font to the virtual filesystem so fontconfig can index it.
  * Fonts are written to separate directories based on priority:
  * - /fonts/attached: For attached/preloaded fonts (highest priority)
  * - /fonts/fallback: For fallback fonts
@@ -1196,46 +1264,21 @@ const writeFontToFS = (uint8: Uint8Array, isFallback: boolean = true): boolean =
   const fontDir = isFallback ? '/fonts/fallback' : '/fonts/attached'
   const fontFileName = isFallback ? 'fallback-' + fallbackFontId++ : 'attached-' + attachedFontId++
 
-  if (!_Module) return false
-  if (!isFallback && !addFontAsEmbedded(uint8, fontFileName)) return false
-  try {
-    _Module.FS_createDataFile(fontDir, fontFileName, uint8, true, true, true)
-  } catch (e) {
-    console.warn('Failed to write font to filesystem:', fontDir + '/' + fontFileName, e)
-  }
-
-  if (isFallback && akariSubHandle) {
-    addFontAsEmbedded(uint8, fontFileName)
-  } else if (isFallback) {
-    pendingFallbackFonts.push({ data: uint8, name: fontFileName })
-  }
+  if (!admitAndPersistFont(uint8, fontDir, fontFileName)) return false
   scheduleReloadFonts()
   return true
 }
 
 /**
- * Immediate font write without debounced reload (for synchronous loading).
+ * Immediate admitted-font write without debounced reload (for synchronous loading).
  */
-const writeFontToFSImmediate = (uint8: Uint8Array, isFallback: boolean = true): void => {
+const writeFontToFSImmediate = (uint8: Uint8Array, isFallback: boolean = true): boolean => {
   const fontDir = isFallback ? '/fonts/fallback' : '/fonts/attached'
   const fontFileName = isFallback ? 'fallback-' + fallbackFontId++ : 'attached-' + attachedFontId++
 
-  if (_Module) {
-    try {
-      _Module.FS_createDataFile(fontDir, fontFileName, uint8, true, true, true)
-      if (debug) console.log('[AkariSub] Wrote font to FS:', fontDir + '/' + fontFileName, 'size:', uint8.length)
-    } catch (e) {
-      console.warn('Failed to write font to filesystem:', fontDir + '/' + fontFileName, e)
-    }
-
-    if (!isFallback) {
-      addFontAsEmbedded(uint8, fontFileName)
-    } else if (akariSubHandle) {
-      addFontAsEmbedded(uint8, fontFileName)
-    } else {
-      pendingFallbackFonts.push({ data: uint8, name: fontFileName })
-    }
-  }
+  const success = admitAndPersistFont(uint8, fontDir, fontFileName)
+  if (success && debug) console.log('[AkariSub] Wrote admitted font to FS:', fontDir + '/' + fontFileName, 'size:', uint8.length)
+  return success
 }
 
 const processAvailableFonts = (content: string): void => {
@@ -2135,27 +2178,21 @@ self.init = async (data: any): Promise<void> => {
         if (availableFonts && availableFonts[fontKey]) {
           const fontUrl = availableFonts[fontKey]
           if (typeof fontUrl === 'string') {
-            // Async fetch for URL-based fonts
-            const promise = new Promise<void>((resolve) => {
-              readAsync(
-                fontUrl,
-                (fontData: ArrayBuffer) => {
-                  writeFontToFSImmediate(new Uint8Array(fontData), true)
+            const promise = readBoundedFontUrl(fontUrl)
+              .then((fontData) => {
+                const accepted = writeFontToFSImmediate(fontData, true)
+                if (accepted) {
                   fontMap_[fontKey] = true
                   if (debug) console.log('[AkariSub] Loaded fallback font async:', fontKey)
-                  resolve()
-                },
-                (e) => {
-                  console.error('Failed to load fallback font:', fontKey, e)
-                  resolve() // Don't fail initialization if a single font fails
                 }
-              )
-            })
+              })
+              .catch((error) => {
+                console.error('Failed to load fallback font:', fontKey, error)
+              })
             fontPromises.push(promise)
           } else {
             // Font data directly provided - synchronous write is OK here
-            writeFontToFSImmediate(fontUrl, true)
-            fontMap_[fontKey] = true
+            if (writeFontToFSImmediate(fontUrl, true)) fontMap_[fontKey] = true
           }
         }
       }
@@ -2183,21 +2220,15 @@ self.init = async (data: any): Promise<void> => {
       }
     }
 
-    await loadFallbackFontsAsync()
-
     const primaryFallback = fallbackFonts.length > 0 ? fallbackFonts[0] : null
     akariSubHandle = withCString(primaryFallback || '', (fontPtr) => {
       return requireApi().create(self.width, self.height, fontPtr, debug ? 1 : 0)
     })
     requireApi().setUseFontconfigProvider(akariSubHandle, useFontconfigProvider ? 1 : 0)
 
-    if (pendingFallbackFonts.length > 0) {
-      for (const { data: fontData, name: fontName } of pendingFallbackFonts) {
-        addFontAsEmbedded(fontData, fontName)
-      }
-      pendingFallbackFonts.length = 0
-      requireApi().reloadFonts(akariSubHandle)
-    }
+    // Admission requires a live libass handle. Load fallback bytes only after
+    // creation so rejected files are never retained in MEMFS or fontMap_.
+    await loadFallbackFontsAsync()
 
     if (fallbackFonts.length > 0) {
       withCString(fallbackFonts.join(','), (fontsPtr) => {
@@ -2240,25 +2271,20 @@ self.init = async (data: any): Promise<void> => {
 
     for (const font of data.fonts || []) {
       if (typeof font === 'string') {
-        const promise = new Promise<void>((resolve) => {
-          readAsync(
-            font,
-            (fontData: ArrayBuffer) => {
-              writeFontToFSImmediate(new Uint8Array(fontData), false)
+        const promise = readBoundedFontUrl(font)
+          .then((fontData) => {
+            const accepted = writeFontToFSImmediate(fontData, false)
+            if (accepted) {
               hasAttachedFonts = true
               if (debug) console.log('[AkariSub] Loaded attached font async:', font)
-              resolve()
-            },
-            (e) => {
-              console.error('Failed to load attached font:', font, e)
-              resolve()
             }
-          )
-        })
+          })
+          .catch((error) => {
+            console.error('Failed to load attached font:', font, error)
+          })
         attachedFontPromises.push(promise)
       } else {
-        writeFontToFSImmediate(font, false)
-        hasAttachedFonts = true
+        if (writeFontToFSImmediate(font, false)) hasAttachedFonts = true
       }
     }
 
