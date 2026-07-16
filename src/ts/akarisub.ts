@@ -152,6 +152,17 @@ export default class AkariSub extends EventTarget {
       throw this.destroy(new Error('No options provided'))
     }
 
+    for (const [index, font] of (options.fonts ?? []).entries()) {
+      if (typeof font !== 'string' && font.byteLength > AkariSub.MAX_FONT_BYTES) {
+        throw new Error(`Font ${index + 1} exceeds the 32 MiB per-font limit`)
+      }
+    }
+    for (const [name, font] of Object.entries(options.availableFonts ?? {})) {
+      if (typeof font !== 'string' && font.byteLength > AkariSub.MAX_FONT_BYTES) {
+        throw new Error(`Font ${name} exceeds the 32 MiB per-font limit`)
+      }
+    }
+
     this._loaded = new Promise((resolve) => {
       this._init = resolve
     })
