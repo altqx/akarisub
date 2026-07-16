@@ -105,6 +105,7 @@ export default class AkariSub extends EventTarget {
   private _rvfcGeneration: number = 0
   private _renderEpoch: number = 0
   private _nextDemandId: number = 1
+  private _nextFontRequestId: number = 1
   private readonly _isLikelyWebKit: boolean
 
   // Bound methods for event listeners
@@ -765,8 +766,17 @@ export default class AkariSub extends EventTarget {
   /**
    * Adds a font to the renderer.
    */
-  addFont(font: string | Uint8Array): void {
-    this._sendMutatingMessage('addFont', { font })
+  async addFont(font: string | Uint8Array): Promise<void> {
+    this._bumpRenderEpoch()
+    await this._loaded
+    const requestId = this._nextFontRequestId++
+    const result = await this._fetchFromWorker<{ success: boolean; error?: string }>({
+      target: 'addFont',
+      font,
+      requestId
+    })
+    if (!result.success) throw new Error(result.error || 'The renderer rejected the font')
+    this._syncVideoClock()
   }
 
   /**
@@ -1377,7 +1387,7 @@ export default class AkariSub extends EventTarget {
     }
   }
 
-  private _fetchFromWorker<T = any>(workerOptions: { target: string }): Promise<T> {
+  private _fetchFromWorker<T = any>(workerOptions: { target: string; requestId?: number; [key: string]: any }): Promise<T> {
     return new Promise((resolve, reject) => {
       try {
         const target = workerOptions.target
@@ -1388,7 +1398,10 @@ export default class AkariSub extends EventTarget {
         }, 5000)
 
         const handleMessage = (event: MessageEvent) => {
-          if (event.data.target === target) {
+          if (
+            event.data.target === target &&
+            (workerOptions.requestId === undefined || event.data.requestId === workerOptions.requestId)
+          ) {
             cleanup()
             resolve(event.data as T)
           }

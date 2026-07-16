@@ -145,7 +145,7 @@ interface AkariSubApi {
   createTrackMem: (handle: number, contentPtr: number) => void
   removeTrack: (handle: number) => void
   resizeCanvas: (handle: number, width: number, height: number, videoWidth: number, videoHeight: number) => void
-  addFont: (handle: number, namePtr: number, dataPtr: number, dataSize: number) => void
+  addFont: (handle: number, namePtr: number, dataPtr: number, dataSize: number) => number
   reloadFonts: (handle: number) => void
   setDefaultFont: (handle: number, fontPtr: number) => void
   setFallbackFonts: (handle: number, fontsPtr: number) => void
@@ -1065,8 +1065,28 @@ const requireHandle = (): number => {
 // Font Management
 // =============================================================================
 
-// Fonts added via addFont are explicitly requested, so they should be attached (high priority)
-self.addFont = ({ font }: { font: string | Uint8Array }) => asyncWrite(font, false)
+// Fonts added via addFont are explicitly requested, so they should be attached (high priority).
+// A correlated acknowledgement prevents callers from treating rejected bytes as loaded.
+self.addFont = ({ font, requestId }: { font: string | Uint8Array; requestId: number }): void => {
+  const respond = (bytes: Uint8Array): void => {
+    const success = writeFontToFS(bytes, false)
+    postMessage({
+      target: 'addFont',
+      requestId,
+      success,
+      error: success ? undefined : 'The renderer rejected the font bytes'
+    })
+  }
+  if (typeof font === 'string') {
+    readAsync(
+      font,
+      (fontData) => respond(new Uint8Array(fontData)),
+      () => postMessage({ target: 'addFont', requestId, success: false, error: 'The font could not be read' })
+    )
+  } else {
+    respond(font)
+  }
+}
 
 const findAvailableFonts = (font: string): void => {
   font = font.trim().toLowerCase()
@@ -1126,10 +1146,10 @@ const scheduleReloadFonts = (): void => {
  * Add a font as an embedded font via ass_add_font.
  * Embedded fonts have higher priority than fontconfig fonts in libass.
  */
-const addFontAsEmbedded = (uint8: Uint8Array, name: string): void => {
+const addFontAsEmbedded = (uint8: Uint8Array, name: string): boolean => {
   if (!_Module || !akariSubHandle) {
     if (debug) console.warn('[AkariSub] Cannot add embedded font, module or AkariSub not ready:', name)
-    return
+    return false
   }
 
   try {
@@ -1138,19 +1158,31 @@ const addFontAsEmbedded = (uint8: Uint8Array, name: string): void => {
     const ptr = _Module._malloc(uint8.length)
     if (!ptr) {
       console.warn('[AkariSub] Failed to allocate memory for embedded font:', name)
-      return
+      return false
     }
 
     // Copy font data to WASM heap
     self.HEAPU8.set(uint8, ptr)
 
-    withCString(name, (namePtr) => {
-      api.addFont(akariSubHandle, namePtr, ptr, uint8.length)
-    })
-
+    let handedToNative = false
+    let accepted = false
+    try {
+      accepted = withCString(name, (namePtr) => {
+        handedToNative = true
+        return api.addFont(akariSubHandle!, namePtr, ptr, uint8.length) === 1
+      })
+    } finally {
+      if (!handedToNative) _Module._free(ptr)
+    }
+    if (!accepted) {
+      if (debug) console.warn('[AkariSub] Rejected embedded font:', name)
+      return false
+    }
     if (debug) console.log('[AkariSub] Added embedded font:', name, 'size:', uint8.length)
+    return true
   } catch (e) {
     console.warn('[AkariSub] Failed to add embedded font:', name, e)
+    return false
   }
 }
 
@@ -1160,26 +1192,25 @@ const addFontAsEmbedded = (uint8: Uint8Array, name: string): void => {
  * - /fonts/attached: For attached/preloaded fonts (highest priority)
  * - /fonts/fallback: For fallback fonts
  */
-const writeFontToFS = (uint8: Uint8Array, isFallback: boolean = true): void => {
+const writeFontToFS = (uint8: Uint8Array, isFallback: boolean = true): boolean => {
   const fontDir = isFallback ? '/fonts/fallback' : '/fonts/attached'
   const fontFileName = isFallback ? 'fallback-' + fallbackFontId++ : 'attached-' + attachedFontId++
 
-  if (_Module) {
-    try {
-      _Module.FS_createDataFile(fontDir, fontFileName, uint8, true, true, true)
-    } catch (e) {
-      console.warn('Failed to write font to filesystem:', fontDir + '/' + fontFileName, e)
-    }
+  if (!_Module) return false
+  if (!isFallback && !addFontAsEmbedded(uint8, fontFileName)) return false
+  try {
+    _Module.FS_createDataFile(fontDir, fontFileName, uint8, true, true, true)
+  } catch (e) {
+    console.warn('Failed to write font to filesystem:', fontDir + '/' + fontFileName, e)
+  }
 
-    if (!isFallback) {
-      addFontAsEmbedded(uint8, fontFileName)
-    } else if (akariSubHandle) {
-      addFontAsEmbedded(uint8, fontFileName)
-    } else {
-      pendingFallbackFonts.push({ data: uint8, name: fontFileName })
-    }
+  if (isFallback && akariSubHandle) {
+    addFontAsEmbedded(uint8, fontFileName)
+  } else if (isFallback) {
+    pendingFallbackFonts.push({ data: uint8, name: fontFileName })
   }
   scheduleReloadFonts()
+  return true
 }
 
 /**

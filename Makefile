@@ -280,6 +280,7 @@ dist/js/$(WORKER_NAME).js: src/AkariSub.cpp src/ts/worker.ts src/pre-worker.js s
 	mkdir -p dist/js
 	em++ src/AkariSub.cpp $(LIBASS_DEPS) \
 		-O3 \
+		-I$(DIST_DIR)/include/freetype2 \
 		-flto \
 		-std=c++17 \
 		-fno-rtti -fno-exceptions -DEMSCRIPTEN_HAS_UNBOUND_TYPE_NAMES=0 \
