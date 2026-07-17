@@ -421,7 +421,7 @@ export interface AkariSubModule extends EmscriptenModule {
     videoWidth: number,
     videoHeight: number
   ) => void
-  _akarisub_add_font: (handle: number, namePtr: number, dataPtr: number, size: number) => void
+  _akarisub_add_font: (handle: number, namePtr: number, dataPtr: number, size: number) => number
   _akarisub_reload_fonts: (handle: number) => void
   _akarisub_set_default_font: (handle: number, fontPtr: number) => void
   _akarisub_set_fallback_fonts: (handle: number, fontsPtr: number) => void

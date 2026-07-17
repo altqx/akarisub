@@ -1,4 +1,6 @@
 #include "../lib/libass/libass/ass.h"
+#include <ft2build.h>
+#include FT_FREETYPE_H
 #include <cstdint>
 #include <stdarg.h>
 #include <stdio.h>
@@ -661,9 +663,23 @@ public:
     }
   }
 
-  void addFont(const std::string &name, int data, unsigned long data_size) {
-    ass_add_font(ass_library, name.c_str(), (char *)data, (size_t)data_size);
+  int addFont(const std::string &name, int data, unsigned long data_size) {
+    FT_Library library = nullptr;
+    FT_Face face = nullptr;
+    int accepted = 0;
+    if (data && data_size && FT_Init_FreeType(&library) == 0) {
+      if (FT_New_Memory_Face(library, reinterpret_cast<const FT_Byte *>(data), data_size, 0, &face) == 0) {
+        accepted = 1;
+      }
+    }
+    if (face)
+      FT_Done_Face(face);
+    if (library)
+      FT_Done_FreeType(library);
+    if (accepted)
+      ass_add_font(ass_library, name.c_str(), (char *)data, (size_t)data_size);
     free((char *)data);
+    return accepted;
   }
 
   void setMargin(int top, int bottom, int left, int right) {
@@ -1167,9 +1183,12 @@ EMSCRIPTEN_KEEPALIVE void akarisub_resize_canvas(AkariSub *instance, int width, 
     instance->resizeCanvas(width, height, video_w, video_h);
 }
 
-EMSCRIPTEN_KEEPALIVE void akarisub_add_font(AkariSub *instance, const char *name, int data, unsigned long data_size) {
-  if (instance)
-    instance->addFont(name ? std::string(name) : std::string(), data, data_size);
+EMSCRIPTEN_KEEPALIVE int akarisub_add_font(AkariSub *instance, const char *name, int data, unsigned long data_size) {
+  if (!instance) {
+    free((char *)data);
+    return 0;
+  }
+  return instance->addFont(name ? std::string(name) : std::string(), data, data_size);
 }
 
 EMSCRIPTEN_KEEPALIVE void akarisub_reload_fonts(AkariSub *instance) {

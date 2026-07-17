@@ -74,6 +74,7 @@ const isLikelyWebKit = (): boolean => {
  */
 export default class AkariSub extends EventTarget {
   private static readonly MAX_PENDING_DEMANDS = 3
+  private static readonly MAX_FONT_BYTES = 32 * 1024 * 1024
 
   // Feature detection cache (static)
   private static _hasAlphaBug: boolean | null = null
@@ -82,6 +83,9 @@ export default class AkariSub extends EventTarget {
   // Instance properties
   private _loaded: Promise<void>
   private _init!: () => void
+  private _destroyedSignal: Promise<void>
+  private _resolveDestroyed!: () => void
+  private _pendingWorkerRejectors = new Set<(error: Error) => void>()
   private _onDemandRender: boolean
   private _offscreenRender: boolean
   private _video?: HTMLVideoElement
@@ -105,6 +109,7 @@ export default class AkariSub extends EventTarget {
   private _rvfcGeneration: number = 0
   private _renderEpoch: number = 0
   private _nextDemandId: number = 1
+  private _nextFontRequestId: number = 1
   private readonly _isLikelyWebKit: boolean
 
   // Bound methods for event listeners
@@ -136,11 +141,26 @@ export default class AkariSub extends EventTarget {
   constructor(options: AkariSubOptions) {
     super()
 
+    this._destroyedSignal = new Promise((resolve) => {
+      this._resolveDestroyed = resolve
+    })
+
     if (!globalThis.Worker) {
       throw this.destroy(new Error('Worker not supported'))
     }
     if (!options) {
       throw this.destroy(new Error('No options provided'))
+    }
+
+    for (const [index, font] of (options.fonts ?? []).entries()) {
+      if (typeof font !== 'string' && font.byteLength > AkariSub.MAX_FONT_BYTES) {
+        throw new Error(`Font ${index + 1} exceeds the 32 MiB per-font limit`)
+      }
+    }
+    for (const [name, font] of Object.entries(options.availableFonts ?? {})) {
+      if (typeof font !== 'string' && font.byteLength > AkariSub.MAX_FONT_BYTES) {
+        throw new Error(`Font ${name} exceeds the 32 MiB per-font limit`)
+      }
     }
 
     this._loaded = new Promise((resolve) => {
@@ -765,8 +785,25 @@ export default class AkariSub extends EventTarget {
   /**
    * Adds a font to the renderer.
    */
-  addFont(font: string | Uint8Array): void {
-    this._sendMutatingMessage('addFont', { font })
+  async addFont(font: string | Uint8Array): Promise<void> {
+    this._bumpRenderEpoch()
+    if (typeof font !== 'string' && font.byteLength > AkariSub.MAX_FONT_BYTES) {
+      throw new Error('Font files are limited to 32 MiB')
+    }
+    const ready = this._workerReady || await Promise.race([
+      this._loaded.then(() => true),
+      this._destroyedSignal.then(() => false),
+    ])
+    if (!ready || this._destroyed) throw new Error('Renderer was destroyed before the font could be added')
+    const requestId = this._nextFontRequestId++
+    const result = await this._fetchFromWorker<{ success: boolean; error?: string }>({
+      target: 'addFont',
+      font,
+      requestId,
+      timeoutMs: null,
+    })
+    if (!result.success) throw new Error(result.error || 'The renderer rejected the font')
+    this._syncVideoClock()
   }
 
   /**
@@ -835,20 +872,25 @@ export default class AkariSub extends EventTarget {
   // Private Methods
   // ==========================================================================
 
-  private _sendLocalFont(name: string): void {
+  private async _sendLocalFont(name: string): Promise<void> {
+    let success = false
     try {
-      ;(globalThis as any).queryLocalFonts().then((fontData: any[]) => {
-        const font = fontData?.find((obj: any) => obj.fullName.toLowerCase() === name)
-        if (font) {
-          font.blob().then((blob: Blob) => {
-            blob.arrayBuffer().then((buffer: ArrayBuffer) => {
-              this.addFont(new Uint8Array(buffer))
-            })
-          })
-        }
-      })
-    } catch (e) {
-      console.warn('Local fonts API:', e)
+      const fontData = await (globalThis as any).queryLocalFonts()
+      const font = fontData?.find((obj: any) => obj.fullName.toLowerCase() === name)
+      if (font) {
+        const blob = await font.blob()
+        const buffer = await blob.arrayBuffer()
+        await this.addFont(new Uint8Array(buffer))
+        success = true
+      }
+    } catch (error) {
+      console.warn('Local fonts API:', error)
+    } finally {
+      if (!this._destroyed) {
+        void this.sendMessage('localFontResult', { font: name, success }).catch((error) => {
+          if (!this._destroyed) console.warn('Local font result:', error)
+        })
+      }
     }
   }
 
@@ -857,11 +899,11 @@ export default class AkariSub extends EventTarget {
       if (navigator?.permissions?.query) {
         ;(navigator.permissions.query as any)({ name: 'local-fonts' }).then((permission: any) => {
           if (permission.state === 'granted') {
-            this._sendLocalFont(data.font)
+            void this._sendLocalFont(data.font)
           }
         })
       } else {
-        this._sendLocalFont(data.font)
+        void this._sendLocalFont(data.font)
       }
     } catch (e) {
       console.warn('Local fonts API:', e)
@@ -1377,18 +1419,31 @@ export default class AkariSub extends EventTarget {
     }
   }
 
-  private _fetchFromWorker<T = any>(workerOptions: { target: string }): Promise<T> {
+  private _fetchFromWorker<T = any>(workerOptions: {
+    target: string
+    requestId?: number
+    timeoutMs?: number | null
+    [key: string]: any
+  }): Promise<T> {
     return new Promise((resolve, reject) => {
+      let cleanup = (): void => {}
       try {
-        const target = workerOptions.target
+        if (this._destroyed) throw new Error('Renderer was destroyed before the worker request started')
+        const { timeoutMs = 5000, ...workerMessage } = workerOptions
+        const target = workerMessage.target
 
-        const timeout = setTimeout(() => {
-          cleanup()
-          reject(new Error('Error: Timeout while trying to fetch ' + target))
-        }, 5000)
+        const timeout = timeoutMs === null
+          ? null
+          : setTimeout(() => {
+              cleanup()
+              reject(new Error('Error: Timeout while trying to fetch ' + target))
+            }, timeoutMs)
 
         const handleMessage = (event: MessageEvent) => {
-          if (event.data.target === target) {
+          if (
+            event.data.target === target &&
+            (workerMessage.requestId === undefined || event.data.requestId === workerMessage.requestId)
+          ) {
             cleanup()
             resolve(event.data as T)
           }
@@ -1399,17 +1454,24 @@ export default class AkariSub extends EventTarget {
           reject(event instanceof Error ? event : event.error || new Error('Worker error'))
         }
 
-        const cleanup = () => {
+        const handleDestroyed = (error: Error) => {
+          cleanup()
+          reject(error)
+        }
+
+        cleanup = () => {
           this._worker.removeEventListener('message', handleMessage)
           this._worker.removeEventListener('error', handleError as any)
-          clearTimeout(timeout)
+          this._pendingWorkerRejectors.delete(handleDestroyed)
+          if (timeout !== null) clearTimeout(timeout)
         }
 
         this._worker.addEventListener('message', handleMessage)
         this._worker.addEventListener('error', handleError as any)
-
-        this._worker.postMessage(workerOptions)
+        this._pendingWorkerRejectors.add(handleDestroyed)
+        this._worker.postMessage(workerMessage)
       } catch (error) {
+        cleanup()
         reject(error)
       }
     })
@@ -1476,6 +1538,8 @@ export default class AkariSub extends EventTarget {
   destroy(err?: Error | string): Error | undefined {
     const error = err ? this._error(err) : undefined
 
+    if (this._destroyed) return error
+
     if (this._video && this._canvasParent) {
       this._video.parentNode?.removeChild(this._canvasParent)
     }
@@ -1488,8 +1552,11 @@ export default class AkariSub extends EventTarget {
     }
 
     this._destroyed = true
+    this._resolveDestroyed?.()
+    const destroyedError = new Error('Renderer was destroyed before the worker request completed')
+    for (const rejectPending of [...this._pendingWorkerRejectors]) rejectPending(destroyedError)
     this._removeListeners()
-    this.sendMessage('destroy')
+    if (this._workerReady) this._postWorkerMessage('destroy')
     this._worker?.terminate()
 
     return error
