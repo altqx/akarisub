@@ -108,6 +108,8 @@ export interface PerformanceStats {
   minRenderTime: number
   /** Last render time in milliseconds */
   lastRenderTime: number
+  /** Current automatically learned presentation-latency compensation in milliseconds */
+  timingCompensationMs?: number
   /** Number of image planes emitted by the last render */
   lastImageCount?: number
   /** Total RGBA/raw image pixels emitted by the last render */
@@ -154,6 +156,8 @@ export interface AkariSubOptions {
   rawAssImageGpu?: boolean
   /** Use requestVideoFrameCallback for precise sync (default: true) */
   onDemandRender?: boolean
+  /** Compensate measured render/presentation latency while playing (default: true) */
+  adaptiveTiming?: boolean
   /** Target FPS when not using onDemandRender (default: 24) */
   targetFps?: number
   /** Time offset in seconds (default: 0) */
@@ -198,7 +202,7 @@ export interface AkariSubOptions {
   libassGlyphLimit?: number
   /** Callback invoked when all GPU renderers (WebGPU, WebGL2) are unavailable and the renderer falls back to Canvas2D */
   onCanvasFallback?: () => void
-  /** Additional time in seconds to render subtitles ahead; opt-in only because RVFC mediaTime is already frame-aligned (default: 0) */
+  /** Additional time in seconds to render subtitles ahead, on top of adaptive timing (default: 0) */
   renderAhead?: number
   /** Pre-render early track windows after load to warm libass caches (default: false) */
   fullTrackWarmup?: boolean
@@ -292,7 +296,7 @@ export interface RenderMessage {
 export type WorkerOutboundMessage =
   | { target: 'ready' }
   | { target: 'trackReady' }
-  | { target: 'unbusy'; requestId?: number; renderEpoch?: number }
+  | { target: 'unbusy'; requestId?: number; renderEpoch?: number; painted?: boolean }
   | { target: 'console'; command: string; content: string }
   | { target: 'getLocalFont'; font: string }
   | { target: 'verifyColorSpace'; subtitleColorSpace: string | null }
@@ -330,6 +334,8 @@ export interface WorkerInitMessage {
   fallbackFonts: string[]
   debug: boolean
   targetFps: number
+  renderAhead: number
+  adaptiveTiming: boolean
   dropAllAnimations?: boolean
   dropAllBlur?: boolean
   clampPos?: boolean
@@ -346,7 +352,14 @@ export type WorkerInboundMessage =
   | { target: 'offscreenCanvas'; rawAssImageGpu?: boolean; transferable: [OffscreenCanvas] }
   | { target: 'detachOffscreen' }
   | { target: 'canvas'; width: number; height: number; videoWidth: number; videoHeight: number; force?: boolean }
-  | { target: 'video'; currentTime?: number; isPaused?: boolean; rate?: number; colorSpace?: string | null }
+  | {
+      target: 'video'
+      currentTime?: number
+      isPaused?: boolean
+      rate?: number
+      renderAhead?: number
+      colorSpace?: string | null
+    }
   | { target: 'setTrack'; content: string | Uint8Array | ArrayBuffer }
   | { target: 'setEncryptedTrack'; content: EncryptedSubtitleContent }
   | { target: 'setTrackByUrl'; url: string }

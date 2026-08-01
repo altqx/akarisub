@@ -1,7 +1,9 @@
 #include "../lib/libass/libass/ass.h"
 #include <ft2build.h>
 #include FT_FREETYPE_H
+#include <cmath>
 #include <cstdint>
+#include <limits>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -70,6 +72,25 @@ void msg_callback(int level, const char *fmt, va_list va, void *data) {
 }
 
 const float INV_255 = 1.0f / 255.0f;
+
+// libass accepts integer milliseconds and treats event ranges as
+// Start <= now < Start + Duration. Floor seconds to that same millisecond
+// timeline so a fractional timestamp can never activate a cue early. Keep the
+// full 64-bit range expected by ass_render_frame instead of narrowing long
+// media timelines to int.
+static long long toLibassTimestampMs(double seconds) {
+  const double milliseconds = std::floor(seconds * 1000.0);
+  const double max_timestamp =
+      static_cast<double>(std::numeric_limits<long long>::max());
+  const double min_timestamp =
+      static_cast<double>(std::numeric_limits<long long>::min());
+
+  if (milliseconds >= max_timestamp)
+    return std::numeric_limits<long long>::max();
+  if (milliseconds <= min_timestamp)
+    return std::numeric_limits<long long>::min();
+  return static_cast<long long>(milliseconds);
+}
 
 typedef struct RenderResult {
 public:
@@ -562,8 +583,8 @@ public:
     time = 0;
     count = 0;
 
-    ASS_Image *imgs =
-        ass_render_frame(ass_renderer, track, (int)(tm * 1000), &changed);
+    ASS_Image *imgs = ass_render_frame(
+        ass_renderer, track, toLibassTimestampMs(tm), &changed);
     if (imgs == NULL || (changed == 0 && !force))
       return NULL;
 
@@ -577,8 +598,8 @@ public:
     time = 0;
     count = 0;
 
-    ASS_Image *imgs =
-        ass_render_frame(ass_renderer, track, (int)(tm * 1000), &changed);
+    ASS_Image *imgs = ass_render_frame(
+        ass_renderer, track, toLibassTimestampMs(tm), &changed);
     if (imgs == NULL || (changed == 0 && !force))
       return NULL;
 
@@ -600,7 +621,8 @@ public:
     time = 0;
     count = 0;
 
-    ASS_Image *imgs = ass_render_frame(ass_renderer, track, (int)(tm * 1000), &changed);
+    ASS_Image *imgs = ass_render_frame(
+        ass_renderer, track, toLibassTimestampMs(tm), &changed);
     if (debug)
       time = emscripten_get_now();
     if (imgs == NULL || (changed == 0 && !force))
@@ -739,8 +761,8 @@ public:
     time = 0;
     count = 0;
 
-    ASS_Image *img =
-        ass_render_frame(ass_renderer, track, (int)(tm * 1000), &changed);
+    ASS_Image *img = ass_render_frame(
+        ass_renderer, track, toLibassTimestampMs(tm), &changed);
     if (img == NULL || (changed == 0 && !force)) {
       return NULL;
     }
@@ -1578,7 +1600,7 @@ EMSCRIPTEN_KEEPALIVE int akarisub_get_empty_window(AkariSub *instance, double tm
     return 0;
 
   ASS_Track *track = instance->track;
-  long long now = (long long)(tm * 1000);
+  long long now = toLibassTimestampMs(tm);
   long long next_start = -1;
 
   for (int i = 0; i < track->n_events; i++) {

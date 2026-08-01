@@ -26,6 +26,7 @@ import {
 } from './utils'
 import { WebGPURenderer, isWebGPUSupported } from './webgpu-renderer'
 import { WebGL2Renderer, isWebGL2Supported } from './webgl2-renderer'
+import { compensatedMediaTime, updateTimingCompensation } from './timing'
 
 type AnyGPURenderer = WebGPURenderer | WebGL2Renderer
 
@@ -33,7 +34,13 @@ interface DemandMetadata {
   mediaTime: number
   width: number
   height: number
+  expectedDisplayTime?: number
   force?: boolean
+}
+
+interface DemandTiming {
+  expectedDisplayTime: number
+  renderEpoch: number
 }
 
 const DEFAULT_RENDER_AHEAD = 0
@@ -105,6 +112,9 @@ export default class AkariSub extends EventTarget {
   private _ro?: ResizeObserver
   private _worker: Worker
   private _pendingDemandTimes: DemandMetadata[] = []
+  private _demandTimings = new Map<number, DemandTiming>()
+  private _adaptiveTiming: boolean
+  private _timingCompensationSeconds: number = 0
   private _rvfcHandle: number | null = null
   private _rvfcGeneration: number = 0
   private _renderEpoch: number = 0
@@ -173,6 +183,7 @@ export default class AkariSub extends EventTarget {
     const test = AkariSub._test()
 
     this._onDemandRender = 'requestVideoFrameCallback' in HTMLVideoElement.prototype && (options.onDemandRender ?? true)
+    this._adaptiveTiming = options.adaptiveTiming ?? true
 
     this._onCanvasFallback = options.onCanvasFallback
 
@@ -281,6 +292,8 @@ export default class AkariSub extends EventTarget {
         fallbackFonts: options.fallbackFonts || ['liberation sans'],
         debug: this.debug,
         targetFps: options.targetFps || 24,
+        renderAhead: this.renderAhead,
+        adaptiveTiming: this._adaptiveTiming,
         dropAllAnimations: options.dropAllAnimations,
         dropAllBlur: options.dropAllBlur,
         clampPos: options.clampPos,
@@ -694,6 +707,7 @@ export default class AkariSub extends EventTarget {
       isPaused,
       currentTime,
       rate,
+      renderAhead: this.renderAhead,
       colorSpace: this._videoColorSpace
     })
   }
@@ -830,6 +844,9 @@ export default class AkariSub extends EventTarget {
       maxRenderTime: stats.maxRenderTime ?? 0,
       minRenderTime: stats.minRenderTime ?? 0,
       lastRenderTime: stats.lastRenderTime ?? 0,
+      timingCompensationMs: this._onDemandRender
+        ? Math.round(this._timingCompensationSeconds * 100_000) / 100
+        : stats.timingCompensationMs,
       lastImageCount: stats.lastImageCount,
       lastImagePixels: stats.lastImagePixels,
       pendingRenders: stats.pendingRenders ?? 0,
@@ -910,7 +927,11 @@ export default class AkariSub extends EventTarget {
     }
   }
 
-  private _unbusy(): void {
+  private _unbusy(
+    data: { requestId?: number; renderEpoch?: number; painted?: boolean; images?: RenderImage[] } = {}
+  ): void {
+    this._observeDemandCompletion(data.requestId, data.renderEpoch, data.painted === true || data.images != null)
+
     if (this._pendingDemandTimes.length > 0) {
       if (this._pendingDemandTimes.length > 1) {
         const latestDemand = this._pendingDemandTimes[this._pendingDemandTimes.length - 1]
@@ -932,6 +953,7 @@ export default class AkariSub extends EventTarget {
   private _bumpRenderEpoch(): void {
     this._renderEpoch++
     this._pendingDemandTimes.length = 0
+    this._demandTimings.clear()
   }
 
   private _sendMutatingMessage(target: string, data: Record<string, any> = {}, transferable?: Transferable[]): void {
@@ -1100,21 +1122,52 @@ export default class AkariSub extends EventTarget {
 
     const playbackRate = this._videoPlaybackRateForWorker()
     // RVFC metadata.mediaTime is the frame timestamp supplied by the browser.
-    // Keep the default path frame-exact. Even a few milliseconds of automatic
-    // media-time compensation can move ASS event boundaries across timing-
-    // sensitive signs; callers that prefer subjective lead can opt in with
-    // renderAhead instead.
-    const renderLeadSeconds = this._isVideoPausedForWorker() ? 0 : this.renderAhead
-    const renderTime = metadata.mediaTime + renderLeadSeconds * playbackRate
+    // Measure only the part of the render pipeline that misses the browser's
+    // display deadline and compensate that bounded delay on following frames.
+    // Explicit renderAhead remains an additional caller-controlled adjustment.
+    const isPaused = this._isVideoPausedForWorker()
+    const adaptiveCompensation = this._adaptiveTiming ? this._timingCompensationSeconds : 0
+    const renderTime = compensatedMediaTime(
+      metadata.mediaTime,
+      playbackRate,
+      this.renderAhead,
+      adaptiveCompensation,
+      isPaused
+    )
+
+    const expectedDisplayTime = Number.isFinite(metadata.expectedDisplayTime)
+      ? metadata.expectedDisplayTime
+      : Number.isFinite(metadata.presentationTime)
+        ? metadata.presentationTime
+        : now
 
     const demandData = {
       mediaTime: renderTime,
       width: metadata.width,
-      height: metadata.height
+      height: metadata.height,
+      expectedDisplayTime: isPaused ? undefined : expectedDisplayTime
     }
 
     this._requestDemandRender(demandData)
     this._scheduleRVFC(this._video)
+  }
+
+  private _observeDemandCompletion(requestId?: number, renderEpoch?: number, painted: boolean = false): void {
+    if (requestId == null) return
+
+    const timing = this._demandTimings.get(requestId)
+    if (!timing) return
+    this._demandTimings.delete(requestId)
+
+    if (!painted) return
+    if (renderEpoch != null && renderEpoch !== timing.renderEpoch) return
+    if (timing.renderEpoch !== this._renderEpoch || !this._adaptiveTiming) return
+
+    this._timingCompensationSeconds = updateTimingCompensation(
+      this._timingCompensationSeconds,
+      performance.now(),
+      timing.expectedDisplayTime
+    )
   }
 
   private _demandRender(metadata: DemandMetadata): void {
@@ -1124,10 +1177,18 @@ export default class AkariSub extends EventTarget {
       this.resize()
     }
 
+    const requestId = this._nextDemandId++
+    if (metadata.expectedDisplayTime != null && Number.isFinite(metadata.expectedDisplayTime)) {
+      this._demandTimings.set(requestId, {
+        expectedDisplayTime: metadata.expectedDisplayTime,
+        renderEpoch: this._renderEpoch
+      })
+    }
+
     this.sendMessage('demand', {
       time: metadata.mediaTime + this.timeOffset,
       force: metadata.force,
-      requestId: this._nextDemandId++,
+      requestId,
       renderEpoch: this._renderEpoch
     })
   }
@@ -1282,7 +1343,7 @@ export default class AkariSub extends EventTarget {
         console.log('Bitmaps: ' + count + ' Total: ' + (total | 0) + 'ms', data.times)
       }
     } finally {
-      this._unbusy()
+      this._unbusy(data)
     }
   }
 

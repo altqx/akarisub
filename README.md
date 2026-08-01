@@ -94,6 +94,12 @@ const renderer = new AkariSub({
 renderer.setCurrentTime(true, 15)
 ```
 
+### Timing semantics
+
+AkariSub sends libass an integer millisecond timestamp. Fractional media times are floored to the current millisecond, matching libass's `Start <= now < Start + Duration` event boundaries. `timeOffset` and `renderAhead` are measured in seconds.
+
+By default, `adaptiveTiming` predicts the media time at which a completed canvas paint will become visible, compensating bounded rendering and delivery latency. Pause and seek frames always use the exact media timestamp. Set `adaptiveTiming: false` when deterministic frame sampling is more important than compensating live presentation latency.
+
 ## Changing subtitles
 
 You're not limited to only display the subtitle file you referenced in your options. You're able to dynamically change subtitles on the fly. There's four methods that you can use for this specifically:
@@ -133,6 +139,7 @@ console.log(stats)
 //   maxRenderTime: 8.32,
 //   minRenderTime: 0.12,
 //   lastRenderTime: 1.23,
+//   timingCompensationMs: 4.8,
 //   renderFps: 60,
 //   usingWorker: true,
 //   offscreenRender: true,
@@ -155,22 +162,23 @@ console.log(`Events: ${eventCount}, Styles: ${styleCount}`)
 
 **Stats Reference:**
 
-| Property          | Type    | Description                              |
-| ----------------- | ------- | ---------------------------------------- |
-| `framesRendered`  | number  | Total frames rendered since reset        |
-| `framesDropped`   | number  | Frames dropped due to slow rendering     |
-| `avgRenderTime`   | number  | Average render time in milliseconds      |
-| `maxRenderTime`   | number  | Maximum render time in milliseconds      |
-| `minRenderTime`   | number  | Minimum render time in milliseconds      |
-| `lastRenderTime`  | number  | Most recent render time in milliseconds  |
-| `renderFps`       | number  | Estimated render FPS based on timing     |
-| `usingWorker`     | boolean | Whether using Web Worker                 |
-| `offscreenRender` | boolean | Whether offscreen rendering is enabled   |
-| `onDemandRender`  | boolean | Whether on-demand rendering is enabled   |
-| `pendingRenders`  | number  | Number of pending render operations      |
-| `totalEvents`     | number  | Total subtitle events in current track   |
-| `cacheHits`       | number  | Number of cache hits (unchanged frames)  |
-| `cacheMisses`     | number  | Number of cache misses (rendered frames) |
+| Property               | Type    | Description                                                             |
+| ---------------------- | ------- | ----------------------------------------------------------------------- |
+| `framesRendered`       | number  | Total frames rendered since reset                                       |
+| `framesDropped`        | number  | Frames dropped due to slow rendering                                    |
+| `avgRenderTime`        | number  | Average render time in milliseconds                                     |
+| `maxRenderTime`        | number  | Maximum render time in milliseconds                                     |
+| `minRenderTime`        | number  | Minimum render time in milliseconds                                     |
+| `lastRenderTime`       | number  | Most recent render time in milliseconds                                 |
+| `timingCompensationMs` | number  | Automatically learned presentation-latency compensation in milliseconds |
+| `renderFps`            | number  | Estimated render FPS based on timing                                    |
+| `usingWorker`          | boolean | Whether using Web Worker                                                |
+| `offscreenRender`      | boolean | Whether offscreen rendering is enabled                                  |
+| `onDemandRender`       | boolean | Whether on-demand rendering is enabled                                  |
+| `pendingRenders`       | number  | Number of pending render operations                                     |
+| `totalEvents`          | number  | Total subtitle events in current track                                  |
+| `cacheHits`            | number  | Number of cache hits (unchanged frames)                                 |
+| `cacheMisses`          | number  | Number of cache misses (rendered frames)                                |
 
 ## GPU Rendering
 
@@ -206,6 +214,7 @@ The default options are best, and automatically fallback to the next fastest opt
 | `asyncRender`         | boolean                              | auto                                     | Render via ImageBitmap. Defaults to `true` on Canvas2D paths and `false` when a GPU renderer is active (raw buffers upload with fewer copies) or on WebKit |
 | `offscreenRender`     | boolean                              | `true`                                   | Render fully on the worker, greatly reduces CPU usage                                                                                                      |
 | `onDemandRender`      | boolean                              | `true`                                   | Render subtitles as the video player renders frames                                                                                                        |
+| `adaptiveTiming`      | boolean                              | `true`                                   | Compensate measured queue, worker, bitmap, IPC, and paint latency while video is playing; pause and seek renders remain frame-exact                        |
 | `targetFps`           | number                               | `24`                                     | Target FPS when not using onDemandRender                                                                                                                   |
 | `timeOffset`          | number                               | `0`                                      | Subtitle time offset in seconds                                                                                                                            |
 | `debug`               | boolean                              | `false`                                  | Enable debug logging                                                                                                                                       |
@@ -215,7 +224,7 @@ The default options are best, and automatically fallback to the next fastest opt
 | `dropAllAnimations`   | boolean                              | `false`                                  | Discard all animated tags for performance                                                                                                                  |
 | `dropAllBlur`         | boolean                              | `false`                                  | Drop all blur effects (~10x performance gain)                                                                                                              |
 | `clampPos`            | boolean                              | `false`                                  | Clamp `\pos` values to script resolution                                                                                                                   |
-| `renderAhead`         | number                               | `0`                                      | Optional extra seconds to render ahead; normally leave at 0 because RVFC `mediaTime` is already frame-aligned                                              |
+| `renderAhead`         | number                               | `0`                                      | Optional extra seconds to render ahead, in addition to adaptive timing; also applies when `onDemandRender` is disabled                                     |
 | `workerUrl`           | string                               | `'akarisub-worker.js'`                   | URL to the worker script                                                                                                                                   |
 | `wasmUrl`             | string                               | `'akarisub-worker.wasm'`                 | URL to the WASM binary                                                                                                                                     |
 | `subUrl`              | string                               | -                                        | URL of the subtitle file to play                                                                                                                           |

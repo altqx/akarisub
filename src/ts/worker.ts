@@ -18,6 +18,7 @@ import type {
   WorkerInboundMessage
 } from './types'
 import { parseAss, dropBlur, fixPlayRes, libassYCbCrMap } from './utils'
+import { compensatedMediaTime, updateTimingCompensation } from './timing'
 
 // =============================================================================
 // Worker State
@@ -60,6 +61,9 @@ const nowMs = (): number => (typeof performance !== 'undefined' ? performance.no
 let lastCurrentTimeReceivedAt = nowMs()
 let targetFps = 24
 let onDemandRenderMode = false
+let adaptiveTiming = true
+let configuredRenderAheadSeconds = 0
+let fallbackTimingCompensationSeconds = 0
 let rawAssImageGpuEnabled = false
 let useLocalFonts = false
 let useFontconfigProvider = true
@@ -1465,6 +1469,15 @@ const getCurrentTime = (): number => {
   }
 }
 
+const getRenderClockTime = (): number =>
+  compensatedMediaTime(
+    getCurrentTime(),
+    rate,
+    configuredRenderAheadSeconds,
+    adaptiveTiming ? fallbackTimingCompensationSeconds : 0,
+    _isPaused
+  )
+
 const setCurrentTime = (currentTime: number): void => {
   if (!Number.isFinite(currentTime)) return
 
@@ -1551,7 +1564,15 @@ const flushQueuedRender = (): void => {
   render(next.time, next.force, next.requestId, next.renderEpoch)
 }
 
-const completeRenderCycle = (): void => {
+const completeRenderCycle = (painted: boolean = false): void => {
+  if (painted && !onDemandRenderMode && !_isPaused && metrics.renderStartTime > 0 && adaptiveTiming) {
+    fallbackTimingCompensationSeconds = updateTimingCompensation(
+      fallbackTimingCompensationSeconds,
+      performance.now(),
+      metrics.renderStartTime
+    )
+  }
+  metrics.renderStartTime = 0
   renderInFlight = false
   const hadQueuedRender = queuedRenders.length > 0
   flushQueuedRender()
@@ -1802,7 +1823,7 @@ self.demand = ({
 
 const renderLoop = (force?: boolean | number): void => {
   rafId = null
-  render(getCurrentTime(), force || consumeNextRenderForce())
+  render(getRenderClockTime(), force || consumeNextRenderForce())
   if (!_isPaused) {
     rafId = requestAnimationFrame(renderLoop)
   }
@@ -1825,6 +1846,7 @@ const paintRawAssImages = ({
   const width = self.width
   const height = self.height
   const renderStart = performance.now()
+  let painted = true
   try {
     const pixels = rawAssWebGL2Renderer!.renderRawAssMetadata(meta, count, self.HEAPU8, width, height)
     if (debug) {
@@ -1838,10 +1860,11 @@ const paintRawAssImages = ({
       console.log(`[WEBGL2-RAW-ASS] Bitmaps: ${count} Pixels: ${pixels} Total: ${total | 0}ms`, times)
     }
   } catch (error) {
+    painted = false
     console.error('[AkariSub] Raw ASS_Image WebGL2 render failed:', error)
   }
-  postMessage({ target: 'unbusy', requestId, renderEpoch })
-  completeRenderCycle()
+  postMessage({ target: 'unbusy', requestId, renderEpoch, painted })
+  completeRenderCycle(painted)
 }
 
 const paintImages = ({
@@ -1924,7 +1947,7 @@ const paintImages = ({
     if (offscreenRender === 'hybrid') {
       if (!imageCount) {
         postMessage(resultObject)
-        completeRenderCycle()
+        completeRenderCycle(true)
         return
       }
       if (debug) times.bitmaps = imageCount
@@ -1936,7 +1959,7 @@ const paintImages = ({
           asyncRender: true
         }
         postMessage(result, [bitmap])
-        completeRenderCycle()
+        completeRenderCycle(true)
       } catch {
         postMessage({ target: 'unbusy', requestId, renderEpoch })
         completeRenderCycle()
@@ -1948,12 +1971,12 @@ const paintImages = ({
         for (const key in times) total += (times as any)[key] || 0
         console.log('Bitmaps: ' + imageCount + ' Total: ' + (total | 0) + 'ms', times)
       }
-      postMessage({ target: 'unbusy', requestId, renderEpoch })
-      completeRenderCycle()
+      postMessage({ target: 'unbusy', requestId, renderEpoch, painted: true })
+      completeRenderCycle(true)
     }
   } else {
     postMessage(resultObject, buffers as Transferable[])
-    completeRenderCycle()
+    completeRenderCycle(true)
   }
 }
 
@@ -1985,6 +2008,8 @@ const cancelAnimationFrame = self.cancelAnimationFrame ? self.cancelAnimationFra
 self.init = async (data: any): Promise<void> => {
   hasBitmapBug = data.hasBitmapBug
   fullTrackWarmupEnabled = !!data.fullTrackWarmup
+  adaptiveTiming = data.adaptiveTiming ?? true
+  configuredRenderAheadSeconds = Number.isFinite(data.renderAhead) ? data.renderAhead : 0
   _isPaused = data.initialIsPaused ?? true
   if (typeof data.initialPlaybackRate === 'number' && Number.isFinite(data.initialPlaybackRate)) {
     rate = data.initialPlaybackRate
@@ -2444,18 +2469,21 @@ self.canvas = ({
   self.width = width
   self.height = height
   if (akariSubHandle) requireApi().resizeCanvas(akariSubHandle, width, height, videoWidth, videoHeight)
-  if (force) render(getCurrentTime(), true)
+  if (force) render(getRenderClockTime(), true)
 }
 
 self.video = ({
   currentTime,
   isPaused,
-  rate: newRate
+  rate: newRate,
+  renderAhead
 }: {
   currentTime?: number
   isPaused?: boolean
   rate?: number
+  renderAhead?: number
 }): void => {
+  if (renderAhead != null && Number.isFinite(renderAhead)) configuredRenderAheadSeconds = renderAhead
   if (currentTime != null) setCurrentTime(currentTime)
   if (isPaused != null) setIsPaused(isPaused)
   if (newRate != null) setPlaybackRate(newRate)
@@ -2688,6 +2716,7 @@ self.getStats = (): void => {
       maxRenderTime: Math.round(metrics.maxRenderTime * 100) / 100,
       minRenderTime: metrics.minRenderTime === Infinity ? 0 : Math.round(metrics.minRenderTime * 100) / 100,
       lastRenderTime: Math.round(metrics.lastRenderTime * 100) / 100,
+      timingCompensationMs: Math.round(fallbackTimingCompensationSeconds * 100_000) / 100,
       lastImageCount: metrics.lastImageCount,
       lastImagePixels: metrics.lastImagePixels,
       pendingRenders: Math.max(0, metrics.pendingRenders),

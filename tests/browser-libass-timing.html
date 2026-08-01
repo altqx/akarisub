@@ -1,0 +1,72 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>AkariSub libass timing boundary test</title>
+<canvas id="subtitles" width="320" height="180"></canvas>
+<pre id="result">RUNNING</pre>
+<script type="module">
+  import AkariSub from '/dist/index.js'
+
+  const subtitle = `[Script Info]
+ScriptType: v4.00+
+PlayResX: 320
+PlayResY: 180
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Default,Liberation Sans,32,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,0,2,10,10,20,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+Dialogue: 0,0:00:00.00,0:00:00.50,Default,,0,0,0,,ZERO
+Dialogue: 0,0:00:01.00,0:00:02.00,Default,,0,0,0,,TIMING
+Dialogue: 0,600:00:00.00,600:00:01.00,Default,,0,0,0,,LONG TIMELINE
+`
+
+  const canvas = document.querySelector('#subtitles')
+  const result = document.querySelector('#result')
+  const renderer = new AkariSub({
+    canvas,
+    subContent: subtitle,
+    workerUrl: '/dist/akarisub-worker.js',
+    wasmUrl: '/dist/akarisub-worker.wasm',
+    onDemandRender: false,
+    adaptiveTiming: false,
+    asyncRender: false
+  })
+
+  const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+  const hasPixels = () => canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height).data.some(Boolean)
+
+  const sample = async (time) => {
+    renderer.setCurrentTime(true, time, 1)
+    await wait(100)
+    return hasPixels()
+  }
+
+  try {
+    await new Promise((resolve, reject) => {
+      renderer.addEventListener('ready', resolve, { once: true })
+      renderer.addEventListener('error', (event) => reject(event.error || new Error('renderer error')), { once: true })
+    })
+
+    const observations = [
+      ['negative-fraction', await sample(-0.0001), false],
+      ['zero-start', await sample(0), true],
+      ['zero-before-end', await sample(0.4999), true],
+      ['zero-at-end', await sample(0.5), false],
+      ['before-start', await sample(0.9999), false],
+      ['at-start', await sample(1), true],
+      ['before-end', await sample(1.9999), true],
+      ['at-end', await sample(2), false],
+      ['long-before-start', await sample(2159999.9999), false],
+      ['long-at-start', await sample(2160000), true],
+      ['long-at-end', await sample(2160001), false]
+    ]
+    const failures = observations.filter(([, actual, expected]) => actual !== expected)
+    result.textContent = failures.length ? `FAIL ${JSON.stringify(observations)}` : 'PASS'
+  } catch (error) {
+    result.textContent = `ERROR ${error?.stack || error}`
+  } finally {
+    renderer.destroy()
+  }
+</script>
