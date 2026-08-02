@@ -120,6 +120,20 @@ export const selectRenderMediaTime = (
 export const isStalePresentation = (presentationId: number | undefined, latestPresentationId: number): boolean =>
   presentationId != null && presentationId < latestPresentationId
 
+/**
+ * Resolve an RVFC timestamp into the clock domain used by subtitle cues.
+ *
+ * Transmuxed streams can expose a transport PTS through metadata.mediaTime
+ * while HTMLMediaElement.currentTime remains normalized to the presentation
+ * timeline. Backend frame timelines and ASS cues use that normalized clock.
+ */
+export const resolvePresentationMediaTime = (
+  metadataMediaTime: number,
+  videoCurrentTime: number | undefined,
+  frameTimelineEnabled: boolean
+): number =>
+  frameTimelineEnabled && Number.isFinite(videoCurrentTime) ? videoCurrentTime! : metadataMediaTime
+
 /** Return the subtitle media time expected to be visible when painting completes. */
 export const compensatedMediaTime = (
   mediaTime: number,

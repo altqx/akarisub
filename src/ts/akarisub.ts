@@ -32,6 +32,7 @@ import {
   normalizeFrameTimeline,
   presentedFrameIndex,
   presentationLeadSeconds,
+  resolvePresentationMediaTime,
   selectRenderMediaTime,
   updateTimingCompensation
 } from './timing'
@@ -1315,9 +1316,14 @@ export default class AkariSub extends EventTarget {
       : Number.isFinite(metadata.presentationTime)
         ? metadata.presentationTime
         : now
+    const mediaTime = resolvePresentationMediaTime(
+      metadata.mediaTime,
+      this._video?.currentTime,
+      !!this._frameTimeline?.length
+    )
 
     const demandData = {
-      mediaTime: metadata.mediaTime,
+      mediaTime,
       width: metadata.width,
       height: metadata.height,
       expectedDisplayTime: isPaused ? undefined : expectedDisplayTime,
@@ -1326,7 +1332,7 @@ export default class AkariSub extends EventTarget {
 
     let presented = false
     if (!isPaused && this._frameTimeline && this.framePrefetch > 0) {
-      const frameIndex = presentedFrameIndex(this._frameTimeline, metadata.mediaTime)
+      const frameIndex = presentedFrameIndex(this._frameTimeline, mediaTime)
       const prepared = this._preparedFrames.get(frameIndex)
       if (prepared) {
         this._preparedFrames.delete(frameIndex)
@@ -1338,7 +1344,7 @@ export default class AkariSub extends EventTarget {
           this._prepareForce = true
         }
       }
-      this._primePreparedFrames(metadata.mediaTime)
+      this._primePreparedFrames(mediaTime)
     }
 
     if (!presented) this._requestDemandRender(demandData)

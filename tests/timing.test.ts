@@ -7,6 +7,7 @@ import {
   presentationLeadSeconds,
   presentedFrameIndex,
   isStalePresentation,
+  resolvePresentationMediaTime,
   selectRenderMediaTime,
   snapToFrameTimeline,
   updateTimingCompensation
@@ -65,5 +66,11 @@ describe('subtitle timing compensation', () => {
     expect(isStalePresentation(7, 8)).toBe(true)
     expect(isStalePresentation(8, 8)).toBe(false)
     expect(isStalePresentation(undefined, 8)).toBe(false)
+  })
+
+  test('uses the normalized video clock for exact timelines instead of a transport PTS', () => {
+    expect(resolvePresentationMediaTime(4.375, 2.875, true)).toBe(2.875)
+    expect(resolvePresentationMediaTime(4.375, 2.875, false)).toBe(4.375)
+    expect(resolvePresentationMediaTime(4.375, Number.NaN, true)).toBe(4.375)
   })
 })
