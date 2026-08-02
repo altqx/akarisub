@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { compensatedMediaTime, updateTimingCompensation } from '../src/ts/timing'
+import { compensatedMediaTime, presentationLeadSeconds, updateTimingCompensation } from '../src/ts/timing'
 
 describe('subtitle timing compensation', () => {
   test('learns bounded positive presentation lag', () => {
@@ -15,5 +15,14 @@ describe('subtitle timing compensation', () => {
   test('scales configured and adaptive lead by playback rate', () => {
     expect(compensatedMediaTime(10, 2, 0.01, 0.02, false)).toBeCloseTo(10.06)
     expect(compensatedMediaTime(10, 2, 0.01, 0.02, true)).toBe(10)
+  })
+
+  test('includes per-frame queue delay when predicting the painted frame', () => {
+    expect(presentationLeadSeconds(110, 100, 0.02)).toBeCloseTo(0.03)
+    expect(presentationLeadSeconds(80, 100, 0.01)).toBe(0)
+  })
+
+  test('uses the pipeline estimate when no RVFC deadline is available', () => {
+    expect(presentationLeadSeconds(110, undefined, 0.02)).toBeCloseTo(0.02)
   })
 })

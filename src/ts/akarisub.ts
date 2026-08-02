@@ -26,7 +26,7 @@ import {
 } from './utils'
 import { WebGPURenderer, isWebGPUSupported } from './webgpu-renderer'
 import { WebGL2Renderer, isWebGL2Supported } from './webgl2-renderer'
-import { compensatedMediaTime, updateTimingCompensation } from './timing'
+import { compensatedMediaTime, presentationLeadSeconds, updateTimingCompensation } from './timing'
 
 type AnyGPURenderer = WebGPURenderer | WebGL2Renderer
 
@@ -39,7 +39,7 @@ interface DemandMetadata {
 }
 
 interface DemandTiming {
-  expectedDisplayTime: number
+  dispatchedAt: number
   renderEpoch: number
 }
 
@@ -1120,21 +1120,11 @@ export default class AkariSub extends EventTarget {
   private _handleRVFC(now: number, metadata: VideoFrameCallbackMetadata): void {
     if (this._destroyed) return
 
-    const playbackRate = this._videoPlaybackRateForWorker()
     // RVFC metadata.mediaTime is the frame timestamp supplied by the browser.
-    // Measure only the part of the render pipeline that misses the browser's
-    // display deadline and compensate that bounded delay on following frames.
-    // Explicit renderAhead remains an additional caller-controlled adjustment.
+    // Keep it unmodified while a demand is queued. Its presentation timestamp
+    // is predicted immediately before dispatch, when the actual queue delay is
+    // known. This is important for fast \t and \move animations.
     const isPaused = this._isVideoPausedForWorker()
-    const adaptiveCompensation = this._adaptiveTiming ? this._timingCompensationSeconds : 0
-    const renderTime = compensatedMediaTime(
-      metadata.mediaTime,
-      playbackRate,
-      this.renderAhead,
-      adaptiveCompensation,
-      isPaused
-    )
-
     const expectedDisplayTime = Number.isFinite(metadata.expectedDisplayTime)
       ? metadata.expectedDisplayTime
       : Number.isFinite(metadata.presentationTime)
@@ -1142,7 +1132,7 @@ export default class AkariSub extends EventTarget {
         : now
 
     const demandData = {
-      mediaTime: renderTime,
+      mediaTime: metadata.mediaTime,
       width: metadata.width,
       height: metadata.height,
       expectedDisplayTime: isPaused ? undefined : expectedDisplayTime
@@ -1166,7 +1156,7 @@ export default class AkariSub extends EventTarget {
     this._timingCompensationSeconds = updateTimingCompensation(
       this._timingCompensationSeconds,
       performance.now(),
-      timing.expectedDisplayTime
+      timing.dispatchedAt
     )
   }
 
@@ -1177,16 +1167,30 @@ export default class AkariSub extends EventTarget {
       this.resize()
     }
 
+    const dispatchedAt = performance.now()
+    const isPaused = this._isVideoPausedForWorker()
+    const adaptiveLead =
+      this._adaptiveTiming && !isPaused
+        ? presentationLeadSeconds(dispatchedAt, metadata.expectedDisplayTime, this._timingCompensationSeconds)
+        : 0
+    const renderTime = compensatedMediaTime(
+      metadata.mediaTime,
+      this._videoPlaybackRateForWorker(),
+      this.renderAhead,
+      adaptiveLead,
+      isPaused
+    )
+
     const requestId = this._nextDemandId++
-    if (metadata.expectedDisplayTime != null && Number.isFinite(metadata.expectedDisplayTime)) {
+    if (this._adaptiveTiming && !isPaused) {
       this._demandTimings.set(requestId, {
-        expectedDisplayTime: metadata.expectedDisplayTime,
+        dispatchedAt,
         renderEpoch: this._renderEpoch
       })
     }
 
     this.sendMessage('demand', {
-      time: metadata.mediaTime + this.timeOffset,
+      time: renderTime + this.timeOffset,
       force: metadata.force,
       requestId,
       renderEpoch: this._renderEpoch
@@ -1410,9 +1414,8 @@ export default class AkariSub extends EventTarget {
 
     if (this._video) {
       const currentTime = this._video.currentTime
-      const playbackRate = this._videoPlaybackRateForWorker()
       const isPaused = this._isVideoPausedForWorker()
-      this.setCurrentTime(isPaused, currentTime + this.timeOffset, playbackRate)
+      this.setCurrentTime(isPaused, currentTime + this.timeOffset, this._videoPlaybackRateForWorker())
 
       if (!this._onDemandRender) {
         this.dispatchEvent(new CustomEvent('ready'))
@@ -1420,15 +1423,14 @@ export default class AkariSub extends EventTarget {
       }
 
       const latestPending = this._pendingDemandTimes[this._pendingDemandTimes.length - 1]
-      const expectedPlayingDemandTime = currentTime + this.renderAhead * playbackRate
-      const canUsePendingDemand =
-        !isPaused && latestPending && Math.abs(latestPending.mediaTime - expectedPlayingDemandTime) <= 0.25
+      const canUsePendingDemand = !isPaused && latestPending && Math.abs(latestPending.mediaTime - currentTime) <= 0.25
       const pending = canUsePendingDemand
         ? latestPending
         : {
-            mediaTime: currentTime + (isPaused ? 0 : this.renderAhead * playbackRate),
+            mediaTime: currentTime,
             width: this._video.videoWidth,
-            height: this._video.videoHeight
+            height: this._video.videoHeight,
+            expectedDisplayTime: isPaused ? undefined : performance.now()
           }
 
       this._pendingDemandTimes.length = 0
