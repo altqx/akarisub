@@ -75,6 +75,14 @@ describe('subtitle timing compensation', () => {
     expect(resolvePresentationMediaTime(4.375, Number.NaN, true)).toBe(4.375)
   })
 
+  test('maps RVFC transport PTS into the exact normalized frame timeline when its origin is known', () => {
+    expect(resolvePresentationMediaTime(4.375, 2.8, true, 1.5)).toBe(2.875)
+    expect(resolvePresentationMediaTime(5.971, 5.89, true, 0.007)).toBeCloseTo(5.964)
+
+    const source = Object.assign(new Float64Array([0, 0.041708]), { mediaTimeOrigin: 1.5 })
+    expect(normalizeFrameTimeline(source).mediaTimeOrigin).toBe(1.5)
+  })
+
   test('does not invalidate an in-flight paint for an RVFC that is only queued', () => {
     const renderer = Object.create(AkariSub.prototype) as any
     const demands: Array<{ presentationId: number }> = []

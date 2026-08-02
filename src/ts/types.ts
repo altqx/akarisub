@@ -140,6 +140,14 @@ export interface PerformanceStats {
 // AkariSub Options Types
 // =============================================================================
 
+/**
+ * Normalized encoded-frame timestamps. `mediaTimeOrigin` maps browser RVFC
+ * media timestamps back to this zero-based timeline.
+ */
+export interface FrameTimeline extends ArrayLike<number> {
+  mediaTimeOrigin?: number
+}
+
 /** Configuration options for AkariSub */
 export interface AkariSubOptions {
   /** Video element to sync with and overlay */
@@ -158,8 +166,8 @@ export interface AkariSubOptions {
   onDemandRender?: boolean
   /** Compensate measured render/presentation latency while playing (default: true) */
   adaptiveTiming?: boolean
-  /** Encoded video-frame media timestamps in seconds for exact libass frame sampling */
-  frameTimeline?: ArrayLike<number>
+  /** Encoded video-frame timestamps and optional RVFC media-time origin, in seconds */
+  frameTimeline?: FrameTimeline
   /** Number of exact subtitle frames to prepare ahead (default: 2) */
   framePrefetch?: number
   /** Target FPS when not using onDemandRender (default: 24) */

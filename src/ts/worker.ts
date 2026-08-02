@@ -2415,7 +2415,6 @@ self.init = async (data: any): Promise<void> => {
     akariSubHandle = withCString(primaryFallback || '', (fontPtr) => {
       return requireApi().create(self.width, self.height, fontPtr, debug ? 1 : 0)
     })
-    requireApi().setUseFontconfigProvider(akariSubHandle, useFontconfigProvider ? 1 : 0)
 
     // Admission requires a live libass handle. Load fallback bytes only after
     // creation so rejected files are never retained in MEMFS or fontMap_.
@@ -2507,6 +2506,11 @@ self.init = async (data: any): Promise<void> => {
       requireApi().reloadFonts(requireHandle())
       if (debug) console.log('[AkariSub] Font reload complete')
     }
+
+    // Native construction deliberately starts with the provider disabled.
+    // Enable it only after MEMFS contains every startup font so fontconfig's
+    // first scan is useful and does not report an empty font database.
+    requireApi().setUseFontconfigProvider(requireHandle(), useFontconfigProvider ? 1 : 0)
 
     if (typeof subContent === 'string') {
       createTrackFromString(subContent)

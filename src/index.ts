@@ -15,6 +15,7 @@ export type {
   ASSEvent,
   ASSStyle,
   AkariSubOptions,
+  FrameTimeline,
   PerformanceStats,
   ASSEventCallback,
   ASSStyleCallback,

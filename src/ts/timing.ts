@@ -48,7 +48,9 @@ export const presentationLeadSeconds = (
 }
 
 /** Copy, validate, sort, and de-duplicate media presentation timestamps. */
-export const normalizeFrameTimeline = (frameTimes: ArrayLike<number>): Float64Array => {
+export const normalizeFrameTimeline = (
+  frameTimes: ArrayLike<number> & { mediaTimeOrigin?: number }
+): Float64Array & { mediaTimeOrigin?: number } => {
   const times: number[] = []
   for (let i = 0; i < frameTimes.length; i++) {
     const time = Number(frameTimes[i])
@@ -63,7 +65,9 @@ export const normalizeFrameTimeline = (frameTimes: ArrayLike<number>): Float64Ar
     }
   }
   times.length = write
-  return Float64Array.from(times)
+  const normalized = Float64Array.from(times) as Float64Array & { mediaTimeOrigin?: number }
+  if (Number.isFinite(frameTimes.mediaTimeOrigin)) normalized.mediaTimeOrigin = frameTimes.mediaTimeOrigin
+  return normalized
 }
 
 /** Find the first encoded video frame at or after a media timestamp. */
@@ -130,9 +134,14 @@ export const isStalePresentation = (presentationId: number | undefined, latestPr
 export const resolvePresentationMediaTime = (
   metadataMediaTime: number,
   videoCurrentTime: number | undefined,
-  frameTimelineEnabled: boolean
+  frameTimelineEnabled: boolean,
+  mediaTimeOrigin?: number
 ): number =>
-  frameTimelineEnabled && Number.isFinite(videoCurrentTime) ? videoCurrentTime! : metadataMediaTime
+  frameTimelineEnabled && Number.isFinite(mediaTimeOrigin)
+    ? metadataMediaTime - mediaTimeOrigin!
+    : frameTimelineEnabled && Number.isFinite(videoCurrentTime)
+      ? videoCurrentTime!
+      : metadataMediaTime
 
 /** Return the subtitle media time expected to be visible when painting completes. */
 export const compensatedMediaTime = (

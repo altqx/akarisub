@@ -12,7 +12,8 @@ import type {
   RenderTimes,
   VideoFrameCallbackMetadata,
   SubtitleColorSpace,
-  WebYCbCrColorSpace
+  WebYCbCrColorSpace,
+  FrameTimeline
 } from './types'
 import type { EncryptedSubtitleContent } from './types'
 import {
@@ -135,7 +136,7 @@ export default class AkariSub extends EventTarget {
   private _pendingDemandTimes: DemandMetadata[] = []
   private _demandTimings = new Map<number, DemandTiming>()
   private _adaptiveTiming: boolean
-  private _frameTimeline: Float64Array | null
+  private _frameTimeline: (Float64Array & { mediaTimeOrigin?: number }) | null
   private _preparedFrames = new Map<number, PreparedFrame>()
   private _prepareQueue: number[] = []
   private _prepareRequests = new Map<number, PrepareRequest>()
@@ -907,7 +908,7 @@ export default class AkariSub extends EventTarget {
    * Set encoded video-frame timestamps used to snap live predictions to exact
    * libass sampling times. Pass null to return to continuous-time prediction.
    */
-  setFrameTimeline(frameTimes: ArrayLike<number> | null): void {
+  setFrameTimeline(frameTimes: FrameTimeline | null): void {
     this._frameTimeline = frameTimes ? normalizeFrameTimeline(frameTimes) : null
     this._bumpRenderEpoch()
     void this.sendMessage('frameTimelineMode', {
@@ -1332,7 +1333,8 @@ export default class AkariSub extends EventTarget {
     const mediaTime = resolvePresentationMediaTime(
       metadata.mediaTime,
       this._video?.currentTime,
-      !!this._frameTimeline?.length
+      !!this._frameTimeline?.length,
+      this._frameTimeline?.mediaTimeOrigin
     )
 
     const demandData = {
