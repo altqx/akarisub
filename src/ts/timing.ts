@@ -88,10 +88,11 @@ export const nearestFrameIndex = (frameTimes: ArrayLike<number>, mediaTime: numb
   return mediaTime - frameTimes[previous] <= frameTimes[next] - mediaTime ? previous : next
 }
 
-/** Snap a prediction to an actual encoded-frame timestamp. */
+/** Snap a prediction to the encoded frame currently presented at that media time. */
 export const snapToFrameTimeline = (frameTimes: ArrayLike<number>, mediaTime: number): number => {
-  const index = frameIndexAtOrAfter(frameTimes, mediaTime)
-  return index >= 0 ? frameTimes[index] : mediaTime
+  const next = frameIndexAtOrAfter(frameTimes, mediaTime)
+  if (next < 0) return mediaTime
+  return next > 0 && frameTimes[next] > mediaTime ? frameTimes[next - 1] : frameTimes[next]
 }
 
 /** Return the subtitle media time expected to be visible when painting completes. */

@@ -38,10 +38,13 @@ describe('subtitle timing compensation', () => {
     expect([...normalizeFrameTimeline([0.04, Number.NaN, 0, 0.04, -1, 0.02])]).toEqual([0, 0.02, 0.04])
   })
 
-  test('snaps predicted presentation time to a real encoded frame', () => {
+  test('snaps predicted presentation time to the encoded frame still being presented', () => {
     const timeline = new Float64Array([0, 0.041708, 0.083417])
     expect(frameIndexAtOrAfter(timeline, 0.02)).toBe(1)
-    expect(snapToFrameTimeline(timeline, 0.02)).toBeCloseTo(0.041708)
+    expect(snapToFrameTimeline(timeline, 0.005)).toBe(0)
+    expect(snapToFrameTimeline(timeline, 0.02)).toBe(0)
+    expect(snapToFrameTimeline(timeline, 0.041707)).toBe(0)
+    expect(snapToFrameTimeline(timeline, 0.041708)).toBeCloseTo(0.041708)
     expect(snapToFrameTimeline(timeline, 1)).toBeCloseTo(0.083417)
     expect(nearestFrameIndex(timeline, 0.039)).toBe(1)
     expect(nearestFrameIndex(timeline, 0.06)).toBe(1)
