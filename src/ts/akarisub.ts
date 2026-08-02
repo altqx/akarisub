@@ -26,7 +26,14 @@ import {
 } from './utils'
 import { WebGPURenderer, isWebGPUSupported } from './webgpu-renderer'
 import { WebGL2Renderer, isWebGL2Supported } from './webgl2-renderer'
-import { compensatedMediaTime, presentationLeadSeconds, updateTimingCompensation } from './timing'
+import {
+  compensatedMediaTime,
+  nearestFrameIndex,
+  normalizeFrameTimeline,
+  presentationLeadSeconds,
+  snapToFrameTimeline,
+  updateTimingCompensation
+} from './timing'
 
 type AnyGPURenderer = WebGPURenderer | WebGL2Renderer
 
@@ -40,6 +47,17 @@ interface DemandMetadata {
 
 interface DemandTiming {
   dispatchedAt: number
+  renderEpoch: number
+}
+
+interface PreparedFrame {
+  width: number
+  height: number
+  bitmap: ImageBitmap
+}
+
+interface PrepareRequest {
+  index: number
   renderEpoch: number
 }
 
@@ -114,6 +132,12 @@ export default class AkariSub extends EventTarget {
   private _pendingDemandTimes: DemandMetadata[] = []
   private _demandTimings = new Map<number, DemandTiming>()
   private _adaptiveTiming: boolean
+  private _frameTimeline: Float64Array | null
+  private _preparedFrames = new Map<number, PreparedFrame>()
+  private _prepareQueue: number[] = []
+  private _prepareRequests = new Map<number, PrepareRequest>()
+  private _nextPrepareId: number = 1
+  private _prepareForce: boolean = true
   private _timingCompensationSeconds: number = 0
   private _rvfcHandle: number | null = null
   private _rvfcGeneration: number = 0
@@ -147,6 +171,7 @@ export default class AkariSub extends EventTarget {
   public maxRenderHeight: number
   public busy: boolean = false
   public renderAhead: number
+  public framePrefetch: number
 
   constructor(options: AkariSubOptions) {
     super()
@@ -184,6 +209,7 @@ export default class AkariSub extends EventTarget {
 
     this._onDemandRender = 'requestVideoFrameCallback' in HTMLVideoElement.prototype && (options.onDemandRender ?? true)
     this._adaptiveTiming = options.adaptiveTiming ?? true
+    this._frameTimeline = options.frameTimeline ? normalizeFrameTimeline(options.frameTimeline) : null
 
     this._onCanvasFallback = options.onCanvasFallback
 
@@ -241,6 +267,7 @@ export default class AkariSub extends EventTarget {
     this.prescaleHeightLimit = options.prescaleHeightLimit || 1080
     this.maxRenderHeight = options.maxRenderHeight || 0
     this.renderAhead = options.renderAhead ?? DEFAULT_RENDER_AHEAD
+    this.framePrefetch = Math.max(0, Math.min(4, Math.floor(options.framePrefetch ?? 2)))
 
     // Bind methods
     this._boundResize = this.resize.bind(this)
@@ -294,6 +321,7 @@ export default class AkariSub extends EventTarget {
         targetFps: options.targetFps || 24,
         renderAhead: this.renderAhead,
         adaptiveTiming: this._adaptiveTiming,
+        frameTimelineMode: this._frameTimeline != null && this.framePrefetch > 0,
         dropAllAnimations: options.dropAllAnimations,
         dropAllBlur: options.dropAllBlur,
         clampPos: options.clampPos,
@@ -544,7 +572,8 @@ export default class AkariSub extends EventTarget {
     this._canvas.style.top = top + 'px'
     this._canvas.style.left = left + 'px'
 
-    if (width > 0 && height > 0) {
+    if (width > 0 && height > 0 && (this._canvasctrl.width !== width || this._canvasctrl.height !== height)) {
+      this._bumpRenderEpoch()
       this._canvasctrl.width = width
       this._canvasctrl.height = height
     }
@@ -870,6 +899,21 @@ export default class AkariSub extends EventTarget {
   }
 
   /**
+   * Set encoded video-frame timestamps used to snap live predictions to exact
+   * libass sampling times. Pass null to return to continuous-time prediction.
+   */
+  setFrameTimeline(frameTimes: ArrayLike<number> | null): void {
+    this._frameTimeline = frameTimes ? normalizeFrameTimeline(frameTimes) : null
+    this._bumpRenderEpoch()
+    void this.sendMessage('frameTimelineMode', {
+      enabled: this._frameTimeline != null && this.framePrefetch > 0
+    })
+    this._syncVideoClock()
+    this._primePreparedFrames(this._video?.currentTime ?? 0)
+    this._dispatchNextPreparation()
+  }
+
+  /**
    * Get event count
    */
   async getEventCount(): Promise<number> {
@@ -931,7 +975,12 @@ export default class AkariSub extends EventTarget {
     data: { requestId?: number; renderEpoch?: number; painted?: boolean; images?: RenderImage[] } = {}
   ): void {
     this._observeDemandCompletion(data.requestId, data.renderEpoch, data.painted === true || data.images != null)
+    this._prepareForce = true
 
+    this._finishWorkerSlot()
+  }
+
+  private _finishWorkerSlot(): void {
     if (this._pendingDemandTimes.length > 0) {
       if (this._pendingDemandTimes.length > 1) {
         const latestDemand = this._pendingDemandTimes[this._pendingDemandTimes.length - 1]
@@ -948,12 +997,131 @@ export default class AkariSub extends EventTarget {
     }
 
     this.busy = false
+    this._primePreparedFrames(this._video?.currentTime ?? 0)
+    this._dispatchNextPreparation()
+  }
+
+  private _clearPreparedFrames(): void {
+    for (const frame of this._preparedFrames.values()) frame.bitmap.close()
+    this._preparedFrames.clear()
+    this._prepareQueue.length = 0
+    this._prepareRequests.clear()
+  }
+
+  private _primePreparedFrames(mediaTime: number): void {
+    const timeline = this._frameTimeline
+    if (!timeline || timeline.length === 0 || this.framePrefetch <= 0 || this._destroyed) return
+
+    const currentIndex = nearestFrameIndex(timeline, mediaTime)
+    const lastIndex = Math.min(timeline.length - 1, currentIndex + this.framePrefetch)
+
+    for (const [index, frame] of this._preparedFrames) {
+      if (index < currentIndex || index > lastIndex) {
+        frame.bitmap.close()
+        this._preparedFrames.delete(index)
+      }
+    }
+
+    const queued = this._prepareQueue.filter((index) => index > currentIndex && index <= lastIndex)
+    this._prepareQueue.length = 0
+    this._prepareQueue.push(...queued)
+
+    const requested = new Set<number>()
+    for (const request of this._prepareRequests.values()) requested.add(request.index)
+    for (const index of this._prepareQueue) requested.add(index)
+
+    for (let index = currentIndex + 1; index <= lastIndex; index++) {
+      if (!this._preparedFrames.has(index) && !requested.has(index)) this._prepareQueue.push(index)
+    }
+  }
+
+  private _dispatchNextPreparation(): void {
+    if (this.busy || !this._workerReady || !this._frameTimeline || this.framePrefetch <= 0) return
+
+    let index: number | undefined
+    while ((index = this._prepareQueue.shift()) != null) {
+      if (!this._preparedFrames.has(index)) break
+    }
+    if (index == null) return
+
+    const time = this._frameTimeline[index]
+    if (!Number.isFinite(time)) return
+
+    const prepareId = this._nextPrepareId++
+    this._prepareRequests.set(prepareId, { index, renderEpoch: this._renderEpoch })
+    this.busy = true
+    const force = this._prepareForce
+    this._prepareForce = false
+    this._postWorkerMessage('prepare', {
+      time: time + this.timeOffset,
+      prepareId,
+      renderEpoch: this._renderEpoch,
+      force
+    })
+  }
+
+  private _preparedFrame(data: {
+    prepareId: number
+    renderEpoch: number
+    time: number
+    width?: number
+    height?: number
+    bitmap?: ImageBitmap
+  }): void {
+    const request = this._prepareRequests.get(data.prepareId)
+    this._prepareRequests.delete(data.prepareId)
+    const currentIndex = this._frameTimeline
+      ? nearestFrameIndex(this._frameTimeline, this._video?.currentTime ?? data.time - this.timeOffset)
+      : -1
+
+    if (
+      request &&
+      data.bitmap &&
+      request.renderEpoch === this._renderEpoch &&
+      data.renderEpoch === this._renderEpoch &&
+      request.index >= currentIndex
+    ) {
+      const previous = this._preparedFrames.get(request.index)
+      previous?.bitmap.close()
+      this._preparedFrames.set(request.index, {
+        width: data.width ?? this._canvasctrl.width,
+        height: data.height ?? this._canvasctrl.height,
+        bitmap: data.bitmap
+      })
+    } else {
+      data.bitmap?.close()
+      this._prepareForce = true
+    }
+
+    this._finishWorkerSlot()
+  }
+
+  private _presentPreparedFrame(frame: PreparedFrame): void {
+    const { bitmap, width, height } = frame
+    try {
+      if (this._gpuRenderer) {
+        this._gpuRenderer.renderBitmaps([{ image: bitmap, x: 0, y: 0 }], width, height)
+        return
+      }
+
+      if (this._ctx) {
+        this._ctx.clearRect(0, 0, width, height)
+        this._ctx.drawImage(bitmap, 0, 0)
+        return
+      }
+
+      this._postWorkerMessage('presentFrame', { bitmap }, [bitmap])
+    } finally {
+      if (this._ctx || this._gpuRenderer) bitmap.close()
+    }
   }
 
   private _bumpRenderEpoch(): void {
     this._renderEpoch++
     this._pendingDemandTimes.length = 0
     this._demandTimings.clear()
+    this._clearPreparedFrames()
+    this._prepareForce = true
   }
 
   private _sendMutatingMessage(target: string, data: Record<string, any> = {}, transferable?: Transferable[]): void {
@@ -1138,7 +1306,25 @@ export default class AkariSub extends EventTarget {
       expectedDisplayTime: isPaused ? undefined : expectedDisplayTime
     }
 
-    this._requestDemandRender(demandData)
+    let presented = false
+    if (!isPaused && this._frameTimeline && this.framePrefetch > 0) {
+      const frameIndex = nearestFrameIndex(this._frameTimeline, metadata.mediaTime)
+      const prepared = this._preparedFrames.get(frameIndex)
+      if (prepared) {
+        this._preparedFrames.delete(frameIndex)
+        if (prepared.width === this._canvasctrl.width && prepared.height === this._canvasctrl.height) {
+          this._presentPreparedFrame(prepared)
+          presented = true
+        } else {
+          prepared.bitmap.close()
+          this._prepareForce = true
+        }
+      }
+      this._primePreparedFrames(metadata.mediaTime)
+    }
+
+    if (!presented) this._requestDemandRender(demandData)
+    this._dispatchNextPreparation()
     this._scheduleRVFC(this._video)
   }
 
@@ -1173,13 +1359,17 @@ export default class AkariSub extends EventTarget {
       this._adaptiveTiming && !isPaused
         ? presentationLeadSeconds(dispatchedAt, metadata.expectedDisplayTime, this._timingCompensationSeconds)
         : 0
-    const renderTime = compensatedMediaTime(
+    const predictedRenderTime = compensatedMediaTime(
       metadata.mediaTime,
       this._videoPlaybackRateForWorker(),
       this.renderAhead,
       adaptiveLead,
       isPaused
     )
+    const renderTime =
+      !isPaused && this._frameTimeline
+        ? snapToFrameTimeline(this._frameTimeline, predictedRenderTime)
+        : predictedRenderTime
 
     const requestId = this._nextDemandId++
     if (this._adaptiveTiming && !isPaused) {
@@ -1602,6 +1792,8 @@ export default class AkariSub extends EventTarget {
     const error = err ? this._error(err) : undefined
 
     if (this._destroyed) return error
+
+    this._clearPreparedFrames()
 
     if (this._video && this._canvasParent) {
       this._video.parentNode?.removeChild(this._canvasParent)

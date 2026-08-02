@@ -47,6 +47,53 @@ export const presentationLeadSeconds = (
   return Math.max(0, (dispatchedAtMs - expectedDisplayTimeMs!) / 1000 + safePipelineSeconds)
 }
 
+/** Copy, validate, sort, and de-duplicate media presentation timestamps. */
+export const normalizeFrameTimeline = (frameTimes: ArrayLike<number>): Float64Array => {
+  const times: number[] = []
+  for (let i = 0; i < frameTimes.length; i++) {
+    const time = Number(frameTimes[i])
+    if (Number.isFinite(time) && time >= 0) times.push(time)
+  }
+  times.sort((a, b) => a - b)
+
+  let write = 0
+  for (let read = 0; read < times.length; read++) {
+    if (write === 0 || times[read] > times[write - 1]) {
+      times[write++] = times[read]
+    }
+  }
+  times.length = write
+  return Float64Array.from(times)
+}
+
+/** Find the first encoded video frame at or after a media timestamp. */
+export const frameIndexAtOrAfter = (frameTimes: ArrayLike<number>, mediaTime: number): number => {
+  if (frameTimes.length === 0 || !Number.isFinite(mediaTime)) return -1
+
+  let low = 0
+  let high = frameTimes.length
+  while (low < high) {
+    const middle = low + ((high - low) >> 1)
+    if (frameTimes[middle] < mediaTime) low = middle + 1
+    else high = middle
+  }
+  return low < frameTimes.length ? low : frameTimes.length - 1
+}
+
+/** Find the encoded frame timestamp closest to a browser media timestamp. */
+export const nearestFrameIndex = (frameTimes: ArrayLike<number>, mediaTime: number): number => {
+  const next = frameIndexAtOrAfter(frameTimes, mediaTime)
+  if (next <= 0) return next
+  const previous = next - 1
+  return mediaTime - frameTimes[previous] <= frameTimes[next] - mediaTime ? previous : next
+}
+
+/** Snap a prediction to an actual encoded-frame timestamp. */
+export const snapToFrameTimeline = (frameTimes: ArrayLike<number>, mediaTime: number): number => {
+  const index = frameIndexAtOrAfter(frameTimes, mediaTime)
+  return index >= 0 ? frameTimes[index] : mediaTime
+}
+
 /** Return the subtitle media time expected to be visible when painting completes. */
 export const compensatedMediaTime = (
   mediaTime: number,
