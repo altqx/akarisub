@@ -61,6 +61,7 @@ const nowMs = (): number => (typeof performance !== 'undefined' ? performance.no
 let lastCurrentTimeReceivedAt = nowMs()
 let targetFps = 24
 let onDemandRenderMode = false
+let frameTimelineMode = false
 let adaptiveTiming = true
 let configuredRenderAheadSeconds = 0
 let fallbackTimingCompensationSeconds = 0
@@ -83,6 +84,7 @@ interface QueuedRender {
   force: 0 | 1
   requestId?: number
   renderEpoch?: number
+  prepareId?: number
 }
 
 const MAX_QUEUED_RENDERS = 3
@@ -130,6 +132,10 @@ let offscreenRender: boolean | 'hybrid' = false
 let rawAssWebGL2Renderer: RawASSImageWebGL2Renderer | null = null
 let bufferCanvas: OffscreenCanvas | null = null
 let bufferCtx: OffscreenCanvasRenderingContext2D | null = null
+let preparedCanvas: OffscreenCanvas | null = null
+let preparedCtx: OffscreenCanvasRenderingContext2D | null = null
+let preparedBufferCanvas: OffscreenCanvas | null = null
+let preparedBufferCtx: OffscreenCanvasRenderingContext2D | null = null
 let akariSubHandle = 0
 let subtitleColorSpace: SubtitleColorSpace = null
 let dropAllBlur = false
@@ -805,7 +811,15 @@ const stopWarmup = (): void => {
 }
 
 const scheduleFullTrackWarmup = (): void => {
-  if (!fullTrackWarmupEnabled || fullTrackWarmupStarted || fullTrackWarmupPromise || !akariSubHandle) return
+  if (
+    frameTimelineMode ||
+    !fullTrackWarmupEnabled ||
+    fullTrackWarmupStarted ||
+    fullTrackWarmupPromise ||
+    !akariSubHandle
+  ) {
+    return
+  }
   fullTrackWarmupStarted = true
   const generation = trackGeneration
   fullTrackWarmupGeneration = generation
@@ -1561,7 +1575,7 @@ const flushQueuedRender = (): void => {
 
   const next = queuedRenders.shift()
   if (!next) return
-  render(next.time, next.force, next.requestId, next.renderEpoch)
+  render(next.time, next.force, next.requestId, next.renderEpoch, next.prepareId)
 }
 
 const completeRenderCycle = (painted: boolean = false): void => {
@@ -1579,9 +1593,15 @@ const completeRenderCycle = (painted: boolean = false): void => {
   if (!hadQueuedRender && !renderInFlight) scheduleFullTrackWarmup()
 }
 
-const render = (time: number, force?: boolean | number, requestId?: number, renderEpoch?: number): void => {
+const render = (
+  time: number,
+  force?: boolean | number,
+  requestId?: number,
+  renderEpoch?: number,
+  prepareId?: number
+): void => {
   if (renderInFlight) {
-    const queuedItem: QueuedRender = { time, force: force ? 1 : 0, requestId, renderEpoch }
+    const queuedItem: QueuedRender = { time, force: force ? 1 : 0, requestId, renderEpoch, prepareId }
 
     if (queuedItem.force) {
       queuedRenders.length = 0
@@ -1612,7 +1632,8 @@ const render = (time: number, force?: boolean | number, requestId?: number, rend
     self.height === lastRenderedRequestHeight
   ) {
     metrics.cacheHits++
-    postMessage({ target: 'unbusy', requestId, renderEpoch })
+    if (prepareId == null) postMessage({ target: 'unbusy', requestId, renderEpoch })
+    else postPreparedSnapshot(prepareId, renderEpoch, time)
     return
   }
 
@@ -1623,7 +1644,8 @@ const render = (time: number, force?: boolean | number, requestId?: number, rend
   // Inside a known-empty window the output cannot change: skip the WASM call
   if (!force && emptyWindowFrom >= 0 && time >= emptyWindowFrom && time < emptyWindowUntil) {
     metrics.cacheHits++
-    postMessage({ target: 'unbusy', requestId, renderEpoch })
+    if (prepareId == null) postMessage({ target: 'unbusy', requestId, renderEpoch })
+    else postPreparedSnapshot(prepareId, renderEpoch, time)
     return
   }
 
@@ -1640,7 +1662,7 @@ const render = (time: number, force?: boolean | number, requestId?: number, rend
   const forceInt = force ? 1 : 0
 
   // Use the batch render-collect API: single WASM call does render + metadata + image data extraction.
-  const useRawAssImagePath = !!rawAssWebGL2Renderer && offscreenRender === true
+  const useRawAssImagePath = prepareId == null && !!rawAssWebGL2Renderer && offscreenRender === true
   const imageStride = useRawAssImagePath ? RAW_RRC_IMG_STRIDE : RRC_IMG_STRIDE
   ensureRenderCollectBuffer(RENDER_COLLECT_MAX_IMAGES, imageStride)
 
@@ -1706,7 +1728,7 @@ const render = (time: number, force?: boolean | number, requestId?: number, rend
       return paintRawAssImages({ meta, count: written, times, requestId, renderEpoch })
     }
 
-    if (written === 0) return paintImages({ images, buffers, times, requestId, renderEpoch })
+    if (written === 0) return paintImages({ images, buffers, times, requestId, renderEpoch, prepareId, time })
 
     const useAsyncBitmapPath = asyncRender
 
@@ -1746,7 +1768,7 @@ const render = (time: number, force?: boolean | number, requestId?: number, rend
             images[i].image = bitmaps[i]
           }
           if (debug) times.JSBitmapGenerationTime = Date.now() - (times.JSRenderTime || 0)
-          paintImages({ images, buffers: bitmaps, times, requestId, renderEpoch })
+          paintImages({ images, buffers: bitmaps, times, requestId, renderEpoch, prepareId, time })
         })
         .catch(() => {
           if (asyncRenderOptions) {
@@ -1754,11 +1776,15 @@ const render = (time: number, force?: boolean | number, requestId?: number, rend
             console.warn('[AkariSub] createImageBitmap options not supported, disabling')
             metrics.pendingRenders--
             completeRenderCycle()
-            render(time, force, requestId, renderEpoch)
+            render(time, force, requestId, renderEpoch, prepareId)
           } else {
             metrics.pendingRenders--
-            postMessage({ target: 'unbusy', requestId, renderEpoch })
-            completeRenderCycle()
+            if (prepareId == null) {
+              postMessage({ target: 'unbusy', requestId, renderEpoch })
+              completeRenderCycle()
+            } else {
+              void postPreparedSnapshot(prepareId, renderEpoch, time).finally(() => completeRenderCycle())
+            }
           }
         })
     } else {
@@ -1795,12 +1821,16 @@ const render = (time: number, force?: boolean | number, requestId?: number, rend
         }
         images[i] = item
       }
-      paintImages({ images, buffers, times, requestId, renderEpoch })
+      paintImages({ images, buffers, times, requestId, renderEpoch, prepareId, time })
     }
   } else {
     metrics.pendingRenders--
-    postMessage({ target: 'unbusy', requestId, renderEpoch })
-    completeRenderCycle()
+    if (prepareId == null) {
+      postMessage({ target: 'unbusy', requestId, renderEpoch })
+      completeRenderCycle()
+    } else {
+      void postPreparedSnapshot(prepareId, renderEpoch, time).finally(() => completeRenderCycle())
+    }
   }
 }
 
@@ -1819,6 +1849,20 @@ self.demand = ({
   lastCurrentTimeReceivedAt = nowMs()
   const force = demandForce ? 1 : consumeNextRenderForce()
   render(time, force, requestId, renderEpoch)
+}
+
+self.prepare = ({
+  time,
+  prepareId,
+  renderEpoch,
+  force
+}: {
+  time: number
+  prepareId: number
+  renderEpoch: number
+  force?: boolean
+}): void => {
+  render(time, force ? 1 : 0, undefined, renderEpoch, prepareId)
 }
 
 const renderLoop = (force?: boolean | number): void => {
@@ -1867,20 +1911,114 @@ const paintRawAssImages = ({
   completeRenderCycle(painted)
 }
 
+const ensurePreparedCanvas = (): OffscreenCanvasRenderingContext2D => {
+  const width = self.width
+  const height = self.height
+  if (!preparedCanvas) preparedCanvas = new OffscreenCanvas(width, height)
+  if (preparedCanvas.width !== width || preparedCanvas.height !== height) {
+    preparedCanvas.width = width
+    preparedCanvas.height = height
+    preparedCtx = null
+  }
+  preparedCtx ??= preparedCanvas.getContext('2d', { desynchronized: true })
+  if (!preparedCtx) throw new Error('Prepared-frame canvas is unavailable')
+  return preparedCtx
+}
+
+const postPreparedSnapshot = async (
+  prepareId: number,
+  renderEpoch: number | undefined,
+  time: number
+): Promise<void> => {
+  try {
+    const context = ensurePreparedCanvas()
+    // createImageBitmap copies the snapshot. transferToImageBitmap would reset
+    // the backing canvas, making the next libass "unchanged" frame transparent.
+    const bitmap = await createImageBitmap(context.canvas)
+    postMessage(
+      { target: 'preparedFrame', prepareId, renderEpoch, time, width: self.width, height: self.height, bitmap },
+      [bitmap]
+    )
+  } catch (error) {
+    if (debug) console.warn('[AkariSub] Failed to copy prepared exact frame:', error)
+    postMessage({ target: 'preparedFrame', prepareId, renderEpoch, time })
+  }
+}
+
+const paintPreparedImages = (
+  images: RenderResultItem[],
+  prepareId: number,
+  renderEpoch: number | undefined,
+  time: number
+): void => {
+  const width = self.width
+  const height = self.height
+
+  try {
+    preparedCtx = ensurePreparedCanvas()
+
+    preparedCtx.clearRect(0, 0, width, height)
+    for (const image of images) {
+      if (!image.image) continue
+
+      if (image.image instanceof ImageBitmap) {
+        preparedCtx.drawImage(image.image, image.x, image.y)
+        image.image.close()
+        continue
+      }
+
+      if (!preparedBufferCanvas) preparedBufferCanvas = new OffscreenCanvas(image.w, image.h)
+      if (preparedBufferCanvas.width !== image.w || preparedBufferCanvas.height !== image.h) {
+        preparedBufferCanvas.width = image.w
+        preparedBufferCanvas.height = image.h
+        preparedBufferCtx = null
+      }
+      preparedBufferCtx ??= preparedBufferCanvas.getContext('2d', { desynchronized: true })
+      if (!preparedBufferCtx) throw new Error('Prepared-frame buffer canvas is unavailable')
+
+      const byteLength = image.w * image.h * 4
+      const pixels =
+        image.image instanceof Uint8ClampedArray
+          ? image.image
+          : self.HEAPU8C.subarray(image.image as number, (image.image as number) + byteLength)
+      preparedBufferCtx.putImageData(new ImageData(pixels as Uint8ClampedArray<ArrayBuffer>, image.w, image.h), 0, 0)
+      preparedCtx.drawImage(preparedBufferCanvas, image.x, image.y)
+    }
+
+    void postPreparedSnapshot(prepareId, renderEpoch, time).finally(() => completeRenderCycle())
+  } catch (error) {
+    for (const image of images) {
+      if (image.image instanceof ImageBitmap) image.image.close()
+    }
+    if (debug) console.warn('[AkariSub] Failed to prepare exact frame:', error)
+    postMessage({ target: 'preparedFrame', prepareId, renderEpoch, time, unchanged: true })
+    completeRenderCycle()
+  }
+}
+
 const paintImages = ({
   times,
   images,
   buffers,
   requestId,
-  renderEpoch
+  renderEpoch,
+  prepareId,
+  time
 }: {
   times: RenderTimes
   images: RenderResultItem[]
   buffers: (ArrayBuffer | ImageBitmap)[]
   requestId?: number
   renderEpoch?: number
+  prepareId?: number
+  time?: number
 }): void => {
   metrics.pendingRenders--
+
+  if (prepareId != null) {
+    paintPreparedImages(images, prepareId, renderEpoch, time ?? 0)
+    return
+  }
 
   const width = self.width
   const height = self.height
@@ -2008,6 +2146,7 @@ const cancelAnimationFrame = self.cancelAnimationFrame ? self.cancelAnimationFra
 self.init = async (data: any): Promise<void> => {
   hasBitmapBug = data.hasBitmapBug
   fullTrackWarmupEnabled = !!data.fullTrackWarmup
+  frameTimelineMode = !!data.frameTimelineMode
   adaptiveTiming = data.adaptiveTiming ?? true
   configuredRenderAheadSeconds = Number.isFinite(data.renderAhead) ? data.renderAhead : 0
   _isPaused = data.initialIsPaused ?? true
@@ -2452,6 +2591,21 @@ self.detachOffscreen = (): void => {
   offscreenRender = 'hybrid'
 }
 
+self.presentFrame = ({ bitmap }: { bitmap: ImageBitmap }): void => {
+  try {
+    if (!offCanvasCtx || !offCanvas) return
+    offCanvasCtx.clearRect(0, 0, offCanvas.width, offCanvas.height)
+    offCanvasCtx.drawImage(bitmap, 0, 0)
+  } finally {
+    bitmap.close()
+  }
+}
+
+self.frameTimelineMode = ({ enabled }: { enabled: boolean }): void => {
+  frameTimelineMode = enabled
+  if (enabled) stopWarmup()
+}
+
 self.canvas = ({
   width,
   height,
@@ -2496,6 +2650,10 @@ self.destroy = (): void => {
 
   rawAssWebGL2Renderer?.destroy()
   rawAssWebGL2Renderer = null
+  preparedCanvas = null
+  preparedCtx = null
+  preparedBufferCanvas = null
+  preparedBufferCtx = null
 
   if (_Module) {
     if (rrcBufPtr) {
@@ -2759,6 +2917,9 @@ self.getStyleCount = (): void => {
 
 const RENDER_SAFE_TARGETS = new Set([
   'demand',
+  'prepare',
+  'presentFrame',
+  'frameTimelineMode',
   'video',
   'getEvents',
   'getStyles',

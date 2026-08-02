@@ -158,6 +158,10 @@ export interface AkariSubOptions {
   onDemandRender?: boolean
   /** Compensate measured render/presentation latency while playing (default: true) */
   adaptiveTiming?: boolean
+  /** Encoded video-frame media timestamps in seconds for exact libass frame sampling */
+  frameTimeline?: ArrayLike<number>
+  /** Number of exact subtitle frames to prepare ahead (default: 2) */
+  framePrefetch?: number
   /** Target FPS when not using onDemandRender (default: 24) */
   targetFps?: number
   /** Time offset in seconds (default: 0) */
@@ -336,6 +340,7 @@ export interface WorkerInitMessage {
   targetFps: number
   renderAhead: number
   adaptiveTiming: boolean
+  frameTimelineMode: boolean
   dropAllAnimations?: boolean
   dropAllBlur?: boolean
   clampPos?: boolean
@@ -365,6 +370,9 @@ export type WorkerInboundMessage =
   | { target: 'setTrackByUrl'; url: string }
   | { target: 'freeTrack' }
   | { target: 'demand'; time: number; force?: boolean; requestId?: number; renderEpoch?: number }
+  | { target: 'prepare'; time: number; prepareId: number; renderEpoch: number; force?: boolean }
+  | { target: 'presentFrame'; bitmap: ImageBitmap }
+  | { target: 'frameTimelineMode'; enabled: boolean }
   | { target: 'destroy' }
   | { target: 'addFont'; font: string | Uint8Array }
   | { target: 'defaultFont'; font: string }

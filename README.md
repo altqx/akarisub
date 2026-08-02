@@ -100,6 +100,24 @@ AkariSub sends libass an integer millisecond timestamp. Fractional media times a
 
 By default, `adaptiveTiming` predicts the media time at which a completed canvas paint will become visible, compensating bounded rendering and delivery latency. Pause and seek frames always use the exact media timestamp. Set `adaptiveTiming: false` when deterministic frame sampling is more important than compensating live presentation latency.
 
+For frame-locked VOD playback, provide the encoded video's presentation timestamps in seconds. AkariSub prepares a small window of full subtitle bitmaps and commits the matching bitmap inside `requestVideoFrameCallback`, which keeps fast `\t` and `\move` animation sampling aligned with libass:
+
+```js
+const frameTimeline = new Float64Array([0, 0.041708, 0.083417])
+const renderer = new AkariSub({
+  video,
+  subContent,
+  frameTimeline,
+  framePrefetch: 2
+})
+
+// Timelines can also arrive after renderer construction.
+renderer.setFrameTimeline(frameTimeline)
+renderer.setFrameTimeline(null) // return to adaptive continuous-time rendering
+```
+
+Use timestamps from the encoded rendition the browser plays, normalized so its first displayed video frame is `0`. Passing a timeline remains optional; cache misses and unsupported paths automatically use normal adaptive rendering.
+
 ## Changing subtitles
 
 You're not limited to only display the subtitle file you referenced in your options. You're able to dynamically change subtitles on the fly. There's four methods that you can use for this specifically:
@@ -215,6 +233,8 @@ The default options are best, and automatically fallback to the next fastest opt
 | `offscreenRender`     | boolean                              | `true`                                   | Render fully on the worker, greatly reduces CPU usage                                                                                                      |
 | `onDemandRender`      | boolean                              | `true`                                   | Render subtitles as the video player renders frames                                                                                                        |
 | `adaptiveTiming`      | boolean                              | `true`                                   | Compensate measured queue, worker, bitmap, IPC, and paint latency while video is playing; pause and seek renders remain frame-exact                        |
+| `frameTimeline`       | ArrayLike\<number\>                  | -                                        | Encoded video-frame presentation timestamps in seconds; enables frame-locked libass sampling                                                               |
+| `framePrefetch`       | number                               | `2`                                      | Number of exact subtitle-frame bitmaps to prepare ahead (`0` disables preparation, maximum `4`)                                                            |
 | `targetFps`           | number                               | `24`                                     | Target FPS when not using onDemandRender                                                                                                                   |
 | `timeOffset`          | number                               | `0`                                      | Subtitle time offset in seconds                                                                                                                            |
 | `debug`               | boolean                              | `false`                                  | Enable debug logging                                                                                                                                       |
@@ -252,11 +272,12 @@ The default options are best, and automatically fallback to the next fastest opt
 
 ### Playback Control
 
-| Method                                           | Parameters                                                | Description                               |
-| ------------------------------------------------ | --------------------------------------------------------- | ----------------------------------------- |
-| `setIsPaused(isPaused)`                          | `isPaused: boolean`                                       | Set playback pause state                  |
-| `setRate(rate)`                                  | `rate: number`                                            | Set playback rate (speed multiplier)      |
-| `setCurrentTime(isPaused?, currentTime?, rate?)` | `isPaused?: boolean, currentTime?: number, rate?: number` | Set current time, playback state and rate |
+| Method                                           | Parameters                                                | Description                                   |
+| ------------------------------------------------ | --------------------------------------------------------- | --------------------------------------------- |
+| `setIsPaused(isPaused)`                          | `isPaused: boolean`                                       | Set playback pause state                      |
+| `setRate(rate)`                                  | `rate: number`                                            | Set playback rate (speed multiplier)          |
+| `setCurrentTime(isPaused?, currentTime?, rate?)` | `isPaused?: boolean, currentTime?: number, rate?: number` | Set current time, playback state and rate     |
+| `setFrameTimeline(frameTimes)`                   | `ArrayLike<number> \| null`                               | Replace or disable the encoded-frame timeline |
 
 ### Video & Canvas
 
@@ -320,6 +341,7 @@ The default options are best, and automatically fallback to the next fastest opt
 | `maxRenderHeight`     | number                                   | Maximum render height                                         |
 | `timeOffset`          | number                                   | Subtitle time offset in seconds                               |
 | `renderAhead`         | number                                   | Optional extra seconds to render ahead of the video clock     |
+| `framePrefetch`       | number                                   | Number of exact subtitle frames prepared ahead                |
 | `busy`                | boolean                                  | Whether the renderer is currently busy                        |
 | `rendererType`        | `'webgpu'` \| `'webgl2'` \| `'canvas2d'` | Active renderer backend (read-only)                           |
 | `isUsingGPURenderer`  | boolean                                  | Whether a hardware-accelerated renderer is active (read-only) |
