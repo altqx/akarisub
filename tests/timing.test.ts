@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test'
+import AkariSub from '../src/ts/akarisub'
 import {
   compensatedMediaTime,
   frameIndexAtOrAfter,
@@ -72,5 +73,44 @@ describe('subtitle timing compensation', () => {
     expect(resolvePresentationMediaTime(4.375, 2.875, true)).toBe(2.875)
     expect(resolvePresentationMediaTime(4.375, 2.875, false)).toBe(4.375)
     expect(resolvePresentationMediaTime(4.375, Number.NaN, true)).toBe(4.375)
+  })
+
+  test('does not invalidate an in-flight paint for an RVFC that is only queued', () => {
+    const renderer = Object.create(AkariSub.prototype) as any
+    const demands: Array<{ presentationId: number }> = []
+    const workerMessages: Array<{ target: string; presentationId: number }> = []
+
+    Object.assign(renderer, {
+      _destroyed: false,
+      _nextPresentationId: 1,
+      _latestPresentationId: 0,
+      _workerReady: true,
+      _frameTimeline: new Float64Array([0, 1, 2]),
+      _video: { paused: false, ended: false, currentTime: 1, playbackRate: 1 },
+      _playstate: false,
+      framePrefetch: 0,
+      _requestDemandRender: (demand: { presentationId: number }) => demands.push(demand),
+      _dispatchNextPreparation: () => {},
+      _scheduleRVFC: () => {},
+      _postWorkerMessage: (target: string, data: { presentationId: number }) =>
+        workerMessages.push({ target, presentationId: data.presentationId })
+    })
+
+    renderer._handleRVFC(100, {
+      mediaTime: 4.5,
+      expectedDisplayTime: 100,
+      presentationTime: 100,
+      width: 1920,
+      height: 1080
+    })
+
+    expect(demands).toHaveLength(1)
+    expect(demands[0].presentationId).toBe(1)
+    expect(renderer._latestPresentationId).toBe(0)
+    expect(workerMessages).toEqual([])
+
+    renderer._activatePresentation(demands[0].presentationId)
+    expect(renderer._latestPresentationId).toBe(1)
+    expect(workerMessages).toEqual([{ target: 'presentation', presentationId: 1 }])
   })
 })

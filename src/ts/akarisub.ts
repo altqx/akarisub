@@ -1103,7 +1103,7 @@ export default class AkariSub extends EventTarget {
 
   private _presentPreparedFrame(frame: PreparedFrame, presentationId: number): void {
     const { bitmap, width, height } = frame
-    if (isStalePresentation(presentationId, this._latestPresentationId)) {
+    if (!this._activatePresentation(presentationId)) {
       bitmap.close()
       return
     }
@@ -1124,6 +1124,19 @@ export default class AkariSub extends EventTarget {
     } finally {
       if (this._ctx || this._gpuRenderer) bitmap.close()
     }
+  }
+
+  /**
+   * Mark a frame as the newest one that has actually entered the presentation
+   * pipeline. RVFC callbacks can arrive faster than libass can render. Advancing
+   * this watermark when a callback is merely queued would continuously discard
+   * the in-flight render and leave an older subtitle stuck on the canvas.
+   */
+  private _activatePresentation(presentationId: number): boolean {
+    if (isStalePresentation(presentationId, this._latestPresentationId)) return false
+    this._latestPresentationId = presentationId
+    if (this._workerReady) this._postWorkerMessage('presentation', { presentationId })
+    return true
   }
 
   private _bumpRenderEpoch(): void {
@@ -1254,8 +1267,10 @@ export default class AkariSub extends EventTarget {
     if (shouldRenderExactFrame) {
       this._bumpRenderEpoch()
       const presentationId = this._nextPresentationId++
-      this._latestPresentationId = presentationId
-      if (this._workerReady) this._postWorkerMessage('presentation', { presentationId })
+      // A paused/seeking frame must supersede any speculative active-playback
+      // render immediately. Unlike an RVFC queued behind a busy worker, this is
+      // a terminal clock state and no newer callback may arrive to correct it.
+      this._activatePresentation(presentationId)
       this._requestDemandRender({
         mediaTime: currentTime - this.timeOffset,
         width: this._video.videoWidth || this._videoWidth || 0,
@@ -1303,8 +1318,6 @@ export default class AkariSub extends EventTarget {
     if (this._destroyed) return
 
     const presentationId = this._nextPresentationId++
-    this._latestPresentationId = presentationId
-    if (this._workerReady) this._postWorkerMessage('presentation', { presentationId })
 
     // RVFC metadata.mediaTime is the frame timestamp supplied by the browser.
     // Keep it unmodified while a demand is queued. Its presentation timestamp
@@ -1396,7 +1409,10 @@ export default class AkariSub extends EventTarget {
     const renderTime = selectRenderMediaTime(this._frameTimeline, metadata.mediaTime, predictedRenderTime, isPaused)
 
     const presentationId = metadata.presentationId ?? this._nextPresentationId++
-    this._latestPresentationId = Math.max(this._latestPresentationId, presentationId)
+    // Activate only when this demand is dispatched. If it sat in the busy
+    // queue, invalidating the render already in flight would create starvation
+    // on animation-heavy tracks and could leave the previous cue visible.
+    this._activatePresentation(presentationId)
 
     const requestId = this._nextDemandId++
     if (this._adaptiveTiming && !isPaused) {
