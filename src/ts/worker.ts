@@ -18,7 +18,7 @@ import type {
   WorkerInboundMessage
 } from './types'
 import { parseAss, dropBlur, fixPlayRes, libassYCbCrMap } from './utils'
-import { compensatedMediaTime, updateTimingCompensation } from './timing'
+import { compensatedMediaTime, isStalePresentation, updateTimingCompensation } from './timing'
 
 // =============================================================================
 // Worker State
@@ -79,12 +79,14 @@ const pendingFontFamilies = new Set<string>()
 let debug = false
 let clampPos = false
 let renderInFlight = false
+let latestPresentationId = 0
 interface QueuedRender {
   time: number
   force: 0 | 1
   requestId?: number
   renderEpoch?: number
   prepareId?: number
+  presentationId?: number
 }
 
 const MAX_QUEUED_RENDERS = 3
@@ -1575,7 +1577,7 @@ const flushQueuedRender = (): void => {
 
   const next = queuedRenders.shift()
   if (!next) return
-  render(next.time, next.force, next.requestId, next.renderEpoch, next.prepareId)
+  render(next.time, next.force, next.requestId, next.renderEpoch, next.prepareId, next.presentationId)
 }
 
 const completeRenderCycle = (painted: boolean = false): void => {
@@ -1598,10 +1600,11 @@ const render = (
   force?: boolean | number,
   requestId?: number,
   renderEpoch?: number,
-  prepareId?: number
+  prepareId?: number,
+  presentationId?: number
 ): void => {
   if (renderInFlight) {
-    const queuedItem: QueuedRender = { time, force: force ? 1 : 0, requestId, renderEpoch, prepareId }
+    const queuedItem: QueuedRender = { time, force: force ? 1 : 0, requestId, renderEpoch, prepareId, presentationId }
 
     if (queuedItem.force) {
       queuedRenders.length = 0
@@ -1725,10 +1728,12 @@ const render = (
     }
 
     if (useRawAssImagePath) {
-      return paintRawAssImages({ meta, count: written, times, requestId, renderEpoch })
+      return paintRawAssImages({ meta, count: written, times, requestId, renderEpoch, presentationId })
     }
 
-    if (written === 0) return paintImages({ images, buffers, times, requestId, renderEpoch, prepareId, time })
+    if (written === 0) {
+      return paintImages({ images, buffers, times, requestId, renderEpoch, prepareId, time, presentationId })
+    }
 
     const useAsyncBitmapPath = asyncRender
 
@@ -1768,7 +1773,7 @@ const render = (
             images[i].image = bitmaps[i]
           }
           if (debug) times.JSBitmapGenerationTime = Date.now() - (times.JSRenderTime || 0)
-          paintImages({ images, buffers: bitmaps, times, requestId, renderEpoch, prepareId, time })
+          paintImages({ images, buffers: bitmaps, times, requestId, renderEpoch, prepareId, time, presentationId })
         })
         .catch(() => {
           if (asyncRenderOptions) {
@@ -1776,7 +1781,7 @@ const render = (
             console.warn('[AkariSub] createImageBitmap options not supported, disabling')
             metrics.pendingRenders--
             completeRenderCycle()
-            render(time, force, requestId, renderEpoch, prepareId)
+            render(time, force, requestId, renderEpoch, prepareId, presentationId)
           } else {
             metrics.pendingRenders--
             if (prepareId == null) {
@@ -1821,7 +1826,7 @@ const render = (
         }
         images[i] = item
       }
-      paintImages({ images, buffers, times, requestId, renderEpoch, prepareId, time })
+      paintImages({ images, buffers, times, requestId, renderEpoch, prepareId, time, presentationId })
     }
   } else {
     metrics.pendingRenders--
@@ -1838,17 +1843,20 @@ self.demand = ({
   time,
   force: demandForce,
   requestId,
-  renderEpoch
+  renderEpoch,
+  presentationId
 }: {
   time: number
   force?: boolean
   requestId?: number
   renderEpoch?: number
+  presentationId?: number
 }): void => {
   lastCurrentTime = time
   lastCurrentTimeReceivedAt = nowMs()
+  if (presentationId != null) latestPresentationId = Math.max(latestPresentationId, presentationId)
   const force = demandForce ? 1 : consumeNextRenderForce()
-  render(time, force, requestId, renderEpoch)
+  render(time, force, requestId, renderEpoch, undefined, presentationId)
 }
 
 self.prepare = ({
@@ -1878,15 +1886,22 @@ const paintRawAssImages = ({
   meta,
   count,
   requestId,
-  renderEpoch
+  renderEpoch,
+  presentationId
 }: {
   times: RenderTimes
   meta: Int32Array
   count: number
   requestId?: number
   renderEpoch?: number
+  presentationId?: number
 }): void => {
   metrics.pendingRenders--
+  if (isStalePresentation(presentationId, latestPresentationId)) {
+    postMessage({ target: 'unbusy', requestId, renderEpoch, presentationId, painted: false })
+    completeRenderCycle()
+    return
+  }
   const width = self.width
   const height = self.height
   const renderStart = performance.now()
@@ -1907,7 +1922,7 @@ const paintRawAssImages = ({
     painted = false
     console.error('[AkariSub] Raw ASS_Image WebGL2 render failed:', error)
   }
-  postMessage({ target: 'unbusy', requestId, renderEpoch, painted })
+  postMessage({ target: 'unbusy', requestId, renderEpoch, presentationId, painted })
   completeRenderCycle(painted)
 }
 
@@ -2003,7 +2018,8 @@ const paintImages = ({
   requestId,
   renderEpoch,
   prepareId,
-  time
+  time,
+  presentationId
 }: {
   times: RenderTimes
   images: RenderResultItem[]
@@ -2012,11 +2028,21 @@ const paintImages = ({
   renderEpoch?: number
   prepareId?: number
   time?: number
+  presentationId?: number
 }): void => {
   metrics.pendingRenders--
 
   if (prepareId != null) {
     paintPreparedImages(images, prepareId, renderEpoch, time ?? 0)
+    return
+  }
+
+  if (isStalePresentation(presentationId, latestPresentationId)) {
+    for (const image of images) {
+      if (image.image instanceof ImageBitmap) image.image.close()
+    }
+    postMessage({ target: 'unbusy', requestId, renderEpoch, presentationId, painted: false })
+    completeRenderCycle()
     return
   }
 
@@ -2033,7 +2059,8 @@ const paintImages = ({
     height,
     colorSpace: subtitleColorSpace,
     requestId,
-    renderEpoch
+    renderEpoch,
+    presentationId
   }
 
   if (offscreenRender) {
@@ -2591,13 +2618,21 @@ self.detachOffscreen = (): void => {
   offscreenRender = 'hybrid'
 }
 
-self.presentFrame = ({ bitmap }: { bitmap: ImageBitmap }): void => {
+self.presentFrame = ({ bitmap, presentationId }: { bitmap: ImageBitmap; presentationId: number }): void => {
   try {
+    if (isStalePresentation(presentationId, latestPresentationId)) return
+    latestPresentationId = Math.max(latestPresentationId, presentationId)
     if (!offCanvasCtx || !offCanvas) return
     offCanvasCtx.clearRect(0, 0, offCanvas.width, offCanvas.height)
     offCanvasCtx.drawImage(bitmap, 0, 0)
   } finally {
     bitmap.close()
+  }
+}
+
+self.presentation = ({ presentationId }: { presentationId: number }): void => {
+  if (Number.isSafeInteger(presentationId)) {
+    latestPresentationId = Math.max(latestPresentationId, presentationId)
   }
 }
 
@@ -2918,6 +2953,7 @@ self.getStyleCount = (): void => {
 const RENDER_SAFE_TARGETS = new Set([
   'demand',
   'prepare',
+  'presentation',
   'presentFrame',
   'frameTimelineMode',
   'video',

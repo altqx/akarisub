@@ -294,13 +294,14 @@ export interface RenderMessage {
   colorSpace: string | null
   requestId?: number
   renderEpoch?: number
+  presentationId?: number
 }
 
 /** Worker -> Main thread messages */
 export type WorkerOutboundMessage =
   | { target: 'ready' }
   | { target: 'trackReady' }
-  | { target: 'unbusy'; requestId?: number; renderEpoch?: number; painted?: boolean }
+  | { target: 'unbusy'; requestId?: number; renderEpoch?: number; presentationId?: number; painted?: boolean }
   | { target: 'console'; command: string; content: string }
   | { target: 'getLocalFont'; font: string }
   | { target: 'verifyColorSpace'; subtitleColorSpace: string | null }
@@ -369,9 +370,17 @@ export type WorkerInboundMessage =
   | { target: 'setEncryptedTrack'; content: EncryptedSubtitleContent }
   | { target: 'setTrackByUrl'; url: string }
   | { target: 'freeTrack' }
-  | { target: 'demand'; time: number; force?: boolean; requestId?: number; renderEpoch?: number }
+  | {
+      target: 'demand'
+      time: number
+      force?: boolean
+      requestId?: number
+      renderEpoch?: number
+      presentationId?: number
+    }
   | { target: 'prepare'; time: number; prepareId: number; renderEpoch: number; force?: boolean }
-  | { target: 'presentFrame'; bitmap: ImageBitmap }
+  | { target: 'presentation'; presentationId: number }
+  | { target: 'presentFrame'; bitmap: ImageBitmap; presentationId: number }
   | { target: 'frameTimelineMode'; enabled: boolean }
   | { target: 'destroy' }
   | { target: 'addFont'; font: string | Uint8Array }

@@ -5,6 +5,9 @@ import {
   nearestFrameIndex,
   normalizeFrameTimeline,
   presentationLeadSeconds,
+  presentedFrameIndex,
+  isStalePresentation,
+  selectRenderMediaTime,
   snapToFrameTimeline,
   updateTimingCompensation
 } from '../src/ts/timing'
@@ -48,5 +51,19 @@ describe('subtitle timing compensation', () => {
     expect(snapToFrameTimeline(timeline, 1)).toBeCloseTo(0.083417)
     expect(nearestFrameIndex(timeline, 0.039)).toBe(1)
     expect(nearestFrameIndex(timeline, 0.06)).toBe(1)
+    expect(presentedFrameIndex(timeline, 0.02)).toBe(0)
+    expect(presentedFrameIndex(timeline, 0.041707)).toBe(0)
+  })
+
+  test('does not extrapolate an exact timeline callback into future frames', () => {
+    const timeline = new Float64Array([0, 0.041708, 0.083417, 0.125125, 0.166833])
+    expect(selectRenderMediaTime(timeline, 0.041708, 0.166833, false)).toBeCloseTo(0.041708)
+    expect(selectRenderMediaTime(timeline, 0.041708, 0.166833, true)).toBeCloseTo(0.166833)
+  })
+
+  test('rejects only paints superseded by a newer presentation', () => {
+    expect(isStalePresentation(7, 8)).toBe(true)
+    expect(isStalePresentation(8, 8)).toBe(false)
+    expect(isStalePresentation(undefined, 8)).toBe(false)
   })
 })

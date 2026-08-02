@@ -28,10 +28,11 @@ import { WebGPURenderer, isWebGPUSupported } from './webgpu-renderer'
 import { WebGL2Renderer, isWebGL2Supported } from './webgl2-renderer'
 import {
   compensatedMediaTime,
-  nearestFrameIndex,
+  isStalePresentation,
   normalizeFrameTimeline,
+  presentedFrameIndex,
   presentationLeadSeconds,
-  snapToFrameTimeline,
+  selectRenderMediaTime,
   updateTimingCompensation
 } from './timing'
 
@@ -43,6 +44,7 @@ interface DemandMetadata {
   height: number
   expectedDisplayTime?: number
   force?: boolean
+  presentationId?: number
 }
 
 interface DemandTiming {
@@ -143,6 +145,8 @@ export default class AkariSub extends EventTarget {
   private _rvfcGeneration: number = 0
   private _renderEpoch: number = 0
   private _nextDemandId: number = 1
+  private _nextPresentationId: number = 1
+  private _latestPresentationId: number = 0
   private _nextFontRequestId: number = 1
   private readonly _isLikelyWebKit: boolean
 
@@ -1012,7 +1016,7 @@ export default class AkariSub extends EventTarget {
     const timeline = this._frameTimeline
     if (!timeline || timeline.length === 0 || this.framePrefetch <= 0 || this._destroyed) return
 
-    const currentIndex = nearestFrameIndex(timeline, mediaTime)
+    const currentIndex = presentedFrameIndex(timeline, mediaTime)
     const lastIndex = Math.min(timeline.length - 1, currentIndex + this.framePrefetch)
 
     for (const [index, frame] of this._preparedFrames) {
@@ -1071,7 +1075,7 @@ export default class AkariSub extends EventTarget {
     const request = this._prepareRequests.get(data.prepareId)
     this._prepareRequests.delete(data.prepareId)
     const currentIndex = this._frameTimeline
-      ? nearestFrameIndex(this._frameTimeline, this._video?.currentTime ?? data.time - this.timeOffset)
+      ? presentedFrameIndex(this._frameTimeline, this._video?.currentTime ?? data.time - this.timeOffset)
       : -1
 
     if (
@@ -1096,8 +1100,13 @@ export default class AkariSub extends EventTarget {
     this._finishWorkerSlot()
   }
 
-  private _presentPreparedFrame(frame: PreparedFrame): void {
+  private _presentPreparedFrame(frame: PreparedFrame, presentationId: number): void {
     const { bitmap, width, height } = frame
+    if (isStalePresentation(presentationId, this._latestPresentationId)) {
+      bitmap.close()
+      return
+    }
+
     try {
       if (this._gpuRenderer) {
         this._gpuRenderer.renderBitmaps([{ image: bitmap, x: 0, y: 0 }], width, height)
@@ -1110,7 +1119,7 @@ export default class AkariSub extends EventTarget {
         return
       }
 
-      this._postWorkerMessage('presentFrame', { bitmap }, [bitmap])
+      this._postWorkerMessage('presentFrame', { bitmap, presentationId }, [bitmap])
     } finally {
       if (this._ctx || this._gpuRenderer) bitmap.close()
     }
@@ -1243,11 +1252,15 @@ export default class AkariSub extends EventTarget {
 
     if (shouldRenderExactFrame) {
       this._bumpRenderEpoch()
+      const presentationId = this._nextPresentationId++
+      this._latestPresentationId = presentationId
+      if (this._workerReady) this._postWorkerMessage('presentation', { presentationId })
       this._requestDemandRender({
         mediaTime: currentTime - this.timeOffset,
         width: this._video.videoWidth || this._videoWidth || 0,
         height: this._video.videoHeight || this._videoHeight || 0,
-        force: true
+        force: true,
+        presentationId
       })
     }
   }
@@ -1288,6 +1301,10 @@ export default class AkariSub extends EventTarget {
   private _handleRVFC(now: number, metadata: VideoFrameCallbackMetadata): void {
     if (this._destroyed) return
 
+    const presentationId = this._nextPresentationId++
+    this._latestPresentationId = presentationId
+    if (this._workerReady) this._postWorkerMessage('presentation', { presentationId })
+
     // RVFC metadata.mediaTime is the frame timestamp supplied by the browser.
     // Keep it unmodified while a demand is queued. Its presentation timestamp
     // is predicted immediately before dispatch, when the actual queue delay is
@@ -1303,17 +1320,18 @@ export default class AkariSub extends EventTarget {
       mediaTime: metadata.mediaTime,
       width: metadata.width,
       height: metadata.height,
-      expectedDisplayTime: isPaused ? undefined : expectedDisplayTime
+      expectedDisplayTime: isPaused ? undefined : expectedDisplayTime,
+      presentationId
     }
 
     let presented = false
     if (!isPaused && this._frameTimeline && this.framePrefetch > 0) {
-      const frameIndex = nearestFrameIndex(this._frameTimeline, metadata.mediaTime)
+      const frameIndex = presentedFrameIndex(this._frameTimeline, metadata.mediaTime)
       const prepared = this._preparedFrames.get(frameIndex)
       if (prepared) {
         this._preparedFrames.delete(frameIndex)
         if (prepared.width === this._canvasctrl.width && prepared.height === this._canvasctrl.height) {
-          this._presentPreparedFrame(prepared)
+          this._presentPreparedFrame(prepared, presentationId)
           presented = true
         } else {
           prepared.bitmap.close()
@@ -1366,10 +1384,13 @@ export default class AkariSub extends EventTarget {
       adaptiveLead,
       isPaused
     )
-    const renderTime =
-      !isPaused && this._frameTimeline
-        ? snapToFrameTimeline(this._frameTimeline, predictedRenderTime)
-        : predictedRenderTime
+    // Exact timelines are keyed to the frame reported by RVFC. Applying queue
+    // or paint-latency lead here can jump multiple frames into the future when
+    // the worker is busy, which is observably early at cue boundaries.
+    const renderTime = selectRenderMediaTime(this._frameTimeline, metadata.mediaTime, predictedRenderTime, isPaused)
+
+    const presentationId = metadata.presentationId ?? this._nextPresentationId++
+    this._latestPresentationId = Math.max(this._latestPresentationId, presentationId)
 
     const requestId = this._nextDemandId++
     if (this._adaptiveTiming && !isPaused) {
@@ -1381,9 +1402,13 @@ export default class AkariSub extends EventTarget {
 
     this.sendMessage('demand', {
       time: renderTime + this.timeOffset,
-      force: metadata.force,
+      // Timeline preparation advances libass' internal change baseline on a
+      // separate canvas. A fallback demand must collect a complete frame so an
+      // empty prepared window cannot leave the previous visible cue behind.
+      force: metadata.force || this._frameTimeline != null,
       requestId,
-      renderEpoch: this._renderEpoch
+      renderEpoch: this._renderEpoch,
+      presentationId
     })
   }
 
@@ -1450,9 +1475,13 @@ export default class AkariSub extends EventTarget {
     colorSpace: SubtitleColorSpace
     requestId?: number
     renderEpoch?: number
+    presentationId?: number
   }): void {
     try {
-      if (data.renderEpoch != null && data.renderEpoch !== this._renderEpoch) {
+      if (
+        (data.renderEpoch != null && data.renderEpoch !== this._renderEpoch) ||
+        isStalePresentation(data.presentationId, this._latestPresentationId)
+      ) {
         this._closeRenderImages(data.images)
         return
       }

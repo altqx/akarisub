@@ -88,12 +88,37 @@ export const nearestFrameIndex = (frameTimes: ArrayLike<number>, mediaTime: numb
   return mediaTime - frameTimes[previous] <= frameTimes[next] - mediaTime ? previous : next
 }
 
+/** Find the encoded frame currently presented at a browser media timestamp. */
+export const presentedFrameIndex = (frameTimes: ArrayLike<number>, mediaTime: number): number => {
+  const next = frameIndexAtOrAfter(frameTimes, mediaTime)
+  if (next < 0) return next
+  return next > 0 && frameTimes[next] > mediaTime ? next - 1 : next
+}
+
 /** Snap a prediction to the encoded frame currently presented at that media time. */
 export const snapToFrameTimeline = (frameTimes: ArrayLike<number>, mediaTime: number): number => {
-  const next = frameIndexAtOrAfter(frameTimes, mediaTime)
-  if (next < 0) return mediaTime
-  return next > 0 && frameTimes[next] > mediaTime ? frameTimes[next - 1] : frameTimes[next]
+  const index = presentedFrameIndex(frameTimes, mediaTime)
+  return index >= 0 ? frameTimes[index] : mediaTime
 }
+
+/**
+ * Select the libass sample for a video-frame callback.
+ *
+ * An encoded timeline already identifies the frame being presented. Do not
+ * apply render-latency prediction to that path: a delayed render must remain a
+ * delayed render of the correct frame, rather than becoming an early render of
+ * a future frame.
+ */
+export const selectRenderMediaTime = (
+  frameTimes: ArrayLike<number> | null,
+  mediaTime: number,
+  predictedMediaTime: number,
+  isPaused: boolean
+): number => (!isPaused && frameTimes ? snapToFrameTimeline(frameTimes, mediaTime) : predictedMediaTime)
+
+/** True when an asynchronous paint has been superseded by a newer video frame. */
+export const isStalePresentation = (presentationId: number | undefined, latestPresentationId: number): boolean =>
+  presentationId != null && presentationId < latestPresentationId
 
 /** Return the subtitle media time expected to be visible when painting completes. */
 export const compensatedMediaTime = (
