@@ -3,6 +3,7 @@ const MAX_COMPENSATION_SECONDS = 0.1
 const COMPENSATION_RISE_ALPHA = 0.5
 const COMPENSATION_FALL_ALPHA = 0.1
 const MIN_COMPENSATION_SECONDS = 0.0005
+export const MAX_FRAME_TIMELINE_ENTRIES = 250_000
 
 /**
  * Update a render-pipeline latency estimate from one completed video-frame render.
@@ -49,8 +50,15 @@ export const presentationLeadSeconds = (
 
 /** Copy, validate, sort, and de-duplicate media presentation timestamps. */
 export const normalizeFrameTimeline = (frameTimes: ArrayLike<number>): Float64Array => {
+  const length = frameTimes.length
+  if (!Number.isSafeInteger(length) || length < 0) {
+    throw new RangeError('Frame timeline length must be a non-negative safe integer')
+  }
+  if (length > MAX_FRAME_TIMELINE_ENTRIES) {
+    throw new RangeError(`Frame timeline resource limit is ${MAX_FRAME_TIMELINE_ENTRIES} entries`)
+  }
   const times: number[] = []
-  for (let i = 0; i < frameTimes.length; i++) {
+  for (let i = 0; i < length; i++) {
     const time = Number(frameTimes[i])
     if (Number.isFinite(time) && time >= 0) times.push(time)
   }

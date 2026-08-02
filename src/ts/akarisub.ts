@@ -175,6 +175,7 @@ export default class AkariSub extends EventTarget {
 
   constructor(options: AkariSubOptions) {
     super()
+    const initialFrameTimeline = options?.frameTimeline ? normalizeFrameTimeline(options.frameTimeline) : null
 
     this._destroyedSignal = new Promise((resolve) => {
       this._resolveDestroyed = resolve
@@ -209,7 +210,7 @@ export default class AkariSub extends EventTarget {
 
     this._onDemandRender = 'requestVideoFrameCallback' in HTMLVideoElement.prototype && (options.onDemandRender ?? true)
     this._adaptiveTiming = options.adaptiveTiming ?? true
-    this._frameTimeline = options.frameTimeline ? normalizeFrameTimeline(options.frameTimeline) : null
+    this._frameTimeline = initialFrameTimeline
 
     this._onCanvasFallback = options.onCanvasFallback
 
