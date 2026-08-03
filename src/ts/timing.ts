@@ -51,12 +51,17 @@ export const presentationLeadSeconds = (
  * Delay an exact-frame presentation until the video's compositor deadline
  * instead of painting immediately when RVFC announces the upcoming frame.
  */
+const EXACT_PRESENTATION_GUARD_MS = 2
+
 export const exactPresentationDelayMs = (
   nowMs: number,
   expectedDisplayTimeMs: number | undefined
 ): number => {
   if (!Number.isFinite(nowMs) || !Number.isFinite(expectedDisplayTimeMs)) return 0
-  return Math.max(0, expectedDisplayTimeMs! - nowMs)
+  // Browser timers can wake fractionally before their requested deadline.
+  // A sub-millisecond early paint can still cross a video-frame boundary, so
+  // present just after the compositor deadline instead of risking early state.
+  return Math.max(0, expectedDisplayTimeMs! + EXACT_PRESENTATION_GUARD_MS - nowMs)
 }
 
 /** Copy, validate, sort, and de-duplicate media presentation timestamps. */
