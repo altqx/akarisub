@@ -876,7 +876,7 @@ export default class AkariSub extends EventTarget {
    */
   async getStats(): Promise<PerformanceStats> {
     const data = await this._fetchFromWorker<{ stats: Partial<PerformanceStats> }>({ target: 'getStats' })
-    const stats = data.stats
+    const stats = data.stats ?? {}
     return {
       framesRendered: stats.framesRendered ?? 0,
       framesDropped: stats.framesDropped ?? 0,
