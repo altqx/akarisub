@@ -1947,9 +1947,10 @@ const postPreparedSnapshot = async (
 ): Promise<void> => {
   try {
     const context = ensurePreparedCanvas()
-    // createImageBitmap copies the snapshot. transferToImageBitmap would reset
-    // the backing canvas, making the next libass "unchanged" frame transparent.
-    const bitmap = await createImageBitmap(context.canvas)
+    // Exact preparations are forced complete before each snapshot, including
+    // explicit blank frames. Transfer the backing store instead of copying a
+    // full video-sized canvas; the reset canvas is fully repainted next time.
+    const bitmap = context.canvas.transferToImageBitmap()
     postMessage(
       { target: 'preparedFrame', prepareId, renderEpoch, time, width: self.width, height: self.height, bitmap },
       [bitmap]

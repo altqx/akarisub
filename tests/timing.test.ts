@@ -135,6 +135,97 @@ describe('subtitle timing compensation', () => {
     expect(renderer._prepareForce).toBe(true)
   })
 
+  test('renders an unprepared exact presentation into a worker snapshot before its display deadline', () => {
+    const renderer = Object.create(AkariSub.prototype) as any
+    const messages: Array<{ target: string; data: Record<string, unknown> }> = []
+    Object.assign(renderer, {
+      _video: { paused: false, ended: false, playbackRate: 1 },
+      _playstate: false,
+      _videoWidth: 1920,
+      _videoHeight: 1080,
+      _frameTimeline: new Float64Array([0, 1, 2]),
+      framePrefetch: 2,
+      _nextPresentationId: 4,
+      _nextPrepareId: 9,
+      _prepareRequests: new Map(),
+      _renderEpoch: 3,
+      timeOffset: 0,
+      _postWorkerMessage: (target: string, data: Record<string, unknown>) => messages.push({ target, data })
+    })
+
+    renderer._demandRender({
+      mediaTime: 1.2,
+      width: 1920,
+      height: 1080,
+      expectedDisplayTime: performance.now() + 10
+    })
+
+    expect(messages).toEqual([
+      {
+        target: 'prepare',
+        data: { time: 1, prepareId: 9, renderEpoch: 3, force: true }
+      }
+    ])
+    expect(renderer._prepareRequests.get(9).presentation.presentationId).toBe(4)
+  })
+
+  test('presents a completed exact snapshot and releases the worker immediately', () => {
+    const renderer = Object.create(AkariSub.prototype) as any
+    const bitmap = { close: () => {} }
+    const presentations: Array<{ frame: unknown; presentationId: number; expectedDisplayTime?: number }> = []
+    let finished = 0
+    Object.assign(renderer, {
+      _prepareRequests: new Map([
+        [
+          2,
+          {
+            index: 5,
+            renderEpoch: 7,
+            presentation: { mediaTime: 5, width: 1920, height: 1080, presentationId: 12, expectedDisplayTime: 140 }
+          }
+        ]
+      ]),
+      _renderEpoch: 7,
+      _prepareForce: false,
+      _canvasctrl: { width: 1920, height: 1080 },
+      _presentPreparedFrame: (frame: unknown, presentationId: number, expectedDisplayTime?: number) =>
+        presentations.push({ frame, presentationId, expectedDisplayTime }),
+      _finishWorkerSlot: () => finished++
+    })
+
+    renderer._preparedFrame({
+      prepareId: 2,
+      renderEpoch: 7,
+      time: 5,
+      width: 1920,
+      height: 1080,
+      bitmap
+    })
+
+    expect(presentations).toEqual([
+      { frame: { width: 1920, height: 1080, bitmap }, presentationId: 12, expectedDisplayTime: 140 }
+    ])
+    expect(renderer._prepareForce).toBe(true)
+    expect(finished).toBe(1)
+  })
+
+  test('does not replay stale video canvas dimensions after worker initialization', async () => {
+    const renderer = Object.create(AkariSub.prototype) as any
+    const messages: string[] = []
+    Object.assign(renderer, {
+      _workerReady: false,
+      _loaded: Promise.resolve(),
+      _video: {},
+      _postWorkerMessage: (target: string) => messages.push(target)
+    })
+
+    await renderer.sendMessage('canvas', { width: 0, height: 0 })
+    await renderer.sendMessage('video', { currentTime: 0 })
+    await renderer.sendMessage('setAsyncRender', { value: false })
+
+    expect(messages).toEqual(['setAsyncRender'])
+  })
+
   test('does not invalidate an in-flight paint for an RVFC that is only queued', () => {
     const renderer = Object.create(AkariSub.prototype) as any
     const demands: Array<{ presentationId: number }> = []

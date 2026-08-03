@@ -49,6 +49,7 @@ interface DemandMetadata {
   force?: boolean
   presentationId?: number
   displaySyncScheduled?: boolean
+  preparedPresentationAttempted?: boolean
 }
 
 interface DemandTiming {
@@ -65,6 +66,7 @@ interface PreparedFrame {
 interface PrepareRequest {
   index: number
   renderEpoch: number
+  presentation?: DemandMetadata
 }
 
 const DEFAULT_RENDER_AHEAD = 0
@@ -1078,6 +1080,39 @@ export default class AkariSub extends EventTarget {
   }): void {
     const request = this._prepareRequests.get(data.prepareId)
     this._prepareRequests.delete(data.prepareId)
+
+    if (request?.presentation) {
+      const presentation = request.presentation
+      if (
+        data.bitmap &&
+        request.renderEpoch === this._renderEpoch &&
+        data.renderEpoch === this._renderEpoch
+      ) {
+        this._presentPreparedFrame(
+          {
+            width: data.width ?? this._canvasctrl.width,
+            height: data.height ?? this._canvasctrl.height,
+            bitmap: data.bitmap
+          },
+          presentation.presentationId!,
+          presentation.expectedDisplayTime
+        )
+        this._prepareForce = true
+        this._finishWorkerSlot()
+        return
+      }
+
+      data.bitmap?.close()
+      if (request.renderEpoch === this._renderEpoch && data.renderEpoch === this._renderEpoch) {
+        this._demandRender({ ...presentation, preparedPresentationAttempted: true })
+        return
+      }
+
+      this._prepareForce = true
+      this._finishWorkerSlot()
+      return
+    }
+
     const currentIndex = this._frameTimeline
       ? presentedFrameIndex(this._frameTimeline, this._video?.currentTime ?? data.time - this.timeOffset)
       : -1
@@ -1419,6 +1454,32 @@ export default class AkariSub extends EventTarget {
 
     const schedulingTime = performance.now()
     const isPaused = this._isVideoPausedForWorker()
+    const presentationId = metadata.presentationId ?? this._nextPresentationId++
+    metadata.presentationId = presentationId
+
+    if (
+      !isPaused &&
+      this._frameTimeline &&
+      this.framePrefetch > 0 &&
+      !metadata.preparedPresentationAttempted
+    ) {
+      const frameIndex = presentedFrameIndex(this._frameTimeline, metadata.mediaTime)
+      const renderTime = frameIndex >= 0 ? this._frameTimeline[frameIndex] : metadata.mediaTime
+      const prepareId = this._nextPrepareId++
+      this._prepareRequests.set(prepareId, {
+        index: frameIndex,
+        renderEpoch: this._renderEpoch,
+        presentation: metadata
+      })
+      this._postWorkerMessage('prepare', {
+        time: renderTime + this.timeOffset,
+        prepareId,
+        renderEpoch: this._renderEpoch,
+        force: true
+      })
+      return
+    }
+
     if (!isPaused && this._frameTimeline && !metadata.displaySyncScheduled) {
       // RVFC may announce a frame one display refresh before the video
       // compositor presents it. In exact mode, do not paint that upcoming
@@ -1454,7 +1515,6 @@ export default class AkariSub extends EventTarget {
     // the worker is busy, which is observably early at cue boundaries.
     const renderTime = selectRenderMediaTime(this._frameTimeline, metadata.mediaTime, predictedRenderTime, isPaused)
 
-    const presentationId = metadata.presentationId ?? this._nextPresentationId++
     // Activate only when this demand is dispatched. If it sat in the busy
     // queue, invalidating the render already in flight would create starvation
     // on animation-heavy tracks and could leave the previous cue visible.
@@ -1756,10 +1816,12 @@ export default class AkariSub extends EventTarget {
 
     await this._loaded
 
-    // While the worker is initializing, real video clocks can advance. The
-    // ready handler sends a fresh clock snapshot synchronously, so do not replay
-    // stale pre-ready time/rate/paused messages after that newer snapshot.
-    if (target === 'video' && this._video) return
+    // While the worker is initializing, real video clocks and layout can
+    // advance. The ready handler sends a fresh clock snapshot and its first
+    // demand synchronizes the current canvas size, so do not replay stale
+    // pre-ready state after those newer snapshots. A stale 0x0 canvas message
+    // would otherwise make exact-frame preparation impossible.
+    if ((target === 'video' || target === 'canvas') && this._video) return
 
     this._postWorkerMessage(target, data, transferable)
   }
