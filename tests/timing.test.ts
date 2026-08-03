@@ -93,6 +93,16 @@ describe('subtitle timing compensation', () => {
     expect(resolvePresentationMediaTime(2.927, 2.91, true, 0.007, timeline)).toBeCloseTo(2.92)
   })
 
+  test('uses Shaka RVFC timestamps when they fit a v1 frame map better than currentTime', () => {
+    const timeline = new Float64Array([3.837167, 3.878878, 3.920589, 3.962289])
+    expect(resolvePresentationMediaTime(3.879877, 3.91105, true, undefined, timeline)).toBe(3.879877)
+  })
+
+  test('uses currentTime for a v1 transport timestamp that does not fit the frame map', () => {
+    const timeline = new Float64Array([2.837166, 2.878877, 2.920588, 2.962288])
+    expect(resolvePresentationMediaTime(4.320588, 2.922556, true, undefined, timeline)).toBe(2.922556)
+  })
+
   test('forces each prepared snapshot after demand rendering may change the shared libass baseline', () => {
     const renderer = Object.create(AkariSub.prototype) as any
     Object.assign(renderer, {

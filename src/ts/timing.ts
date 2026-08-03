@@ -167,6 +167,18 @@ export const resolvePresentationMediaTime = (
     return adjustedMediaTime
   }
 
+  if (frameTimes?.length && Number.isFinite(videoCurrentTime)) {
+    const metadataIndex = nearestFrameIndex(frameTimes, metadataMediaTime)
+    const metadataError = metadataIndex >= 0 ? Math.abs(frameTimes[metadataIndex] - metadataMediaTime) : Infinity
+
+    // Version 1 timelines do not preserve the transport origin. Shaka RVFC
+    // timestamps are already normalized and remain within the 1 ms MPEG-TS
+    // timescale conversion error. Prefer that stable clock whenever it fits;
+    // comparing it to continuously advancing currentTime per callback can flip
+    // domains and skip a one-frame sign when currentTime briefly lands closer.
+    return metadataError <= 0.0025 ? metadataMediaTime : videoCurrentTime!
+  }
+
   return Number.isFinite(videoCurrentTime) ? videoCurrentTime! : metadataMediaTime
 }
 
