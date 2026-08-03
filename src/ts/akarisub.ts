@@ -1096,8 +1096,14 @@ export default class AkariSub extends EventTarget {
       })
     } else {
       data.bitmap?.close()
-      this._prepareForce = true
     }
+
+    // A prepared bitmap is a standalone full-canvas snapshot. Demand renders
+    // share libass' changed-frame baseline but paint to a different canvas, so
+    // an "unchanged" preparation could otherwise copy an older visible bitmap
+    // back over a newer empty frame. Force every subsequent preparation to
+    // materialize its complete state, including an explicit blank snapshot.
+    this._prepareForce = true
 
     this._finishWorkerSlot()
   }
@@ -1334,7 +1340,8 @@ export default class AkariSub extends EventTarget {
       metadata.mediaTime,
       this._video?.currentTime,
       !!this._frameTimeline?.length,
-      this._frameTimeline?.mediaTimeOrigin
+      this._frameTimeline?.mediaTimeOrigin,
+      this._frameTimeline ?? undefined
     )
 
     const demandData = {

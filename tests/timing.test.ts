@@ -83,6 +83,41 @@ describe('subtitle timing compensation', () => {
     expect(normalizeFrameTimeline(source).mediaTimeOrigin).toBe(1.5)
   })
 
+  test('does not subtract the transport origin from Shaka-normalized RVFC timestamps', () => {
+    const timeline = new Float64Array([2.837166, 2.878877, 2.920588, 2.962288])
+    expect(resolvePresentationMediaTime(2.920588, 2.922556, true, 1.4, timeline)).toBe(2.920588)
+  })
+
+  test('subtracts the origin when RVFC retains the container timestamp clock', () => {
+    const timeline = new Float64Array([2.878, 2.92, 2.962])
+    expect(resolvePresentationMediaTime(2.927, 2.91, true, 0.007, timeline)).toBeCloseTo(2.92)
+  })
+
+  test('forces each prepared snapshot after demand rendering may change the shared libass baseline', () => {
+    const renderer = Object.create(AkariSub.prototype) as any
+    Object.assign(renderer, {
+      _prepareRequests: new Map([[1, { index: 1, renderEpoch: 3 }]]),
+      _preparedFrames: new Map(),
+      _frameTimeline: new Float64Array([0, 1]),
+      _video: { currentTime: 0 },
+      _renderEpoch: 3,
+      _prepareForce: false,
+      _canvasctrl: { width: 1920, height: 1080 },
+      _finishWorkerSlot: () => {}
+    })
+
+    renderer._preparedFrame({
+      prepareId: 1,
+      renderEpoch: 3,
+      time: 1,
+      width: 1920,
+      height: 1080,
+      bitmap: { close: () => {} }
+    })
+
+    expect(renderer._prepareForce).toBe(true)
+  })
+
   test('does not invalidate an in-flight paint for an RVFC that is only queued', () => {
     const renderer = Object.create(AkariSub.prototype) as any
     const demands: Array<{ presentationId: number }> = []

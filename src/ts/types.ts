@@ -141,8 +141,8 @@ export interface PerformanceStats {
 // =============================================================================
 
 /**
- * Normalized encoded-frame timestamps. `mediaTimeOrigin` maps browser RVFC
- * media timestamps back to this zero-based timeline.
+ * Normalized encoded-frame timestamps. `mediaTimeOrigin` lets AkariSub detect
+ * whether browser RVFC timestamps use the original or normalized media clock.
  */
 export interface FrameTimeline extends ArrayLike<number> {
   mediaTimeOrigin?: number

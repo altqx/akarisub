@@ -135,13 +135,40 @@ export const resolvePresentationMediaTime = (
   metadataMediaTime: number,
   videoCurrentTime: number | undefined,
   frameTimelineEnabled: boolean,
-  mediaTimeOrigin?: number
-): number =>
-  frameTimelineEnabled && Number.isFinite(mediaTimeOrigin)
-    ? metadataMediaTime - mediaTimeOrigin!
-    : frameTimelineEnabled && Number.isFinite(videoCurrentTime)
-      ? videoCurrentTime!
-      : metadataMediaTime
+  mediaTimeOrigin?: number,
+  frameTimes?: ArrayLike<number>
+): number => {
+  if (!frameTimelineEnabled) return metadataMediaTime
+
+  if (Number.isFinite(mediaTimeOrigin)) {
+    const adjustedMediaTime = metadataMediaTime - mediaTimeOrigin!
+    if (frameTimes?.length) {
+      const directIndex = nearestFrameIndex(frameTimes, metadataMediaTime)
+      const adjustedIndex = nearestFrameIndex(frameTimes, adjustedMediaTime)
+      const directError = directIndex >= 0 ? Math.abs(frameTimes[directIndex] - metadataMediaTime) : Infinity
+      const adjustedError = adjustedIndex >= 0 ? Math.abs(frameTimes[adjustedIndex] - adjustedMediaTime) : Infinity
+
+      // Shaka transmuxes MPEG-TS onto a normalized media timeline, while some
+      // browser/container paths expose the original encoded PTS. Pick the
+      // clock domain whose timestamp actually lands on the probed frame map.
+      if (Math.abs(directError - adjustedError) > 0.0001) {
+        return adjustedError < directError ? adjustedMediaTime : metadataMediaTime
+      }
+
+      // An origin can occasionally be close to an exact multiple of the frame
+      // cadence. In that ambiguous case currentTime identifies the clock domain
+      // without becoming the render clock itself.
+      if (Number.isFinite(videoCurrentTime)) {
+        return Math.abs(adjustedMediaTime - videoCurrentTime!) < Math.abs(metadataMediaTime - videoCurrentTime!)
+          ? adjustedMediaTime
+          : metadataMediaTime
+      }
+    }
+    return adjustedMediaTime
+  }
+
+  return Number.isFinite(videoCurrentTime) ? videoCurrentTime! : metadataMediaTime
+}
 
 /** Return the subtitle media time expected to be visible when painting completes. */
 export const compensatedMediaTime = (
