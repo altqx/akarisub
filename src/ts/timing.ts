@@ -47,6 +47,18 @@ export const presentationLeadSeconds = (
   return Math.max(0, (dispatchedAtMs - expectedDisplayTimeMs!) / 1000 + safePipelineSeconds)
 }
 
+/**
+ * Delay an exact-frame presentation until the video's compositor deadline
+ * instead of painting immediately when RVFC announces the upcoming frame.
+ */
+export const exactPresentationDelayMs = (
+  nowMs: number,
+  expectedDisplayTimeMs: number | undefined
+): number => {
+  if (!Number.isFinite(nowMs) || !Number.isFinite(expectedDisplayTimeMs)) return 0
+  return Math.max(0, expectedDisplayTimeMs! - nowMs)
+}
+
 /** Copy, validate, sort, and de-duplicate media presentation timestamps. */
 export const normalizeFrameTimeline = (
   frameTimes: ArrayLike<number> & { mediaTimeOrigin?: number }

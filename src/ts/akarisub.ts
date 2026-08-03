@@ -29,6 +29,7 @@ import { WebGPURenderer, isWebGPUSupported } from './webgpu-renderer'
 import { WebGL2Renderer, isWebGL2Supported } from './webgl2-renderer'
 import {
   compensatedMediaTime,
+  exactPresentationDelayMs,
   isStalePresentation,
   normalizeFrameTimeline,
   presentedFrameIndex,
@@ -47,6 +48,7 @@ interface DemandMetadata {
   expectedDisplayTime?: number
   force?: boolean
   presentationId?: number
+  displaySyncScheduled?: boolean
 }
 
 interface DemandTiming {
@@ -1108,8 +1110,24 @@ export default class AkariSub extends EventTarget {
     this._finishWorkerSlot()
   }
 
-  private _presentPreparedFrame(frame: PreparedFrame, presentationId: number): void {
+  private _presentPreparedFrame(
+    frame: PreparedFrame,
+    presentationId: number,
+    expectedDisplayTime?: number
+  ): void {
     const { bitmap, width, height } = frame
+    const displayDelayMs = exactPresentationDelayMs(performance.now(), expectedDisplayTime)
+    if (displayDelayMs >= 0.25) {
+      const renderEpoch = this._renderEpoch
+      setTimeout(() => {
+        if (this._destroyed || renderEpoch !== this._renderEpoch) {
+          bitmap.close()
+          return
+        }
+        this._presentPreparedFrame(frame, presentationId)
+      }, displayDelayMs)
+      return
+    }
     if (!this._activatePresentation(presentationId)) {
       bitmap.close()
       return
@@ -1359,7 +1377,7 @@ export default class AkariSub extends EventTarget {
       if (prepared) {
         this._preparedFrames.delete(frameIndex)
         if (prepared.width === this._canvasctrl.width && prepared.height === this._canvasctrl.height) {
-          this._presentPreparedFrame(prepared, presentationId)
+          this._presentPreparedFrame(prepared, presentationId, expectedDisplayTime)
           presented = true
         } else {
           prepared.bitmap.close()
@@ -1399,8 +1417,27 @@ export default class AkariSub extends EventTarget {
       this.resize()
     }
 
-    const dispatchedAt = performance.now()
+    const schedulingTime = performance.now()
     const isPaused = this._isVideoPausedForWorker()
+    if (!isPaused && this._frameTimeline && !metadata.displaySyncScheduled) {
+      // RVFC may announce a frame one display refresh before the video
+      // compositor presents it. In exact mode, do not paint that upcoming
+      // subtitle state early; begin its presentation at the same deadline.
+      const displayDelayMs = exactPresentationDelayMs(schedulingTime, metadata.expectedDisplayTime)
+      if (displayDelayMs >= 0.25) {
+        const renderEpoch = this._renderEpoch
+        setTimeout(() => {
+          if (this._destroyed || renderEpoch !== this._renderEpoch) {
+            this._finishWorkerSlot()
+            return
+          }
+          this._demandRender({ ...metadata, displaySyncScheduled: true })
+        }, displayDelayMs)
+        return
+      }
+    }
+
+    const dispatchedAt = performance.now()
     const adaptiveLead =
       this._adaptiveTiming && !isPaused
         ? presentationLeadSeconds(dispatchedAt, metadata.expectedDisplayTime, this._timingCompensationSeconds)
@@ -1421,7 +1458,10 @@ export default class AkariSub extends EventTarget {
     // Activate only when this demand is dispatched. If it sat in the busy
     // queue, invalidating the render already in flight would create starvation
     // on animation-heavy tracks and could leave the previous cue visible.
-    this._activatePresentation(presentationId)
+    if (!this._activatePresentation(presentationId)) {
+      this._finishWorkerSlot()
+      return
+    }
 
     const requestId = this._nextDemandId++
     if (this._adaptiveTiming && !isPaused) {

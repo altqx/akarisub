@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import AkariSub from '../src/ts/akarisub'
 import {
   compensatedMediaTime,
+  exactPresentationDelayMs,
   frameIndexAtOrAfter,
   nearestFrameIndex,
   normalizeFrameTimeline,
@@ -37,6 +38,12 @@ describe('subtitle timing compensation', () => {
 
   test('uses the pipeline estimate when no RVFC deadline is available', () => {
     expect(presentationLeadSeconds(110, undefined, 0.02)).toBeCloseTo(0.02)
+  })
+
+  test('delays exact presentation until the compositor deadline', () => {
+    expect(exactPresentationDelayMs(100, 116.7)).toBeCloseTo(16.7)
+    expect(exactPresentationDelayMs(120, 116.7)).toBe(0)
+    expect(exactPresentationDelayMs(100, undefined)).toBe(0)
   })
 
   test('normalizes backend frame timestamps for reusable frame sync', () => {
