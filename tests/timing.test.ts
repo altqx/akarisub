@@ -41,8 +41,9 @@ describe('subtitle timing compensation', () => {
   })
 
   test('delays exact presentation until the compositor deadline', () => {
-    expect(exactPresentationDelayMs(100, 116.7)).toBeCloseTo(18.7)
-    expect(exactPresentationDelayMs(120, 116.7)).toBe(0)
+    expect(exactPresentationDelayMs(100, 116.7)).toBeCloseTo(24.7)
+    expect(exactPresentationDelayMs(120, 116.7)).toBeCloseTo(4.7)
+    expect(exactPresentationDelayMs(130, 116.7)).toBe(0)
     expect(exactPresentationDelayMs(100, undefined)).toBe(0)
   })
 
