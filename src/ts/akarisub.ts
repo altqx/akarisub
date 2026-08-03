@@ -36,6 +36,7 @@ import {
   presentationLeadSeconds,
   resolvePresentationMediaTime,
   selectRenderMediaTime,
+  subtitleTimeForFrame,
   updateTimingCompensation
 } from './timing'
 
@@ -140,7 +141,7 @@ export default class AkariSub extends EventTarget {
   private _pendingDemandTimes: DemandMetadata[] = []
   private _demandTimings = new Map<number, DemandTiming>()
   private _adaptiveTiming: boolean
-  private _frameTimeline: (Float64Array & { mediaTimeOrigin?: number }) | null
+  private _frameTimeline: (Float64Array & { mediaTimeOrigin?: number; subtitleTimeOffset?: number }) | null
   private _preparedFrames = new Map<number, PreparedFrame>()
   private _prepareQueue: number[] = []
   private _prepareRequests = new Map<number, PrepareRequest>()
@@ -1054,7 +1055,7 @@ export default class AkariSub extends EventTarget {
     }
     if (index == null) return
 
-    const time = this._frameTimeline[index]
+    const time = subtitleTimeForFrame(this._frameTimeline, index)
     if (!Number.isFinite(time)) return
 
     const prepareId = this._nextPrepareId++
@@ -1464,7 +1465,8 @@ export default class AkariSub extends EventTarget {
       !metadata.preparedPresentationAttempted
     ) {
       const frameIndex = presentedFrameIndex(this._frameTimeline, metadata.mediaTime)
-      const renderTime = frameIndex >= 0 ? this._frameTimeline[frameIndex] : metadata.mediaTime
+      const renderTime =
+        frameIndex >= 0 ? subtitleTimeForFrame(this._frameTimeline, frameIndex) : metadata.mediaTime
       const prepareId = this._nextPrepareId++
       this._prepareRequests.set(prepareId, {
         index: frameIndex,

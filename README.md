@@ -118,6 +118,8 @@ renderer.setFrameTimeline(null) // return to adaptive continuous-time rendering
 
 Use timestamps from the encoded rendition the browser plays, normalized so its first displayed video frame is `0`. Passing a timeline remains optional; cache misses and unsupported paths automatically use normal adaptive rendering.
 
+If the browser timeline is normalized from decode time rather than the first display PTS, preserve that initial B-frame reorder gap in the array and set `frameTimeline.subtitleTimeOffset` to the first frame timestamp. AkariSub uses the unmodified array to locate the visible video frame, then removes the offset only when sampling libass.
+
 ## Changing subtitles
 
 You're not limited to only display the subtitle file you referenced in your options. You're able to dynamically change subtitles on the fly. There's four methods that you can use for this specifically:
@@ -233,7 +235,7 @@ The default options are best, and automatically fallback to the next fastest opt
 | `offscreenRender`     | boolean                              | `true`                                   | Render fully on the worker, greatly reduces CPU usage                                                                                                      |
 | `onDemandRender`      | boolean                              | `true`                                   | Render subtitles as the video player renders frames                                                                                                        |
 | `adaptiveTiming`      | boolean                              | `true`                                   | Compensate measured queue, worker, bitmap, IPC, and paint latency while video is playing; pause and seek renders remain frame-exact                        |
-| `frameTimeline`       | ArrayLike\<number\>                  | -                                        | Encoded video-frame presentation timestamps in seconds; enables frame-locked libass sampling                                                               |
+| `frameTimeline`       | FrameTimeline                        | -                                        | Encoded browser-frame timestamps plus optional media/subtitle clock offsets; enables frame-locked libass sampling                                          |
 | `framePrefetch`       | number                               | `2`                                      | Number of exact subtitle-frame bitmaps to prepare ahead (`0` disables preparation, maximum `4`)                                                            |
 | `targetFps`           | number                               | `24`                                     | Target FPS when not using onDemandRender                                                                                                                   |
 | `timeOffset`          | number                               | `0`                                      | Subtitle time offset in seconds                                                                                                                            |

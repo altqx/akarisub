@@ -11,7 +11,9 @@ import {
   isStalePresentation,
   resolvePresentationMediaTime,
   selectRenderMediaTime,
+  snapToSubtitleTimeline,
   snapToFrameTimeline,
+  subtitleTimeForFrame,
   updateTimingCompensation
 } from '../src/ts/timing'
 
@@ -68,7 +70,23 @@ describe('subtitle timing compensation', () => {
   test('does not extrapolate an exact timeline callback into future frames', () => {
     const timeline = new Float64Array([0, 0.041708, 0.083417, 0.125125, 0.166833])
     expect(selectRenderMediaTime(timeline, 0.041708, 0.166833, false)).toBeCloseTo(0.041708)
-    expect(selectRenderMediaTime(timeline, 0.041708, 0.166833, true)).toBeCloseTo(0.166833)
+    expect(selectRenderMediaTime(timeline, 0.041708, 0.166833, true)).toBeCloseTo(0.041708)
+  })
+
+  test('maps a DTS-normalized browser frame back to the PTS-normalized subtitle clock', () => {
+    const timeline = Object.assign(new Float64Array([0.083422, 0.125133, 0.166844]), {
+      mediaTimeOrigin: 1.4,
+      subtitleTimeOffset: 0.083422
+    })
+
+    expect(snapToSubtitleTimeline(timeline, 0.083422)).toBe(0)
+    expect(snapToSubtitleTimeline(timeline, 0.125133)).toBeCloseTo(0.041711)
+    expect(subtitleTimeForFrame(timeline, 2)).toBeCloseTo(0.083422)
+    expect(selectRenderMediaTime(timeline, 0.166844, 0.2, false)).toBeCloseTo(0.083422)
+
+    const normalized = normalizeFrameTimeline(timeline)
+    expect(normalized.mediaTimeOrigin).toBe(1.4)
+    expect(normalized.subtitleTimeOffset).toBe(0.083422)
   })
 
   test('rejects only paints superseded by a newer presentation', () => {

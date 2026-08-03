@@ -66,8 +66,8 @@ export const exactPresentationDelayMs = (
 
 /** Copy, validate, sort, and de-duplicate media presentation timestamps. */
 export const normalizeFrameTimeline = (
-  frameTimes: ArrayLike<number> & { mediaTimeOrigin?: number }
-): Float64Array & { mediaTimeOrigin?: number } => {
+  frameTimes: ArrayLike<number> & { mediaTimeOrigin?: number; subtitleTimeOffset?: number }
+): Float64Array & { mediaTimeOrigin?: number; subtitleTimeOffset?: number } => {
   const times: number[] = []
   for (let i = 0; i < frameTimes.length; i++) {
     const time = Number(frameTimes[i])
@@ -82,8 +82,14 @@ export const normalizeFrameTimeline = (
     }
   }
   times.length = write
-  const normalized = Float64Array.from(times) as Float64Array & { mediaTimeOrigin?: number }
+  const normalized = Float64Array.from(times) as Float64Array & {
+    mediaTimeOrigin?: number
+    subtitleTimeOffset?: number
+  }
   if (Number.isFinite(frameTimes.mediaTimeOrigin)) normalized.mediaTimeOrigin = frameTimes.mediaTimeOrigin
+  if (Number.isFinite(frameTimes.subtitleTimeOffset) && frameTimes.subtitleTimeOffset! >= 0) {
+    normalized.subtitleTimeOffset = frameTimes.subtitleTimeOffset
+  }
   return normalized
 }
 
@@ -122,6 +128,27 @@ export const snapToFrameTimeline = (frameTimes: ArrayLike<number>, mediaTime: nu
   return index >= 0 ? frameTimes[index] : mediaTime
 }
 
+/** Map a browser frame timestamp to the PTS-normalized clock used by ASS cues. */
+export const snapToSubtitleTimeline = (
+  frameTimes: ArrayLike<number> & { subtitleTimeOffset?: number },
+  mediaTime: number
+): number => {
+  const frameTime = snapToFrameTimeline(frameTimes, mediaTime)
+  const offset = Number.isFinite(frameTimes.subtitleTimeOffset) ? Math.max(0, frameTimes.subtitleTimeOffset!) : 0
+  return Math.max(0, frameTime - offset)
+}
+
+/** Get the PTS-normalized subtitle sample time for an encoded frame index. */
+export const subtitleTimeForFrame = (
+  frameTimes: ArrayLike<number> & { subtitleTimeOffset?: number },
+  frameIndex: number
+): number => {
+  const frameTime = frameTimes[frameIndex]
+  if (!Number.isFinite(frameTime)) return Number.NaN
+  const offset = Number.isFinite(frameTimes.subtitleTimeOffset) ? Math.max(0, frameTimes.subtitleTimeOffset!) : 0
+  return Math.max(0, frameTime - offset)
+}
+
 /**
  * Select the libass sample for a video-frame callback.
  *
@@ -131,11 +158,11 @@ export const snapToFrameTimeline = (frameTimes: ArrayLike<number>, mediaTime: nu
  * a future frame.
  */
 export const selectRenderMediaTime = (
-  frameTimes: ArrayLike<number> | null,
+  frameTimes: (ArrayLike<number> & { subtitleTimeOffset?: number }) | null,
   mediaTime: number,
   predictedMediaTime: number,
-  isPaused: boolean
-): number => (!isPaused && frameTimes ? snapToFrameTimeline(frameTimes, mediaTime) : predictedMediaTime)
+  _isPaused: boolean
+): number => (frameTimes ? snapToSubtitleTimeline(frameTimes, mediaTime) : predictedMediaTime)
 
 /** True when an asynchronous paint has been superseded by a newer video frame. */
 export const isStalePresentation = (presentationId: number | undefined, latestPresentationId: number): boolean =>
