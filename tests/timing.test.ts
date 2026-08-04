@@ -2,7 +2,6 @@ import { describe, expect, test } from 'bun:test'
 import AkariSub from '../src/ts/akarisub'
 import {
   compensatedMediaTime,
-  exactPresentationDelayMs,
   frameIndexAtOrAfter,
   nearestFrameIndex,
   normalizeFrameTimeline,
@@ -40,13 +39,6 @@ describe('subtitle timing compensation', () => {
 
   test('uses the pipeline estimate when no RVFC deadline is available', () => {
     expect(presentationLeadSeconds(110, undefined, 0.02)).toBeCloseTo(0.02)
-  })
-
-  test('delays exact presentation until the compositor deadline', () => {
-    expect(exactPresentationDelayMs(100, 116.7)).toBeCloseTo(24.7)
-    expect(exactPresentationDelayMs(120, 116.7)).toBeCloseTo(4.7)
-    expect(exactPresentationDelayMs(130, 116.7)).toBe(0)
-    expect(exactPresentationDelayMs(100, undefined)).toBe(0)
   })
 
   test('normalizes backend frame timestamps for reusable frame sync', () => {
@@ -226,6 +218,24 @@ describe('subtitle timing compensation', () => {
     ])
     expect(renderer._prepareForce).toBe(true)
     expect(finished).toBe(1)
+  })
+
+  test('commits a cached exact snapshot during the RVFC rendering phase without a timer guard', () => {
+    const renderer = Object.create(AkariSub.prototype) as any
+    const calls: string[] = []
+    const bitmap = { close: () => calls.push('close') }
+    Object.assign(renderer, {
+      _gpuRenderer: null,
+      _ctx: {
+        clearRect: () => calls.push('clear'),
+        drawImage: () => calls.push('draw')
+      },
+      _activatePresentation: () => true
+    })
+
+    renderer._presentPreparedFrame({ width: 1920, height: 1080, bitmap }, 12, performance.now() + 100)
+
+    expect(calls).toEqual(['clear', 'draw', 'close'])
   })
 
   test('does not replay stale video canvas dimensions after worker initialization', async () => {

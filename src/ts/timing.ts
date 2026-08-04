@@ -47,23 +47,6 @@ export const presentationLeadSeconds = (
   return Math.max(0, (dispatchedAtMs - expectedDisplayTimeMs!) / 1000 + safePipelineSeconds)
 }
 
-/**
- * Delay an exact-frame presentation until the video's compositor deadline
- * instead of painting immediately when RVFC announces the upcoming frame.
- */
-const EXACT_PRESENTATION_GUARD_MS = 8
-
-export const exactPresentationDelayMs = (
-  nowMs: number,
-  expectedDisplayTimeMs: number | undefined
-): number => {
-  if (!Number.isFinite(nowMs) || !Number.isFinite(expectedDisplayTimeMs)) return 0
-  // Browser timers can wake fractionally before their requested deadline, and
-  // the video surface can become observable a few milliseconds afterward.
-  // Stay within one display refresh but never risk exposing future ASS state.
-  return Math.max(0, expectedDisplayTimeMs! + EXACT_PRESENTATION_GUARD_MS - nowMs)
-}
-
 /** Copy, validate, sort, and de-duplicate media presentation timestamps. */
 export const normalizeFrameTimeline = (
   frameTimes: ArrayLike<number> & { mediaTimeOrigin?: number; subtitleTimeOffset?: number }

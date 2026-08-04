@@ -29,7 +29,6 @@ import { WebGPURenderer, isWebGPUSupported } from './webgpu-renderer'
 import { WebGL2Renderer, isWebGL2Supported } from './webgl2-renderer'
 import {
   compensatedMediaTime,
-  exactPresentationDelayMs,
   isStalePresentation,
   normalizeFrameTimeline,
   presentedFrameIndex,
@@ -49,7 +48,6 @@ interface DemandMetadata {
   expectedDisplayTime?: number
   force?: boolean
   presentationId?: number
-  displaySyncScheduled?: boolean
   preparedPresentationAttempted?: boolean
 }
 
@@ -1149,21 +1147,14 @@ export default class AkariSub extends EventTarget {
   private _presentPreparedFrame(
     frame: PreparedFrame,
     presentationId: number,
-    expectedDisplayTime?: number
+    _expectedDisplayTime?: number
   ): void {
     const { bitmap, width, height } = frame
-    const displayDelayMs = exactPresentationDelayMs(performance.now(), expectedDisplayTime)
-    if (displayDelayMs >= 0.25) {
-      const renderEpoch = this._renderEpoch
-      setTimeout(() => {
-        if (this._destroyed || renderEpoch !== this._renderEpoch) {
-          bitmap.close()
-          return
-        }
-        this._presentPreparedFrame(frame, presentationId)
-      }, displayDelayMs)
-      return
-    }
+    // RVFC is invoked as part of the rendering update for this video frame.
+    // Commit an already prepared snapshot in that same update so the canvas
+    // and video reach the compositor together. Waiting until (or after)
+    // expectedDisplayTime misses a refresh on high-refresh-rate displays and
+    // can leave fast ASS transitions one encoded frame behind.
     if (!this._activatePresentation(presentationId)) {
       bitmap.close()
       return
@@ -1453,7 +1444,6 @@ export default class AkariSub extends EventTarget {
       this.resize()
     }
 
-    const schedulingTime = performance.now()
     const isPaused = this._isVideoPausedForWorker()
     const presentationId = metadata.presentationId ?? this._nextPresentationId++
     metadata.presentationId = presentationId
@@ -1480,24 +1470,6 @@ export default class AkariSub extends EventTarget {
         force: true
       })
       return
-    }
-
-    if (!isPaused && this._frameTimeline && !metadata.displaySyncScheduled) {
-      // RVFC may announce a frame one display refresh before the video
-      // compositor presents it. In exact mode, do not paint that upcoming
-      // subtitle state early; begin its presentation at the same deadline.
-      const displayDelayMs = exactPresentationDelayMs(schedulingTime, metadata.expectedDisplayTime)
-      if (displayDelayMs >= 0.25) {
-        const renderEpoch = this._renderEpoch
-        setTimeout(() => {
-          if (this._destroyed || renderEpoch !== this._renderEpoch) {
-            this._finishWorkerSlot()
-            return
-          }
-          this._demandRender({ ...metadata, displaySyncScheduled: true })
-        }, displayDelayMs)
-        return
-      }
     }
 
     const dispatchedAt = performance.now()
