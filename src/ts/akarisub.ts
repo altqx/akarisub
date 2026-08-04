@@ -1104,9 +1104,14 @@ export default class AkariSub extends EventTarget {
     if (!stage || frame.scheduled || this._destroyed || targetDisplayTime <= performance.now()) return
 
     const previous = this._scheduledStage ?? this._canvas
-    const delay = Math.max(0, targetDisplayTime - performance.now())
+    const performanceTime = performance.now()
+    const documentTime = Number(document.timeline?.currentTime)
+    const hasDocumentTime = Number.isFinite(documentTime)
+    const sharedStartTime = hasDocumentTime
+      ? documentTime + (targetDisplayTime - performanceTime)
+      : undefined
     const animationOptions: KeyframeAnimationOptions = {
-      delay,
+      delay: hasDocumentTime ? 0 : Math.max(0, targetDisplayTime - performanceTime),
       duration: 1,
       easing: 'steps(1, jump-start)',
       fill: 'forwards'
@@ -1116,6 +1121,11 @@ export default class AkariSub extends EventTarget {
     let hideAnimation: Animation | undefined
     if (previous !== stage) {
       hideAnimation = previous.animate([{ opacity: '1' }, { opacity: '0' }], animationOptions)
+    }
+
+    if (sharedStartTime != null) {
+      showAnimation.startTime = sharedStartTime
+      if (hideAnimation) hideAnimation.startTime = sharedStartTime
     }
 
     frame.scheduled = true
@@ -1207,7 +1217,15 @@ export default class AkariSub extends EventTarget {
 
     for (const [index, frame] of this._preparedFrames) {
       if (index < currentIndex || index > lastIndex) {
-        this._disposePreparedFrame(frame)
+        // A scheduled stage may already be the compositor's visible frame even
+        // when Chromium skips/delays its RVFC. Removing it here produces a blank
+        // refresh. Its successor's completed hide animation owns stage cleanup.
+        if (frame.scheduled && index < currentIndex) {
+          frame.bitmap?.close()
+          frame.bitmap = undefined
+        } else {
+          this._disposePreparedFrame(frame)
+        }
         this._preparedFrames.delete(index)
       }
     }
@@ -1330,7 +1348,16 @@ export default class AkariSub extends EventTarget {
     _expectedDisplayTime?: number
   ): void {
     if (!this._activatePresentation(presentationId)) {
-      this._disposePreparedFrame(frame)
+      // Scheduling happens on the display clock before RVFC validation. If a
+      // newer callback has already advanced the presentation watermark, this
+      // stage can still be the compositor's current frame. Never tear down a
+      // scheduled stage from a stale callback; the next atomic swap removes it.
+      if (frame.stage && frame.scheduled) {
+        frame.bitmap?.close()
+        frame.bitmap = undefined
+      } else {
+        this._disposePreparedFrame(frame)
+      }
       return
     }
 

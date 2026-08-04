@@ -284,6 +284,88 @@ describe('subtitle timing compensation', () => {
     expect(calls).toEqual(['activate:14'])
   })
 
+  test('does not remove an already scheduled stage from a stale RVFC', () => {
+    const renderer = Object.create(AkariSub.prototype) as any
+    const calls: string[] = []
+    const stage = {
+      getAnimations: () => [{ cancel: () => calls.push('cancel') }],
+      remove: () => calls.push('remove')
+    }
+    Object.assign(renderer, {
+      _activatePresentation: () => false,
+      _stagedCanvases: new Set([stage]),
+      _scheduledStage: stage
+    })
+
+    renderer._presentPreparedFrame(
+      { width: 1920, height: 1080, stage, scheduled: true },
+      13,
+      performance.now()
+    )
+
+    expect(calls).toEqual([])
+    expect(renderer._scheduledStage).toBe(stage)
+  })
+
+  test('starts both compositor swap halves at one absolute timeline instant', () => {
+    const renderer = Object.create(AkariSub.prototype) as any
+    const animations: Array<{
+      startTime: number | null
+      finished: Promise<void>
+      cancel: () => void
+    }> = []
+    const animationOptions: KeyframeAnimationOptions[] = []
+    const createAnimation = (_frames: Keyframe[], options: KeyframeAnimationOptions) => {
+      animationOptions.push(options)
+      const animation = {
+        startTime: null,
+        finished: new Promise<void>(() => {}),
+        cancel: () => {}
+      }
+      animations.push(animation)
+      return animation
+    }
+    const stage = {
+      animate: createAnimation,
+      isConnected: true,
+      style: { opacity: '0' }
+    }
+    const previous = {
+      animate: createAnimation,
+      style: { opacity: '1' }
+    }
+    const originalDocument = globalThis.document
+
+    try {
+      Object.defineProperty(globalThis, 'document', {
+        configurable: true,
+        value: { timeline: { currentTime: 500 } }
+      })
+      Object.assign(renderer, {
+        _canvas: previous,
+        _scheduledStage: null,
+        _destroyed: false
+      })
+
+      const frame = { stage }
+      renderer._schedulePreparedFrame(frame, performance.now() + 100)
+
+      expect(frame.scheduled).toBe(true)
+      expect(animations).toHaveLength(2)
+      expect(animations[0].startTime).toBe(animations[1].startTime)
+      expect(animationOptions.map((options) => options.delay)).toEqual([0, 0])
+    } finally {
+      if (originalDocument === undefined) {
+        Reflect.deleteProperty(globalThis, 'document')
+      } else {
+        Object.defineProperty(globalThis, 'document', {
+          configurable: true,
+          value: originalDocument
+        })
+      }
+    }
+  })
+
   test('does not replay stale video canvas dimensions after worker initialization', async () => {
     const renderer = Object.create(AkariSub.prototype) as any
     const messages: string[] = []
