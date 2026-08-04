@@ -47,6 +47,64 @@ export const presentationLeadSeconds = (
   return Math.max(0, (dispatchedAtMs - expectedDisplayTimeMs!) / 1000 + safePipelineSeconds)
 }
 
+/**
+ * Estimate the compositor refresh interval from requestAnimationFrame samples.
+ * The fastest stable cluster rejects whole-refresh main-thread stalls without
+ * biasing a 144 Hz display toward 72/48 Hz, while averaging timer quantization.
+ */
+export const estimateRefreshIntervalMs = (
+  samples: readonly number[],
+  fallbackMs: number = 1000 / 60
+): number => {
+  const valid = samples.filter((sample) => Number.isFinite(sample) && sample >= 3 && sample <= 50)
+  if (valid.length < 4) return fallbackMs
+
+  valid.sort((left, right) => left - right)
+  const baseInterval = valid[Math.floor((valid.length - 1) * 0.1)]
+  const baseCluster = valid.filter((sample) => sample <= baseInterval * 1.25)
+  const measuredInterval = baseCluster.reduce((sum, sample) => sum + sample, 0) / baseCluster.length
+  const measuredHz = 1000 / measuredInterval
+  const commonRefreshRates = [24, 30, 48, 50, 60, 72, 75, 90, 100, 120, 144, 165, 180, 200, 240, 360]
+  const nearestRate = commonRefreshRates.reduce((nearest, rate) =>
+    Math.abs(rate - measuredHz) < Math.abs(nearest - measuredHz) ? rate : nearest
+  )
+  return Math.abs(nearestRate - measuredHz) / nearestRate <= 0.03 ? 1000 / nearestRate : measuredInterval
+}
+
+/**
+ * Predict the display refresh assigned to an encoded frame before its RVFC.
+ * RVFC clock offsets straddle the ideal media clock on cadence-converted
+ * displays (for example 23.976 fps on 60 Hz), so average several observations
+ * and snap the result to the already observed compositor refresh grid.
+ */
+export const predictFrameDisplayTimeMs = (
+  frameMediaTime: number,
+  playbackRate: number,
+  clockOffsetsMs: readonly number[],
+  displayGridAnchorMs: number | undefined,
+  refreshIntervalMs: number
+): number | undefined => {
+  if (
+    !Number.isFinite(frameMediaTime) ||
+    !Number.isFinite(playbackRate) ||
+    playbackRate <= 0 ||
+    clockOffsetsMs.length < 2 ||
+    !Number.isFinite(displayGridAnchorMs) ||
+    !Number.isFinite(refreshIntervalMs) ||
+    refreshIntervalMs <= 0
+  ) {
+    return undefined
+  }
+
+  const validOffsets = clockOffsetsMs.filter(Number.isFinite)
+  if (validOffsets.length < 2) return undefined
+
+  const clockOffset = validOffsets.reduce((sum, value) => sum + value, 0) / validOffsets.length
+  const idealDisplayTime = clockOffset + (frameMediaTime * 1000) / playbackRate
+  const refreshesFromAnchor = Math.round((idealDisplayTime - displayGridAnchorMs!) / refreshIntervalMs)
+  return displayGridAnchorMs! + refreshesFromAnchor * refreshIntervalMs
+}
+
 export const normalizeFrameTimeline = (
   frameTimes: ArrayLike<number> & { mediaTimeOrigin?: number; subtitleTimeOffset?: number }
 ): Float64Array & { mediaTimeOrigin?: number; subtitleTimeOffset?: number } => {

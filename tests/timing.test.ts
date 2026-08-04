@@ -2,10 +2,12 @@ import { describe, expect, test } from 'bun:test'
 import AkariSub from '../src/ts/akarisub'
 import {
   compensatedMediaTime,
+  estimateRefreshIntervalMs,
   frameIndexAtOrAfter,
   nearestFrameIndex,
   normalizeFrameTimeline,
   presentationLeadSeconds,
+  predictFrameDisplayTimeMs,
   presentedFrameIndex,
   isStalePresentation,
   resolvePresentationMediaTime,
@@ -39,6 +41,22 @@ describe('subtitle timing compensation', () => {
 
   test('uses the pipeline estimate when no RVFC deadline is available', () => {
     expect(presentationLeadSeconds(110, undefined, 0.02)).toBeCloseTo(0.02)
+  })
+
+  test('measures the physical refresh interval without counting skipped refreshes', () => {
+    expect(estimateRefreshIntervalMs([6.94, 6.95, 13.89, 6.93, 20.8, 6.94])).toBeCloseTo(6.94, 2)
+    expect(estimateRefreshIntervalMs([16.67, 33.33, 16.66, 16.68, 50, 16.67])).toBeCloseTo(16.67, 2)
+  })
+
+  test('predicts the next 23.976 fps compositor slot across 60 Hz cadence conversion', () => {
+    const offsets = [-2002.844, -1994.655, -2003.066, -1994.677, -2003.077, -1994.788]
+    expect(predictFrameDisplayTimeMs(3.9633, 1, offsets, 1710.2, 1000 / 60)).toBeCloseTo(1960.2, 1)
+  })
+
+  test('predicts the exact six-refresh boundary on a 144 Hz display', () => {
+    expect(
+      predictFrameDisplayTimeMs(3.9633, 1, [-2921.588, -2921.588], 1000, 1000 / 144)
+    ).toBeCloseTo(1041.667, 2)
   })
 
   test('normalizes backend frame timestamps for reusable frame sync', () => {
@@ -236,6 +254,34 @@ describe('subtitle timing compensation', () => {
     renderer._presentPreparedFrame({ width: 1920, height: 1080, bitmap }, 12, performance.now() + 100)
 
     expect(calls).toEqual(['clear', 'draw', 'close'])
+  })
+
+  test('does not rerasterize a compositor-scheduled exact snapshot in its RVFC', () => {
+    const renderer = Object.create(AkariSub.prototype) as any
+    const calls: string[] = []
+    Object.assign(renderer, {
+      _activatePresentation: (presentationId: number) => {
+        calls.push(`activate:${presentationId}`)
+        return true
+      },
+      _ctx: {
+        clearRect: () => calls.push('clear'),
+        drawImage: () => calls.push('draw')
+      }
+    })
+
+    renderer._presentPreparedFrame(
+      {
+        width: 1920,
+        height: 1080,
+        stage: { getAnimations: () => [] },
+        scheduled: true
+      },
+      14,
+      performance.now() + 10
+    )
+
+    expect(calls).toEqual(['activate:14'])
   })
 
   test('does not replay stale video canvas dimensions after worker initialization', async () => {

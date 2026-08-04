@@ -29,8 +29,10 @@ import { WebGPURenderer, isWebGPUSupported } from './webgpu-renderer'
 import { WebGL2Renderer, isWebGL2Supported } from './webgl2-renderer'
 import {
   compensatedMediaTime,
+  estimateRefreshIntervalMs,
   isStalePresentation,
   normalizeFrameTimeline,
+  predictFrameDisplayTimeMs,
   presentedFrameIndex,
   presentationLeadSeconds,
   resolvePresentationMediaTime,
@@ -59,7 +61,10 @@ interface DemandTiming {
 interface PreparedFrame {
   width: number
   height: number
-  bitmap: ImageBitmap
+  bitmap?: ImageBitmap
+  stage?: HTMLCanvasElement
+  scheduled?: boolean
+  animations?: Animation[]
 }
 
 interface PrepareRequest {
@@ -141,6 +146,16 @@ export default class AkariSub extends EventTarget {
   private _adaptiveTiming: boolean
   private _frameTimeline: (Float64Array & { mediaTimeOrigin?: number; subtitleTimeOffset?: number }) | null
   private _preparedFrames = new Map<number, PreparedFrame>()
+  private _stagedCanvases = new Set<HTMLCanvasElement>()
+  private _scheduledStage: HTMLCanvasElement | null = null
+  private _predictedDisplayTimes = new Map<number, number>()
+  private _displayClockOffsets: number[] = []
+  private _displayGridAnchorMs?: number
+  private _lastClockMediaTime?: number
+  private _lastClockPlaybackRate?: number
+  private _refreshSamples: number[] = []
+  private _refreshRafHandle: number | null = null
+  private _lastRefreshRafTime?: number
   private _prepareQueue: number[] = []
   private _prepareRequests = new Map<number, PrepareRequest>()
   private _nextPrepareId: number = 1
@@ -251,6 +266,8 @@ export default class AkariSub extends EventTarget {
     } else if (!this._canvas) {
       throw this.destroy(new Error("Don't know where to render: you should give video or canvas in options."))
     }
+
+    this._startRefreshSampling()
 
     this._bufferCanvas = document.createElement('canvas')
     const bufferCtx = this._bufferCanvas.getContext('2d')
@@ -580,6 +597,7 @@ export default class AkariSub extends EventTarget {
 
     this._canvas.style.top = top + 'px'
     this._canvas.style.left = left + 'px'
+    for (const stage of this._stagedCanvases) this._syncStagedCanvasLayout(stage)
 
     if (width > 0 && height > 0 && (this._canvasctrl.width !== width || this._canvasctrl.height !== height)) {
       this._bumpRenderEpoch()
@@ -1010,9 +1028,172 @@ export default class AkariSub extends EventTarget {
     this._dispatchNextPreparation()
   }
 
+  private _startRefreshSampling(): void {
+    if (!this._frameTimeline || !this._canvasParent || typeof requestAnimationFrame !== 'function') return
+
+    const sample = (time: number): void => {
+      if (this._destroyed) return
+
+      if (Number.isFinite(this._lastRefreshRafTime)) {
+        const interval = time - this._lastRefreshRafTime!
+        if (interval >= 3 && interval <= 50) {
+          this._refreshSamples.push(interval)
+          if (this._refreshSamples.length > 48) this._refreshSamples.shift()
+        }
+      }
+      this._lastRefreshRafTime = time
+      this._refreshRafHandle = requestAnimationFrame(sample)
+    }
+
+    this._refreshRafHandle = requestAnimationFrame(sample)
+  }
+
+  private _syncStagedCanvasLayout(stage: HTMLCanvasElement): void {
+    stage.style.display = 'block'
+    stage.style.position = 'absolute'
+    stage.style.pointerEvents = 'none'
+    stage.style.top = this._canvas.style.top
+    stage.style.left = this._canvas.style.left
+    stage.style.width = this._canvas.style.width
+    stage.style.height = this._canvas.style.height
+    stage.style.willChange = 'opacity'
+  }
+
+  private _disposePreparedFrame(frame: PreparedFrame): void {
+    for (const animation of frame.animations ?? []) animation.cancel()
+    frame.animations = undefined
+    frame.bitmap?.close()
+    frame.bitmap = undefined
+
+    if (frame.stage) {
+      for (const animation of frame.stage.getAnimations()) animation.cancel()
+      frame.stage.remove()
+      this._stagedCanvases.delete(frame.stage)
+      if (this._scheduledStage === frame.stage) this._scheduledStage = null
+      frame.stage = undefined
+    }
+  }
+
+  private _stagePreparedFrame(index: number, frame: PreparedFrame): void {
+    if (!this._canvasParent || !frame.bitmap || this._destroyed) return
+
+    const stage = document.createElement('canvas')
+    stage.width = frame.width
+    stage.height = frame.height
+    this._syncStagedCanvasLayout(stage)
+    stage.style.opacity = '0'
+
+    const context = stage.getContext('2d', { alpha: true, desynchronized: true })
+    if (!context) return
+
+    context.drawImage(frame.bitmap, 0, 0)
+    frame.bitmap.close()
+    frame.bitmap = undefined
+    frame.stage = stage
+    this._stagedCanvases.add(stage)
+    this._canvasParent.appendChild(stage)
+
+    const targetDisplayTime = this._predictedDisplayTimes.get(index)
+    if (Number.isFinite(targetDisplayTime)) {
+      this._schedulePreparedFrame(frame, targetDisplayTime!)
+    }
+  }
+
+  private _schedulePreparedFrame(frame: PreparedFrame, targetDisplayTime: number): void {
+    const stage = frame.stage
+    if (!stage || frame.scheduled || this._destroyed || targetDisplayTime <= performance.now()) return
+
+    const previous = this._scheduledStage ?? this._canvas
+    const delay = Math.max(0, targetDisplayTime - performance.now())
+    const animationOptions: KeyframeAnimationOptions = {
+      delay,
+      duration: 1,
+      easing: 'steps(1, jump-start)',
+      fill: 'forwards'
+    }
+
+    const showAnimation = stage.animate([{ opacity: '0' }, { opacity: '1' }], animationOptions)
+    let hideAnimation: Animation | undefined
+    if (previous !== stage) {
+      hideAnimation = previous.animate([{ opacity: '1' }, { opacity: '0' }], animationOptions)
+    }
+
+    frame.scheduled = true
+    frame.animations = hideAnimation ? [showAnimation, hideAnimation] : [showAnimation]
+    this._scheduledStage = stage
+
+    if (hideAnimation && previous !== this._canvas) {
+      void hideAnimation.finished
+        .then(() => {
+          if (this._destroyed || previous === this._scheduledStage) return
+          previous.remove()
+          this._stagedCanvases.delete(previous)
+        })
+        .catch(() => undefined)
+    }
+  }
+
+  private _recordPresentationClock(frameIndex: number, mediaTime: number, expectedDisplayTime?: number): void {
+    const timeline = this._frameTimeline
+    const playbackRate = this._videoPlaybackRateForWorker()
+    if (
+      !timeline ||
+      frameIndex < 0 ||
+      frameIndex + 1 >= timeline.length ||
+      !Number.isFinite(expectedDisplayTime) ||
+      playbackRate <= 0
+    ) {
+      return
+    }
+
+    if (
+      (Number.isFinite(this._lastClockMediaTime) &&
+        (mediaTime <= this._lastClockMediaTime! || Math.abs(mediaTime - this._lastClockMediaTime!) > 0.5)) ||
+      (Number.isFinite(this._lastClockPlaybackRate) && this._lastClockPlaybackRate !== playbackRate)
+    ) {
+      this._displayClockOffsets.length = 0
+      this._predictedDisplayTimes.clear()
+      this._displayGridAnchorMs = undefined
+    }
+    this._lastClockMediaTime = mediaTime
+    this._lastClockPlaybackRate = playbackRate
+
+    if (!Number.isFinite(this._displayGridAnchorMs)) this._displayGridAnchorMs = expectedDisplayTime
+    const frameMediaTime = timeline[frameIndex]
+    this._displayClockOffsets.push(expectedDisplayTime! - (frameMediaTime * 1000) / playbackRate)
+    if (this._displayClockOffsets.length > 12) this._displayClockOffsets.shift()
+
+    const refreshInterval = estimateRefreshIntervalMs(this._refreshSamples)
+    const targetDisplayTime = predictFrameDisplayTimeMs(
+      timeline[frameIndex + 1],
+      playbackRate,
+      this._displayClockOffsets,
+      this._displayGridAnchorMs,
+      refreshInterval
+    )
+    if (!Number.isFinite(targetDisplayTime)) return
+
+    this._predictedDisplayTimes.set(frameIndex + 1, targetDisplayTime!)
+    const prepared = this._preparedFrames.get(frameIndex + 1)
+    if (prepared) this._schedulePreparedFrame(prepared, targetDisplayTime!)
+  }
+
   private _clearPreparedFrames(): void {
-    for (const frame of this._preparedFrames.values()) frame.bitmap.close()
+    for (const frame of this._preparedFrames.values()) this._disposePreparedFrame(frame)
     this._preparedFrames.clear()
+    for (const stage of this._stagedCanvases) {
+      for (const animation of stage.getAnimations()) animation.cancel()
+      stage.remove()
+    }
+    this._stagedCanvases.clear()
+    this._scheduledStage = null
+    for (const animation of this._canvas?.getAnimations?.() ?? []) animation.cancel()
+    if (this._canvas) this._canvas.style.opacity = '1'
+    this._predictedDisplayTimes.clear()
+    this._displayClockOffsets.length = 0
+    this._displayGridAnchorMs = undefined
+    this._lastClockMediaTime = undefined
+    this._lastClockPlaybackRate = undefined
     this._prepareQueue.length = 0
     this._prepareRequests.clear()
   }
@@ -1026,7 +1207,7 @@ export default class AkariSub extends EventTarget {
 
     for (const [index, frame] of this._preparedFrames) {
       if (index < currentIndex || index > lastIndex) {
-        frame.bitmap.close()
+        this._disposePreparedFrame(frame)
         this._preparedFrames.delete(index)
       }
     }
@@ -1124,12 +1305,14 @@ export default class AkariSub extends EventTarget {
       request.index >= currentIndex
     ) {
       const previous = this._preparedFrames.get(request.index)
-      previous?.bitmap.close()
-      this._preparedFrames.set(request.index, {
+      if (previous) this._disposePreparedFrame(previous)
+      const prepared: PreparedFrame = {
         width: data.width ?? this._canvasctrl.width,
         height: data.height ?? this._canvasctrl.height,
         bitmap: data.bitmap
-      })
+      }
+      this._stagePreparedFrame(request.index, prepared)
+      this._preparedFrames.set(request.index, prepared)
     } else {
       data.bitmap?.close()
     }
@@ -1146,12 +1329,29 @@ export default class AkariSub extends EventTarget {
     presentationId: number,
     _expectedDisplayTime?: number
   ): void {
-    const { bitmap, width, height } = frame
-    // Present during the RVFC rendering update so canvas and video commit together.
     if (!this._activatePresentation(presentationId)) {
-      bitmap.close()
+      this._disposePreparedFrame(frame)
       return
     }
+
+    const { bitmap, width, height, stage } = frame
+    if (stage) {
+      if (!frame.scheduled) {
+        const previous = this._scheduledStage ?? this._canvas
+        for (const animation of stage.getAnimations()) animation.cancel()
+        stage.style.opacity = '1'
+        if (previous !== stage) {
+          for (const animation of previous.getAnimations()) animation.cancel()
+          previous.style.opacity = '0'
+        }
+        this._scheduledStage = stage
+      }
+      bitmap?.close()
+      frame.bitmap = undefined
+      return
+    }
+
+    if (!bitmap) return
 
     try {
       if (this._gpuRenderer) {
@@ -1391,11 +1591,12 @@ export default class AkariSub extends EventTarget {
           this._presentPreparedFrame(prepared, presentationId, expectedDisplayTime)
           presented = true
         } else {
-          prepared.bitmap.close()
+          this._disposePreparedFrame(prepared)
           this._prepareForce = true
         }
       }
       this._primePreparedFrames(mediaTime)
+      this._recordPresentationClock(frameIndex, mediaTime, expectedDisplayTime)
     }
 
     if (!presented) this._requestDemandRender(demandData)
@@ -1901,6 +2102,10 @@ export default class AkariSub extends EventTarget {
 
     if (this._destroyed) return error
 
+    if (this._refreshRafHandle != null && typeof cancelAnimationFrame === 'function') {
+      cancelAnimationFrame(this._refreshRafHandle)
+      this._refreshRafHandle = null
+    }
     this._clearPreparedFrames()
 
     if (this._video && this._canvasParent) {
