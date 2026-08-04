@@ -142,6 +142,9 @@ export class WebGPURenderer {
   private textureArrayHeight = 0
 
   private pendingDestroyTextures: GPUTexture[] = []
+  private externalUploadCanvas: OffscreenCanvas | HTMLCanvasElement | null = null
+  private externalUploadContext: OffscreenCanvasRenderingContext2D | CanvasRenderingContext2D | null = null
+  private warnedExternalUploadFallback = false
 
   // Pre-allocated typed arrays (reused every frame - ZERO allocations in hot path)
   private readonly imageDataArray: Float32Array
@@ -313,7 +316,7 @@ export class WebGPURenderer {
     ) {
       return false
     }
-    
+
     const newWidth = Math.max(this.textureArrayWidth, maxWidth)
     const newHeight = Math.max(this.textureArrayHeight, maxHeight)
     const newLayers = Math.max(clampedCount, Math.min(this.textureArraySize, 16))
@@ -433,6 +436,7 @@ export class WebGPURenderer {
     // Process images in batches if needed
     let imageIndex = 0
     let isFirstBatch = true
+    let renderedAnyBatch = false
 
     while (imageIndex < len) {
       let texIndex = 0
@@ -445,12 +449,7 @@ export class WebGPURenderer {
           h = bitmap.height
         if (w <= 0 || h <= 0) continue
 
-        // Copy to texture array layer
-        queue.copyExternalImageToTexture(
-          { source: bitmap, flipY: false },
-          { texture: textureArray, origin: [0, 0, texIndex], premultipliedAlpha: false },
-          { width: w, height: h }
-        )
+        if (!this.uploadImageBitmap(texIndex, bitmap, w, h)) continue
 
         // Fill pre-allocated array
         const offset = texIndex << 3
@@ -490,8 +489,10 @@ export class WebGPURenderer {
 
       queue.submit([commandEncoder.finish()])
       isFirstBatch = false
+      renderedAnyBatch = true
     }
 
+    if (!renderedAnyBatch) this.clear()
     this.cleanupPendingTextures()
   }
 
@@ -499,11 +500,7 @@ export class WebGPURenderer {
    * Render from raw ArrayBuffer data (non-async render mode)
    * Handles batching when image count exceeds MAX_TEXTURE_ARRAY_LAYERS
    */
-  render(
-    images: RenderImage[],
-    _canvasWidth: number,
-    _canvasHeight: number
-  ): void {
+  render(images: RenderImage[], _canvasWidth: number, _canvasHeight: number): void {
     if (!this.device || !this.context || !this.pipeline) return
 
     const len = images.length
@@ -547,6 +544,7 @@ export class WebGPURenderer {
     // Process images in batches if needed
     let imageIndex = 0
     let isFirstBatch = true
+    let renderedAnyBatch = false
 
     while (imageIndex < len) {
       let texIndex = 0
@@ -561,13 +559,15 @@ export class WebGPURenderer {
         // Upload texture data
         const imgData = img.image
         if (imgData instanceof ImageBitmap) {
-          queue.copyExternalImageToTexture(
-            { source: imgData, flipY: false },
-            { texture: textureArray, origin: [0, 0, texIndex], premultipliedAlpha: false },
-            { width: w, height: h }
-          )
-        } else if (imgData instanceof ArrayBuffer || imgData instanceof Uint8Array || imgData instanceof Uint8ClampedArray) {
+          if (!this.uploadImageBitmap(texIndex, imgData, w, h)) continue
+        } else if (
+          imgData instanceof ArrayBuffer ||
+          imgData instanceof Uint8Array ||
+          imgData instanceof Uint8ClampedArray
+        ) {
           this.uploadTextureData(texIndex, imgData, w, h)
+        } else {
+          continue
         }
 
         // Fill pre-allocated array
@@ -608,9 +608,58 @@ export class WebGPURenderer {
 
       queue.submit([commandEncoder.finish()])
       isFirstBatch = false
+      renderedAnyBatch = true
     }
 
+    if (!renderedAnyBatch) this.clear()
     this.cleanupPendingTextures()
+  }
+
+  private uploadImageBitmap(layerIndex: number, bitmap: ImageBitmap, width: number, height: number): boolean {
+    try {
+      this.device!.queue.copyExternalImageToTexture(
+        { source: bitmap, flipY: false },
+        { texture: this.textureArray!, origin: [0, 0, layerIndex], premultipliedAlpha: false },
+        { width, height }
+      )
+      return true
+    } catch (externalUploadError) {
+      try {
+        let canvas = this.externalUploadCanvas
+        if (!canvas) {
+          canvas =
+            typeof OffscreenCanvas !== 'undefined'
+              ? new OffscreenCanvas(width, height)
+              : document.createElement('canvas')
+          this.externalUploadCanvas = canvas
+        }
+        if (canvas.width !== width) canvas.width = width
+        if (canvas.height !== height) canvas.height = height
+
+        let context = this.externalUploadContext
+        if (!context) {
+          context = canvas.getContext('2d', { alpha: true, willReadFrequently: true }) as
+            | OffscreenCanvasRenderingContext2D
+            | CanvasRenderingContext2D
+            | null
+          this.externalUploadContext = context
+        }
+        if (!context) return false
+
+        context.clearRect(0, 0, width, height)
+        context.drawImage(bitmap, 0, 0)
+        this.uploadTextureData(layerIndex, context.getImageData(0, 0, width, height).data, width, height)
+
+        if (!this.warnedExternalUploadFallback) {
+          this.warnedExternalUploadFallback = true
+          console.warn('[AkariSub] WebGPU external-image upload failed; using RGBA fallback.', externalUploadError)
+        }
+        return true
+      } catch (fallbackError) {
+        console.warn('[AkariSub] Failed to upload subtitle bitmap to WebGPU.', fallbackError)
+        return false
+      }
+    }
   }
 
   private uploadTextureData(
@@ -685,6 +734,9 @@ export class WebGPURenderer {
     this.device = null
     this.context = null
     this._canvas = null
+    this.externalUploadCanvas = null
+    this.externalUploadContext = null
+    this.warnedExternalUploadFallback = false
     this._initialized = false
     this._initPromise = null
   }
