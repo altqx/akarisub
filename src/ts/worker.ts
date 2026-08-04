@@ -1947,9 +1947,6 @@ const postPreparedSnapshot = async (
 ): Promise<void> => {
   try {
     const context = ensurePreparedCanvas()
-    // Exact preparations are forced complete before each snapshot, including
-    // explicit blank frames. Transfer the backing store instead of copying a
-    // full video-sized canvas; the reset canvas is fully repainted next time.
     const bitmap = context.canvas.transferToImageBitmap()
     postMessage(
       { target: 'preparedFrame', prepareId, renderEpoch, time, width: self.width, height: self.height, bitmap },
@@ -2508,9 +2505,7 @@ self.init = async (data: any): Promise<void> => {
       if (debug) console.log('[AkariSub] Font reload complete')
     }
 
-    // Native construction deliberately starts with the provider disabled.
-    // Enable it only after MEMFS contains every startup font so fontconfig's
-    // first scan is useful and does not report an empty font database.
+    // Enable fontconfig only after startup fonts are in MEMFS (see AkariSub ctor).
     requireApi().setUseFontconfigProvider(requireHandle(), useFontconfigProvider ? 1 : 0)
 
     if (typeof subContent === 'string') {

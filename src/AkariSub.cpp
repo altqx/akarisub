@@ -425,9 +425,7 @@ public:
     adaptive_blend_layouts = false;
     scanned_events = 0;
     this->debug = debug;
-    // The worker enables fontconfig only after fallback and attached fonts have
-    // been written to MEMFS. Starting it here scans an intentionally empty
-    // /fonts tree and makes libass emit "Failed to load fontconfig fonts!".
+    // Disabled until the worker writes fonts into MEMFS (avoids empty fontconfig scan).
     useFontconfigProvider = false;
     defaultFont = copyString(df);
     ass_library = ass_library_init();

@@ -140,12 +140,7 @@ export interface PerformanceStats {
 // AkariSub Options Types
 // =============================================================================
 
-/**
- * Normalized encoded-frame timestamps. `mediaTimeOrigin` lets AkariSub detect
- * whether browser RVFC timestamps use the original or normalized media clock.
- * `subtitleTimeOffset` maps that browser clock back to the PTS-normalized clock
- * used by subtitle cues when an encoded stream starts with reordered B-frames.
- */
+/** Encoded-frame timestamps with optional media/subtitle clock offsets. */
 export interface FrameTimeline extends ArrayLike<number> {
   mediaTimeOrigin?: number
   subtitleTimeOffset?: number

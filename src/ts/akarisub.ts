@@ -1134,11 +1134,8 @@ export default class AkariSub extends EventTarget {
       data.bitmap?.close()
     }
 
-    // A prepared bitmap is a standalone full-canvas snapshot. Demand renders
-    // share libass' changed-frame baseline but paint to a different canvas, so
-    // an "unchanged" preparation could otherwise copy an older visible bitmap
-    // back over a newer empty frame. Force every subsequent preparation to
-    // materialize its complete state, including an explicit blank snapshot.
+    // Preparations share libass' changed-frame baseline with demand renders but
+    // paint to a different canvas; force complete snapshots afterwards.
     this._prepareForce = true
 
     this._finishWorkerSlot()
@@ -1150,11 +1147,7 @@ export default class AkariSub extends EventTarget {
     _expectedDisplayTime?: number
   ): void {
     const { bitmap, width, height } = frame
-    // RVFC is invoked as part of the rendering update for this video frame.
-    // Commit an already prepared snapshot in that same update so the canvas
-    // and video reach the compositor together. Waiting until (or after)
-    // expectedDisplayTime misses a refresh on high-refresh-rate displays and
-    // can leave fast ASS transitions one encoded frame behind.
+    // Present during the RVFC rendering update so canvas and video commit together.
     if (!this._activatePresentation(presentationId)) {
       bitmap.close()
       return
@@ -1178,12 +1171,8 @@ export default class AkariSub extends EventTarget {
     }
   }
 
-  /**
-   * Mark a frame as the newest one that has actually entered the presentation
-   * pipeline. RVFC callbacks can arrive faster than libass can render. Advancing
-   * this watermark when a callback is merely queued would continuously discard
-   * the in-flight render and leave an older subtitle stuck on the canvas.
-   */
+  // Advance the presentation watermark only when a frame enters the pipeline,
+  // not when an RVFC is merely queued (avoids starving the in-flight render).
   private _activatePresentation(presentationId: number): boolean {
     if (isStalePresentation(presentationId, this._latestPresentationId)) return false
     this._latestPresentationId = presentationId
@@ -1319,9 +1308,7 @@ export default class AkariSub extends EventTarget {
     if (shouldRenderExactFrame) {
       this._bumpRenderEpoch()
       const presentationId = this._nextPresentationId++
-      // A paused/seeking frame must supersede any speculative active-playback
-      // render immediately. Unlike an RVFC queued behind a busy worker, this is
-      // a terminal clock state and no newer callback may arrive to correct it.
+      // Pause/seek is terminal: supersede any speculative play-ahead immediately.
       this._activatePresentation(presentationId)
       this._requestDemandRender({
         mediaTime: currentTime - this.timeOffset,
@@ -1371,10 +1358,7 @@ export default class AkariSub extends EventTarget {
 
     const presentationId = this._nextPresentationId++
 
-    // RVFC metadata.mediaTime is the frame timestamp supplied by the browser.
-    // Keep it unmodified while a demand is queued. Its presentation timestamp
-    // is predicted immediately before dispatch, when the actual queue delay is
-    // known. This is important for fast \t and \move animations.
+    // Keep the browser frame timestamp unmodified while queued; predict at dispatch.
     const isPaused = this._isVideoPausedForWorker()
     const expectedDisplayTime = Number.isFinite(metadata.expectedDisplayTime)
       ? metadata.expectedDisplayTime
@@ -1484,14 +1468,8 @@ export default class AkariSub extends EventTarget {
       adaptiveLead,
       isPaused
     )
-    // Exact timelines are keyed to the frame reported by RVFC. Applying queue
-    // or paint-latency lead here can jump multiple frames into the future when
-    // the worker is busy, which is observably early at cue boundaries.
     const renderTime = selectRenderMediaTime(this._frameTimeline, metadata.mediaTime, predictedRenderTime, isPaused)
 
-    // Activate only when this demand is dispatched. If it sat in the busy
-    // queue, invalidating the render already in flight would create starvation
-    // on animation-heavy tracks and could leave the previous cue visible.
     if (!this._activatePresentation(presentationId)) {
       this._finishWorkerSlot()
       return
@@ -1507,9 +1485,7 @@ export default class AkariSub extends EventTarget {
 
     this.sendMessage('demand', {
       time: renderTime + this.timeOffset,
-      // Timeline preparation advances libass' internal change baseline on a
-      // separate canvas. A fallback demand must collect a complete frame so an
-      // empty prepared window cannot leave the previous visible cue behind.
+      // Exact-timeline preparation mutates libass' change baseline; force a full frame.
       force: metadata.force || this._frameTimeline != null,
       requestId,
       renderEpoch: this._renderEpoch,
@@ -1790,11 +1766,7 @@ export default class AkariSub extends EventTarget {
 
     await this._loaded
 
-    // While the worker is initializing, real video clocks and layout can
-    // advance. The ready handler sends a fresh clock snapshot and its first
-    // demand synchronizes the current canvas size, so do not replay stale
-    // pre-ready state after those newer snapshots. A stale 0x0 canvas message
-    // would otherwise make exact-frame preparation impossible.
+    // Drop stale pre-ready video/canvas updates; ready re-syncs current state.
     if ((target === 'video' || target === 'canvas') && this._video) return
 
     this._postWorkerMessage(target, data, transferable)

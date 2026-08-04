@@ -47,7 +47,6 @@ export const presentationLeadSeconds = (
   return Math.max(0, (dispatchedAtMs - expectedDisplayTimeMs!) / 1000 + safePipelineSeconds)
 }
 
-/** Copy, validate, sort, and de-duplicate media presentation timestamps. */
 export const normalizeFrameTimeline = (
   frameTimes: ArrayLike<number> & { mediaTimeOrigin?: number; subtitleTimeOffset?: number }
 ): Float64Array & { mediaTimeOrigin?: number; subtitleTimeOffset?: number } => {
@@ -76,7 +75,6 @@ export const normalizeFrameTimeline = (
   return normalized
 }
 
-/** Find the first encoded video frame at or after a media timestamp. */
 export const frameIndexAtOrAfter = (frameTimes: ArrayLike<number>, mediaTime: number): number => {
   if (frameTimes.length === 0 || !Number.isFinite(mediaTime)) return -1
 
@@ -90,7 +88,6 @@ export const frameIndexAtOrAfter = (frameTimes: ArrayLike<number>, mediaTime: nu
   return low < frameTimes.length ? low : frameTimes.length - 1
 }
 
-/** Find the encoded frame timestamp closest to a browser media timestamp. */
 export const nearestFrameIndex = (frameTimes: ArrayLike<number>, mediaTime: number): number => {
   const next = frameIndexAtOrAfter(frameTimes, mediaTime)
   if (next <= 0) return next
@@ -98,14 +95,12 @@ export const nearestFrameIndex = (frameTimes: ArrayLike<number>, mediaTime: numb
   return mediaTime - frameTimes[previous] <= frameTimes[next] - mediaTime ? previous : next
 }
 
-/** Find the encoded frame currently presented at a browser media timestamp. */
 export const presentedFrameIndex = (frameTimes: ArrayLike<number>, mediaTime: number): number => {
   const next = frameIndexAtOrAfter(frameTimes, mediaTime)
   if (next < 0) return next
   return next > 0 && frameTimes[next] > mediaTime ? next - 1 : next
 }
 
-/** Snap a prediction to the encoded frame currently presented at that media time. */
 export const snapToFrameTimeline = (frameTimes: ArrayLike<number>, mediaTime: number): number => {
   const index = presentedFrameIndex(frameTimes, mediaTime)
   return index >= 0 ? frameTimes[index] : mediaTime
@@ -121,7 +116,6 @@ export const snapToSubtitleTimeline = (
   return Math.max(0, frameTime - offset)
 }
 
-/** Get the PTS-normalized subtitle sample time for an encoded frame index. */
 export const subtitleTimeForFrame = (
   frameTimes: ArrayLike<number> & { subtitleTimeOffset?: number },
   frameIndex: number
@@ -132,14 +126,7 @@ export const subtitleTimeForFrame = (
   return Math.max(0, frameTime - offset)
 }
 
-/**
- * Select the libass sample for a video-frame callback.
- *
- * An encoded timeline already identifies the frame being presented. Do not
- * apply render-latency prediction to that path: a delayed render must remain a
- * delayed render of the correct frame, rather than becoming an early render of
- * a future frame.
- */
+// Exact timelines identify the presented frame; do not latency-predict into a future frame.
 export const selectRenderMediaTime = (
   frameTimes: (ArrayLike<number> & { subtitleTimeOffset?: number }) | null,
   mediaTime: number,
@@ -147,16 +134,12 @@ export const selectRenderMediaTime = (
   _isPaused: boolean
 ): number => (frameTimes ? snapToSubtitleTimeline(frameTimes, mediaTime) : predictedMediaTime)
 
-/** True when an asynchronous paint has been superseded by a newer video frame. */
 export const isStalePresentation = (presentationId: number | undefined, latestPresentationId: number): boolean =>
   presentationId != null && presentationId < latestPresentationId
 
 /**
  * Resolve an RVFC timestamp into the clock domain used by subtitle cues.
- *
- * Transmuxed streams can expose a transport PTS through metadata.mediaTime
- * while HTMLMediaElement.currentTime remains normalized to the presentation
- * timeline. Backend frame timelines and ASS cues use that normalized clock.
+ * Transport PTS and normalized currentTime can disagree on transmuxed streams.
  */
 export const resolvePresentationMediaTime = (
   metadataMediaTime: number,
@@ -175,16 +158,12 @@ export const resolvePresentationMediaTime = (
       const directError = directIndex >= 0 ? Math.abs(frameTimes[directIndex] - metadataMediaTime) : Infinity
       const adjustedError = adjustedIndex >= 0 ? Math.abs(frameTimes[adjustedIndex] - adjustedMediaTime) : Infinity
 
-      // Shaka transmuxes MPEG-TS onto a normalized media timeline, while some
-      // browser/container paths expose the original encoded PTS. Pick the
-      // clock domain whose timestamp actually lands on the probed frame map.
+      // Prefer the clock domain that lands on the probed frame map.
       if (Math.abs(directError - adjustedError) > 0.0001) {
         return adjustedError < directError ? adjustedMediaTime : metadataMediaTime
       }
 
-      // An origin can occasionally be close to an exact multiple of the frame
-      // cadence. In that ambiguous case currentTime identifies the clock domain
-      // without becoming the render clock itself.
+      // Ambiguous origin (near a frame-period multiple): use currentTime as a hint only.
       if (Number.isFinite(videoCurrentTime)) {
         return Math.abs(adjustedMediaTime - videoCurrentTime!) < Math.abs(metadataMediaTime - videoCurrentTime!)
           ? adjustedMediaTime
@@ -198,11 +177,7 @@ export const resolvePresentationMediaTime = (
     const metadataIndex = nearestFrameIndex(frameTimes, metadataMediaTime)
     const metadataError = metadataIndex >= 0 ? Math.abs(frameTimes[metadataIndex] - metadataMediaTime) : Infinity
 
-    // Version 1 timelines do not preserve the transport origin. Shaka RVFC
-    // timestamps are already normalized and remain within the 1 ms MPEG-TS
-    // timescale conversion error. Prefer that stable clock whenever it fits;
-    // comparing it to continuously advancing currentTime per callback can flip
-    // domains and skip a one-frame sign when currentTime briefly lands closer.
+    // v1 timelines lack mediaTimeOrigin; prefer normalized RVFC when it fits the map.
     return metadataError <= 0.0025 ? metadataMediaTime : videoCurrentTime!
   }
 
