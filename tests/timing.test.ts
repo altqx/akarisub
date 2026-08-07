@@ -543,6 +543,59 @@ describe('subtitle timing compensation', () => {
     expect(activations).toBe(1)
   })
 
+  test('reveals completed WebGPU work after a newer video callback enters the pipeline', async () => {
+    const renderer = Object.create(AkariSub.prototype) as any
+    const gpu = new WebGPURenderer() as any
+    let completeGPUWork!: () => void
+    gpu.submittedWorkDone = () =>
+      new Promise<void>((resolve) => {
+        completeGPUWork = resolve
+      })
+
+    const activations: number[] = []
+    Object.assign(renderer, {
+      _rendererType: 'webgpu',
+      _gpuRenderer: gpu,
+      _destroyed: false,
+      _renderEpoch: 4,
+      _latestPresentationId: 8,
+      _activateBaseCanvas: (frameIndex?: number) => activations.push(frameIndex ?? -1)
+    })
+
+    renderer._activateBaseCanvasAfterGPUWork(4, 12)
+    renderer._latestPresentationId = 9
+    completeGPUWork()
+    await Promise.resolve()
+
+    expect(activations).toEqual([12])
+  })
+
+  test('does not reveal WebGPU work from an obsolete render epoch', async () => {
+    const renderer = Object.create(AkariSub.prototype) as any
+    const gpu = new WebGPURenderer() as any
+    let completeGPUWork!: () => void
+    gpu.submittedWorkDone = () =>
+      new Promise<void>((resolve) => {
+        completeGPUWork = resolve
+      })
+
+    let activations = 0
+    Object.assign(renderer, {
+      _rendererType: 'webgpu',
+      _gpuRenderer: gpu,
+      _destroyed: false,
+      _renderEpoch: 4,
+      _activateBaseCanvas: () => activations++
+    })
+
+    renderer._activateBaseCanvasAfterGPUWork(4, 12)
+    renderer._renderEpoch = 5
+    completeGPUWork()
+    await Promise.resolve()
+
+    expect(activations).toBe(0)
+  })
+
   test('does not rerasterize a compositor-scheduled exact snapshot in its RVFC', () => {
     const renderer = Object.create(AkariSub.prototype) as any
     const calls: string[] = []

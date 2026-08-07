@@ -1158,11 +1158,7 @@ export default class AkariSub extends EventTarget {
     this._scheduleNextPreparedFrame()
   }
 
-  private _activateBaseCanvasAfterGPUWork(
-    presentationId?: number,
-    renderEpoch: number = this._renderEpoch,
-    presentedIndex?: number
-  ): void {
+  private _activateBaseCanvasAfterGPUWork(renderEpoch: number = this._renderEpoch, presentedIndex?: number): void {
     if (this._rendererType !== 'webgpu' || !(this._gpuRenderer instanceof WebGPURenderer)) {
       this._activateBaseCanvas(presentedIndex)
       return
@@ -1171,13 +1167,7 @@ export default class AkariSub extends EventTarget {
     const renderer = this._gpuRenderer
     void renderer.submittedWorkDone().then(
       () => {
-        if (
-          this._destroyed ||
-          renderEpoch !== this._renderEpoch ||
-          isStalePresentation(presentationId, this._latestPresentationId)
-        ) {
-          return
-        }
+        if (this._destroyed || renderEpoch !== this._renderEpoch) return
         this._activateBaseCanvas(presentedIndex)
       },
       () => {
@@ -1717,7 +1707,7 @@ export default class AkariSub extends EventTarget {
           if (frame.stage) this._commitPreparedStage(frame)
           return
         }
-        this._activateBaseCanvasAfterGPUWork(presentationId, this._renderEpoch, frame.index)
+        this._activateBaseCanvasAfterGPUWork(this._renderEpoch, frame.index)
         return
       }
 
@@ -2244,7 +2234,7 @@ export default class AkariSub extends EventTarget {
         console.warn('[AkariSub] GPU clear failed; preserving the last subtitle frame.', error)
       }
       if (painted !== false) {
-        this._activateBaseCanvasAfterGPUWork(data.presentationId, data.renderEpoch, presentedIndex)
+        this._activateBaseCanvasAfterGPUWork(data.renderEpoch, presentedIndex)
       }
       return
     }
@@ -2292,7 +2282,7 @@ export default class AkariSub extends EventTarget {
     }
 
     if (painted !== false) {
-      this._activateBaseCanvasAfterGPUWork(data.presentationId, data.renderEpoch, presentedIndex)
+      this._activateBaseCanvasAfterGPUWork(data.renderEpoch, presentedIndex)
     }
 
     if (this.debug) {
