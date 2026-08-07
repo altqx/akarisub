@@ -161,6 +161,7 @@ export default class AkariSub extends EventTarget {
   private _displayGridAnchorMs?: number
   private _lastClockMediaTime?: number
   private _lastClockPlaybackRate?: number
+  private _lastPresentedFrameIndex?: number
   private _refreshSamples: number[] = []
   private _refreshRafHandle: number | null = null
   private _lastRefreshRafTime?: number
@@ -962,7 +963,7 @@ export default class AkariSub extends EventTarget {
       enabled: this._frameTimeline != null && this.framePrefetch > 0
     })
     this._syncVideoClock()
-    this._primePreparedFrames(this._video?.currentTime ?? 0)
+    this._primePreparedFrames(this._currentExactFrameMediaTime())
     this._dispatchNextPreparation()
   }
 
@@ -1050,7 +1051,7 @@ export default class AkariSub extends EventTarget {
     }
 
     this.busy = false
-    this._primePreparedFrames(this._video?.currentTime ?? 0)
+    this._primePreparedFrames(this._currentExactFrameMediaTime())
     this._dispatchNextPreparation()
   }
 
@@ -1110,7 +1111,16 @@ export default class AkariSub extends EventTarget {
 
   private _currentExactFrameIndex(): number | undefined {
     if (!this._frameTimeline || !this._video) return undefined
+    if (!this._isVideoPausedForWorker() && this._lastPresentedFrameIndex != null) {
+      return this._lastPresentedFrameIndex
+    }
     return presentedFrameIndex(this._frameTimeline, this._video.currentTime)
+  }
+
+  private _currentExactFrameMediaTime(): number {
+    const index = this._currentExactFrameIndex()
+    if (index != null && this._frameTimeline) return this._frameTimeline[index]
+    return this._video?.currentTime ?? 0
   }
 
   /** Make a freshly painted base canvas visible without discarding future prefetch. */
@@ -1413,6 +1423,9 @@ export default class AkariSub extends EventTarget {
   private _recordPresentationClock(frameIndex: number, mediaTime: number, expectedDisplayTime?: number): void {
     const timeline = this._frameTimeline
     const playbackRate = this._videoPlaybackRateForWorker()
+    if (timeline && frameIndex >= 0) {
+      this._predictedDisplayTimes.delete(frameIndex)
+    }
     if (
       !timeline ||
       frameIndex < 0 ||
@@ -1510,6 +1523,7 @@ export default class AkariSub extends EventTarget {
     this._displayGridAnchorMs = undefined
     this._lastClockMediaTime = undefined
     this._lastClockPlaybackRate = undefined
+    this._lastPresentedFrameIndex = undefined
     this._prepareQueue.length = 0
     this._prepareRequests.clear()
   }
@@ -1622,9 +1636,7 @@ export default class AkariSub extends EventTarget {
       return
     }
 
-    const currentIndex = this._frameTimeline
-      ? presentedFrameIndex(this._frameTimeline, this._video?.currentTime ?? data.time - this.timeOffset)
-      : -1
+    const currentIndex = this._currentExactFrameIndex() ?? -1
 
     if (
       request &&
@@ -1951,6 +1963,7 @@ export default class AkariSub extends EventTarget {
     let presented = false
     if (!isPaused && this._frameTimeline && this.framePrefetch > 0) {
       const frameIndex = presentedFrameIndex(this._frameTimeline, mediaTime)
+      if (frameIndex >= 0) this._lastPresentedFrameIndex = frameIndex
       const prepared = this._preparedFrames.get(frameIndex)
       if (prepared) {
         this._preparedFrames.delete(frameIndex)

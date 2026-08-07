@@ -967,4 +967,52 @@ describe('subtitle timing compensation', () => {
     expect(renderer._latestPresentationId).toBe(1)
     expect(workerMessages).toEqual([{ target: 'presentation', presentationId: 1 }])
   })
+
+  test('keeps long-timeline prefetch anchored to the latest RVFC when currentTime trails a frame', () => {
+    const renderer = Object.create(AkariSub.prototype) as any
+    const timeline = new Float64Array([1499.916, 1499.958, 1500, 1500.042, 1500.083, 1500.125])
+    const dispatched: number[][] = []
+
+    Object.assign(renderer, {
+      _frameTimeline: timeline,
+      _lastPresentedFrameIndex: 2,
+      _video: { paused: false, ended: false, currentTime: timeline[1], playbackRate: 1 },
+      _playstate: false,
+      _destroyed: false,
+      _pendingDemandTimes: [],
+      _demandTimings: new Map(),
+      _preparedFrames: new Map(),
+      _prepareQueue: [],
+      _prepareRequests: new Map(),
+      framePrefetch: 2,
+      busy: true,
+      _dispatchNextPreparation() {
+        dispatched.push([...this._prepareQueue])
+      }
+    })
+
+    renderer._finishWorkerSlot()
+
+    expect(dispatched).toEqual([[3, 4]])
+    expect(renderer._currentExactFrameIndex()).toBe(2)
+  })
+
+  test('retires consumed compositor predictions during long playback', () => {
+    const renderer = Object.create(AkariSub.prototype) as any
+    const timeline = new Float64Array([1499.916, 1499.958, 1500, 1500.042])
+
+    Object.assign(renderer, {
+      _frameTimeline: timeline,
+      _video: { paused: false, ended: false, playbackRate: 1 },
+      _playstate: false,
+      _predictedDisplayTimes: new Map([[2, 500]]),
+      _displayClockOffsets: [],
+      _refreshSamples: [],
+      _preparedFrames: new Map()
+    })
+
+    renderer._recordPresentationClock(2, timeline[2], 500)
+
+    expect(renderer._predictedDisplayTimes.has(2)).toBe(false)
+  })
 })
