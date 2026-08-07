@@ -350,7 +350,6 @@ class RawASSImageWebGL2Renderer {
       depth: false,
       preserveDrawingBuffer: false,
       stencil: false,
-      desynchronized: true,
       powerPreference: 'high-performance'
     }) as WebGL2RenderingContext | null
     if (!gl) return false
@@ -1181,7 +1180,7 @@ const findAvailableFonts = (font: string): void => {
 const asyncWrite = (
   font: string | Uint8Array,
   isFallback: boolean = true,
-  settled?: (success: boolean) => void,
+  settled?: (success: boolean) => void
 ): void => {
   if (typeof font === 'string') {
     void readBoundedFontUrl(font)
@@ -1297,7 +1296,8 @@ const writeFontToFSImmediate = (uint8: Uint8Array, isFallback: boolean = true): 
   const fontFileName = isFallback ? 'fallback-' + fallbackFontId++ : 'attached-' + attachedFontId++
 
   const success = admitAndPersistFont(uint8, fontDir, fontFileName)
-  if (success && debug) console.log('[AkariSub] Wrote admitted font to FS:', fontDir + '/' + fontFileName, 'size:', uint8.length)
+  if (success && debug)
+    console.log('[AkariSub] Wrote admitted font to FS:', fontDir + '/' + fontFileName, 'size:', uint8.length)
   return success
 }
 
@@ -1935,7 +1935,7 @@ const ensurePreparedCanvas = (): OffscreenCanvasRenderingContext2D => {
     preparedCanvas.height = height
     preparedCtx = null
   }
-  preparedCtx ??= preparedCanvas.getContext('2d', { desynchronized: true })
+  preparedCtx ??= preparedCanvas.getContext('2d')
   if (!preparedCtx) throw new Error('Prepared-frame canvas is unavailable')
   return preparedCtx
 }
@@ -1986,7 +1986,7 @@ const paintPreparedImages = (
         preparedBufferCanvas.height = image.h
         preparedBufferCtx = null
       }
-      preparedBufferCtx ??= preparedBufferCanvas.getContext('2d', { desynchronized: true })
+      preparedBufferCtx ??= preparedBufferCanvas.getContext('2d')
       if (!preparedBufferCtx) throw new Error('Prepared-frame buffer canvas is unavailable')
 
       const byteLength = image.w * image.h * 4
@@ -2601,12 +2601,12 @@ self.offscreenCanvas = ({
     }
   }
 
-  offCanvasCtx = offCanvas.getContext('2d', { desynchronized: true })
+  offCanvasCtx = offCanvas.getContext('2d')
   // Plain offscreen rendering draws raw WASM image pointers through a reusable
   // buffer canvas. Create it regardless of asyncRender because the render path
   // deliberately disables per-image ImageBitmap creation for offscreenRender=true.
   bufferCanvas = new OffscreenCanvas(self.width, self.height)
-  bufferCtx = bufferCanvas.getContext('2d', { desynchronized: true })
+  bufferCtx = bufferCanvas.getContext('2d')
   offscreenRender = true
 }
 
@@ -2614,19 +2614,32 @@ self.detachOffscreen = (): void => {
   rawAssWebGL2Renderer?.destroy()
   rawAssWebGL2Renderer = null
   offCanvas = new OffscreenCanvas(self.width, self.height)
-  offCanvasCtx = offCanvas.getContext('2d', { desynchronized: true })
+  offCanvasCtx = offCanvas.getContext('2d')
   offscreenRender = 'hybrid'
 }
 
-self.presentFrame = ({ bitmap, presentationId }: { bitmap: ImageBitmap; presentationId: number }): void => {
+self.presentFrame = ({
+  bitmap,
+  presentationId,
+  renderEpoch,
+  frameIndex
+}: {
+  bitmap: ImageBitmap
+  presentationId: number
+  renderEpoch?: number
+  frameIndex?: number
+}): void => {
+  let painted = false
   try {
     if (isStalePresentation(presentationId, latestPresentationId)) return
     latestPresentationId = Math.max(latestPresentationId, presentationId)
     if (!offCanvasCtx || !offCanvas) return
     offCanvasCtx.clearRect(0, 0, offCanvas.width, offCanvas.height)
     offCanvasCtx.drawImage(bitmap, 0, 0)
+    painted = true
   } finally {
     bitmap.close()
+    if (painted) postMessage({ target: 'presentedFrame', presentationId, renderEpoch, frameIndex })
   }
 }
 

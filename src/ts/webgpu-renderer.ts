@@ -397,7 +397,11 @@ export class WebGPURenderer {
   releaseCanvas(canvas: HTMLCanvasElement): void {
     const context = this.stageContexts.get(canvas)
     if (!context) return
-    context.unconfigure()
+    try {
+      context.unconfigure()
+    } catch {
+      // Device loss can invalidate a context before DOM-stage cleanup.
+    }
     this.stageContexts.delete(canvas)
   }
 
@@ -423,9 +427,13 @@ export class WebGPURenderer {
     images: { image: ImageBitmap; x: number; y: number }[],
     canvasWidth: number,
     canvasHeight: number
-  ): void {
-    if (!this.context) return
-    this.renderBitmapsToContext(images, this.context, canvasWidth, canvasHeight)
+  ): boolean {
+    if (!this.context) return false
+    return this.renderBitmapsToContext(images, this.context, canvasWidth, canvasHeight)
+  }
+
+  submittedWorkDone(): Promise<void> {
+    return this.device?.queue.onSubmittedWorkDone() ?? Promise.resolve()
   }
 
   private renderBitmapsToContext(
@@ -442,8 +450,7 @@ export class WebGPURenderer {
 
     const len = images.length
     if (len === 0) {
-      this.clearContext(context)
-      return true
+      return this.clearContext(context)
     }
 
     const currentTexture = context.getCurrentTexture()
@@ -465,8 +472,7 @@ export class WebGPURenderer {
     }
 
     if (validCount === 0) {
-      this.clearContext(context)
-      return true
+      return this.clearContext(context)
     }
 
     // Ensure texture array is large enough (capped at MAX_TEXTURE_ARRAY_LAYERS)
@@ -548,8 +554,8 @@ export class WebGPURenderer {
    * Render from raw ArrayBuffer data (non-async render mode)
    * Handles batching when image count exceeds MAX_TEXTURE_ARRAY_LAYERS
    */
-  render(images: RenderImage[], _canvasWidth: number, _canvasHeight: number): void {
-    if (!this.device || !this.context || !this.pipeline) return
+  render(images: RenderImage[], _canvasWidth: number, _canvasHeight: number): boolean {
+    if (!this.device || !this.context || !this.pipeline) return false
 
     this.resolutionArray[0] = _canvasWidth
     this.resolutionArray[1] = _canvasHeight
@@ -557,12 +563,11 @@ export class WebGPURenderer {
 
     const len = images.length
     if (len === 0) {
-      this.clear()
-      return
+      return this.clear()
     }
 
     const currentTexture = this.context.getCurrentTexture()
-    if (currentTexture.width === 0 || currentTexture.height === 0) return
+    if (currentTexture.width === 0 || currentTexture.height === 0) return false
 
     // Single pass: find max dimensions and count valid images
     let maxW = 0,
@@ -578,8 +583,7 @@ export class WebGPURenderer {
     }
 
     if (validCount === 0) {
-      this.clear()
-      return
+      return this.clear()
     }
 
     // Ensure texture array is large enough (capped at MAX_TEXTURE_ARRAY_LAYERS)
@@ -665,6 +669,7 @@ export class WebGPURenderer {
 
     if (!renderedAnyBatch) this.clear()
     this.cleanupPendingTextures()
+    return renderedAnyBatch
   }
 
   private uploadImageBitmap(layerIndex: number, bitmap: ImageBitmap, width: number, height: number): boolean {
@@ -739,18 +744,18 @@ export class WebGPURenderer {
     pending.length = 0
   }
 
-  clear(): void {
-    if (!this.device || !this.context) return
+  clear(): boolean {
+    if (!this.device || !this.context) return false
 
-    this.clearContext(this.context)
+    return this.clearContext(this.context)
   }
 
-  private clearContext(context: GPUCanvasContext): void {
-    if (!this.device) return
+  private clearContext(context: GPUCanvasContext): boolean {
+    if (!this.device) return false
 
     try {
       const currentTexture = context.getCurrentTexture()
-      if (currentTexture.width === 0 || currentTexture.height === 0) return
+      if (currentTexture.width === 0 || currentTexture.height === 0) return false
 
       const commandEncoder = this.device.createCommandEncoder()
       const renderPass = commandEncoder.beginRenderPass({
@@ -765,8 +770,9 @@ export class WebGPURenderer {
       })
       renderPass.end()
       this.device.queue.submit([commandEncoder.finish()])
+      return true
     } catch {
-      // Ignore errors
+      return false
     }
   }
 
@@ -777,7 +783,13 @@ export class WebGPURenderer {
   destroy(): void {
     this.cleanupPendingTextures()
 
-    for (const context of this.stageContexts.values()) context.unconfigure()
+    for (const context of this.stageContexts.values()) {
+      try {
+        context.unconfigure()
+      } catch {
+        // Context can already be invalid after device loss.
+      }
+    }
     this.stageContexts.clear()
 
     this.textureArray?.destroy()
