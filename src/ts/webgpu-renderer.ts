@@ -128,6 +128,7 @@ function toUint8View(data: ArrayBuffer | Uint8Array | Uint8ClampedArray): Uint8A
 export class WebGPURenderer {
   private device: GPUDevice | null = null
   private context: GPUCanvasContext | null = null
+  private stageContexts = new Map<HTMLCanvasElement, GPUCanvasContext>()
   private pipeline: GPURenderPipeline | null = null
   private bindGroupLayout: GPUBindGroupLayout | null = null
 
@@ -368,6 +369,38 @@ export class WebGPURenderer {
     this.lastCanvasHeight = height
   }
 
+  /**
+   * Render a prepared full-frame subtitle snapshot into its own WebGPU canvas.
+   * Keeping prepared frames on the selected backend avoids switching to a 2D
+   * compositor during playback (and lets Chromium keep one GPU overlay stack).
+   */
+  renderBitmapToCanvas(canvas: HTMLCanvasElement, bitmap: ImageBitmap, width: number, height: number): boolean {
+    if (!this.device || !this.pipeline || width <= 0 || height <= 0) return false
+
+    canvas.width = width
+    canvas.height = height
+    let context: GPUCanvasContext | null | undefined = this.stageContexts.get(canvas)
+    if (!context) {
+      context = canvas.getContext('webgpu')
+      if (!context) return false
+      context.configure({
+        device: this.device,
+        format: this.format,
+        alphaMode: 'premultiplied'
+      })
+      this.stageContexts.set(canvas, context)
+    }
+
+    return this.renderBitmapsToContext([{ image: bitmap, x: 0, y: 0 }], context, width, height)
+  }
+
+  releaseCanvas(canvas: HTMLCanvasElement): void {
+    const context = this.stageContexts.get(canvas)
+    if (!context) return
+    context.unconfigure()
+    this.stageContexts.delete(canvas)
+  }
+
   updateSize(width: number, height: number): void {
     if (!this.device || !this._canvas || width <= 0 || height <= 0) return
     if (width === this.lastCanvasWidth && height === this.lastCanvasHeight) return
@@ -388,19 +421,33 @@ export class WebGPURenderer {
    */
   renderBitmaps(
     images: { image: ImageBitmap; x: number; y: number }[],
-    _canvasWidth: number,
-    _canvasHeight: number
+    canvasWidth: number,
+    canvasHeight: number
   ): void {
-    if (!this.device || !this.context || !this.pipeline) return
+    if (!this.context) return
+    this.renderBitmapsToContext(images, this.context, canvasWidth, canvasHeight)
+  }
+
+  private renderBitmapsToContext(
+    images: { image: ImageBitmap; x: number; y: number }[],
+    context: GPUCanvasContext,
+    canvasWidth: number,
+    canvasHeight: number
+  ): boolean {
+    if (!this.device || !this.pipeline || canvasWidth <= 0 || canvasHeight <= 0) return false
+
+    this.resolutionArray[0] = canvasWidth
+    this.resolutionArray[1] = canvasHeight
+    this.device.queue.writeBuffer(this.uniformBuffer!, 0, this.resolutionArray)
 
     const len = images.length
     if (len === 0) {
-      this.clear()
-      return
+      this.clearContext(context)
+      return true
     }
 
-    const currentTexture = this.context.getCurrentTexture()
-    if (currentTexture.width === 0 || currentTexture.height === 0) return
+    const currentTexture = context.getCurrentTexture()
+    if (currentTexture.width === 0 || currentTexture.height === 0) return false
 
     // Single pass: find max dimensions and count valid images
     let maxW = 0,
@@ -418,8 +465,8 @@ export class WebGPURenderer {
     }
 
     if (validCount === 0) {
-      this.clear()
-      return
+      this.clearContext(context)
+      return true
     }
 
     // Ensure texture array is large enough (capped at MAX_TEXTURE_ARRAY_LAYERS)
@@ -492,8 +539,9 @@ export class WebGPURenderer {
       renderedAnyBatch = true
     }
 
-    if (!renderedAnyBatch) this.clear()
+    if (!renderedAnyBatch) this.clearContext(context)
     this.cleanupPendingTextures()
+    return renderedAnyBatch
   }
 
   /**
@@ -502,6 +550,10 @@ export class WebGPURenderer {
    */
   render(images: RenderImage[], _canvasWidth: number, _canvasHeight: number): void {
     if (!this.device || !this.context || !this.pipeline) return
+
+    this.resolutionArray[0] = _canvasWidth
+    this.resolutionArray[1] = _canvasHeight
+    this.device.queue.writeBuffer(this.uniformBuffer!, 0, this.resolutionArray)
 
     const len = images.length
     if (len === 0) {
@@ -690,8 +742,14 @@ export class WebGPURenderer {
   clear(): void {
     if (!this.device || !this.context) return
 
+    this.clearContext(this.context)
+  }
+
+  private clearContext(context: GPUCanvasContext): void {
+    if (!this.device) return
+
     try {
-      const currentTexture = this.context.getCurrentTexture()
+      const currentTexture = context.getCurrentTexture()
       if (currentTexture.width === 0 || currentTexture.height === 0) return
 
       const commandEncoder = this.device.createCommandEncoder()
@@ -718,6 +776,9 @@ export class WebGPURenderer {
 
   destroy(): void {
     this.cleanupPendingTextures()
+
+    for (const context of this.stageContexts.values()) context.unconfigure()
+    this.stageContexts.clear()
 
     this.textureArray?.destroy()
     this.textureArray = null

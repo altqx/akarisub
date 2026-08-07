@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import AkariSub from '../src/ts/akarisub'
+import { WebGPURenderer } from '../src/ts/webgpu-renderer'
 import {
   compensatedMediaTime,
   estimateRefreshIntervalMs,
@@ -54,9 +55,7 @@ describe('subtitle timing compensation', () => {
   })
 
   test('predicts the exact six-refresh boundary on a 144 Hz display', () => {
-    expect(
-      predictFrameDisplayTimeMs(3.9633, 1, [-2921.588, -2921.588], 1000, 1000 / 144)
-    ).toBeCloseTo(1041.667, 2)
+    expect(predictFrameDisplayTimeMs(3.9633, 1, [-2921.588, -2921.588], 1000, 1000 / 144)).toBeCloseTo(1041.667, 2)
   })
 
   test('normalizes backend frame timestamps for reusable frame sync', () => {
@@ -256,6 +255,91 @@ describe('subtitle timing compensation', () => {
     expect(calls).toEqual(['clear', 'draw', 'close'])
   })
 
+  test('stages exact snapshots on WebGPU without opening a 2D context', () => {
+    const renderer = Object.create(AkariSub.prototype) as any
+    const calls: string[] = []
+    const stage = {
+      width: 0,
+      height: 0,
+      style: {},
+      getContext: (type: string) => {
+        calls.push(`context:${type}`)
+        return null
+      }
+    }
+    const gpu = new WebGPURenderer()
+    ;(gpu as any).renderBitmapToCanvas = (canvas: unknown) => {
+      expect(canvas).toBe(stage)
+      calls.push('webgpu')
+      return true
+    }
+    const bitmap = { close: () => calls.push('close') }
+    const originalDocument = globalThis.document
+
+    try {
+      Object.defineProperty(globalThis, 'document', {
+        configurable: true,
+        value: { createElement: () => stage }
+      })
+      Object.assign(renderer, {
+        _canvas: { style: {} },
+        _canvasParent: { appendChild: () => calls.push('append') },
+        _destroyed: false,
+        _rendererType: 'webgpu',
+        _gpuRenderer: gpu,
+        _stagedCanvases: new Set(),
+        _stageFrameIndices: new Map(),
+        _stageDisplayTimes: new Map(),
+        _predictedDisplayTimes: new Map()
+      })
+
+      const frame = { width: 1920, height: 1080, bitmap }
+      renderer._stagePreparedFrame(4, frame)
+
+      expect(calls).toEqual(['webgpu', 'close', 'append'])
+      expect(frame.stage).toBe(stage)
+      expect(renderer._stagedCanvases).toEqual(new Set([stage]))
+    } finally {
+      if (originalDocument === undefined) {
+        Reflect.deleteProperty(globalThis, 'document')
+      } else {
+        Object.defineProperty(globalThis, 'document', { configurable: true, value: originalDocument })
+      }
+    }
+  })
+
+  test('reveals a demand-rendered base canvas and retires every staged layer', () => {
+    const renderer = Object.create(AkariSub.prototype) as any
+    const calls: string[] = []
+    const base = { style: { opacity: '0' }, getAnimations: () => [] }
+    const stage = {
+      getAnimations: () => [],
+      remove: () => calls.push('remove')
+    }
+    const gpu = {
+      renderBitmaps: () => calls.push('render'),
+      releaseCanvas: () => calls.push('release')
+    }
+    const bitmap = { close: () => calls.push('close') }
+    Object.assign(renderer, {
+      _canvas: base,
+      _gpuRenderer: gpu,
+      _rendererType: 'webgpu',
+      _ctx: null,
+      _activatePresentation: () => true,
+      _preparedFrames: new Map(),
+      _stagedCanvases: new Set([stage]),
+      _stageFrameIndices: new Map([[stage, 3]]),
+      _stageDisplayTimes: new Map([[stage, 100]])
+    })
+
+    renderer._presentPreparedFrame({ width: 1920, height: 1080, bitmap }, 12, 100)
+
+    expect(calls).toEqual(['render', 'release', 'remove', 'close'])
+    expect(base.style.opacity).toBe('1')
+    expect(renderer._stagedCanvases.size).toBe(0)
+  })
+
   test('does not rerasterize a compositor-scheduled exact snapshot in its RVFC', () => {
     const renderer = Object.create(AkariSub.prototype) as any
     const calls: string[] = []
@@ -298,11 +382,7 @@ describe('subtitle timing compensation', () => {
       _stageDisplayTimes: new Map([[stage, performance.now()]])
     })
 
-    renderer._presentPreparedFrame(
-      { width: 1920, height: 1080, stage, scheduled: true },
-      13,
-      performance.now()
-    )
+    renderer._presentPreparedFrame({ width: 1920, height: 1080, stage, scheduled: true }, 13, performance.now())
 
     expect(calls).toEqual([])
     expect(renderer._stagedCanvases.has(stage)).toBe(true)

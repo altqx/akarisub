@@ -2,6 +2,39 @@ import { describe, expect, test } from 'bun:test'
 import { WebGPURenderer } from '../src/ts/webgpu-renderer'
 
 describe('WebGPU bitmap uploads', () => {
+  test('configures, renders, and releases prepared-frame WebGPU canvases', () => {
+    const configured: unknown[] = []
+    let unconfigured = 0
+    const context = {
+      configure: (options: unknown) => configured.push(options),
+      unconfigure: () => unconfigured++
+    }
+    const canvas = {
+      width: 0,
+      height: 0,
+      getContext: (type: string) => (type === 'webgpu' ? context : null)
+    } as unknown as HTMLCanvasElement
+    const bitmap = { width: 16, height: 9 } as ImageBitmap
+    const renderer = new WebGPURenderer() as any
+    renderer.device = { label: 'device' }
+    renderer.pipeline = { label: 'pipeline' }
+    const renders: unknown[][] = []
+    renderer.renderBitmapsToContext = (...args: unknown[]) => {
+      renders.push(args)
+      return true
+    }
+
+    expect(renderer.renderBitmapToCanvas(canvas, bitmap, 16, 9)).toBe(true)
+    expect(canvas.width).toBe(16)
+    expect(canvas.height).toBe(9)
+    expect(configured).toEqual([{ device: renderer.device, format: 'bgra8unorm', alphaMode: 'premultiplied' }])
+    expect(renders).toEqual([[[{ image: bitmap, x: 0, y: 0 }], context, 16, 9]])
+
+    renderer.releaseCanvas(canvas)
+    expect(unconfigured).toBe(1)
+    expect(renderer.stageContexts.size).toBe(0)
+  })
+
   test('falls back to RGBA writeTexture when Chromium rejects an external image', () => {
     const writes: Array<{ destination: unknown; data: Uint8Array; layout: unknown; size: unknown }> = []
     const draws: unknown[] = []
