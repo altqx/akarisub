@@ -294,7 +294,8 @@ describe('subtitle timing compensation', () => {
     Object.assign(renderer, {
       _activatePresentation: () => false,
       _stagedCanvases: new Set([stage]),
-      _scheduledStage: stage
+      _stageFrameIndices: new Map([[stage, 12]]),
+      _stageDisplayTimes: new Map([[stage, performance.now()]])
     })
 
     renderer._presentPreparedFrame(
@@ -304,7 +305,7 @@ describe('subtitle timing compensation', () => {
     )
 
     expect(calls).toEqual([])
-    expect(renderer._scheduledStage).toBe(stage)
+    expect(renderer._stagedCanvases.has(stage)).toBe(true)
   })
 
   test('starts both compositor swap halves at one absolute timeline instant', () => {
@@ -343,7 +344,9 @@ describe('subtitle timing compensation', () => {
       })
       Object.assign(renderer, {
         _canvas: previous,
-        _scheduledStage: null,
+        _stagedCanvases: new Set([stage]),
+        _stageFrameIndices: new Map([[stage, 12]]),
+        _stageDisplayTimes: new Map(),
         _destroyed: false
       })
 
@@ -354,6 +357,155 @@ describe('subtitle timing compensation', () => {
       expect(animations).toHaveLength(2)
       expect(animations[0].startTime).toBe(animations[1].startTime)
       expect(animationOptions.map((options) => options.delay)).toEqual([0, 0])
+    } finally {
+      if (originalDocument === undefined) {
+        Reflect.deleteProperty(globalThis, 'document')
+      } else {
+        Object.defineProperty(globalThis, 'document', {
+          configurable: true,
+          value: originalDocument
+        })
+      }
+    }
+  })
+
+  test('retires every older layer when an intermediate prefetched stage is canceled', async () => {
+    const renderer = Object.create(AkariSub.prototype) as any
+    const calls: string[] = []
+    let finishShow!: () => void
+
+    const makeLayer = (name: string) => {
+      const animations: any[] = []
+      return {
+        style: { opacity: name === 'next' ? '0' : '1' },
+        animate: () => {
+          const animation = {
+            startTime: null,
+            finished:
+              name === 'next'
+                ? new Promise<void>((resolve) => {
+                    finishShow = resolve
+                  })
+                : new Promise<void>(() => {}),
+            cancel: () => calls.push(`cancel:${name}`)
+          }
+          animations.push(animation)
+          return animation
+        },
+        getAnimations: () => animations,
+        remove: () => calls.push(`remove:${name}`)
+      }
+    }
+
+    const base = makeLayer('base')
+    const oldest = makeLayer('oldest')
+    const intermediate = makeLayer('intermediate')
+    const lateOlder = makeLayer('late-older')
+    const next = makeLayer('next')
+    const now = performance.now()
+    const frame = { stage: next }
+    const originalDocument = globalThis.document
+
+    try {
+      Object.defineProperty(globalThis, 'document', {
+        configurable: true,
+        value: { timeline: { currentTime: 500 } }
+      })
+      Object.assign(renderer, {
+        _canvas: base,
+        _stagedCanvases: new Set([oldest, intermediate, next]),
+        _stageFrameIndices: new Map([
+          [oldest, 10],
+          [intermediate, 11],
+          [next, 12]
+        ]),
+        _stageDisplayTimes: new Map(),
+        _destroyed: false
+      })
+
+      renderer._schedulePreparedFrame(frame, now + 100)
+      renderer._disposePreparedFrame({ stage: intermediate })
+      renderer._stagedCanvases.add(lateOlder)
+      renderer._stageFrameIndices.set(lateOlder, 9)
+      renderer._stageDisplayTimes.set(lateOlder, now + 5)
+      finishShow()
+      await Promise.resolve()
+      await Promise.resolve()
+
+      expect(calls).toContain('remove:oldest')
+      expect(calls).toContain('remove:late-older')
+      expect(renderer._stagedCanvases).toEqual(new Set([next]))
+      expect(renderer._stageFrameIndices.has(oldest)).toBe(false)
+      expect(renderer._stageDisplayTimes.has(oldest)).toBe(false)
+      expect(next.style.opacity).toBe('1')
+      expect(base.style.opacity).toBe('0')
+      expect(frame.animations).toBeUndefined()
+    } finally {
+      if (originalDocument === undefined) {
+        Reflect.deleteProperty(globalThis, 'document')
+      } else {
+        Object.defineProperty(globalThis, 'document', {
+          configurable: true,
+          value: originalDocument
+        })
+      }
+    }
+  })
+
+  test('releases sibling hide animations when a scheduled show is canceled', async () => {
+    const renderer = Object.create(AkariSub.prototype) as any
+    const canceled: string[] = []
+    let rejectShow!: (reason: Error) => void
+    const animation = (name: string, finished: Promise<void>) => ({
+      startTime: null,
+      finished,
+      cancel: () => canceled.push(name)
+    })
+    const stage = {
+      animate: () =>
+        animation(
+          'show',
+          new Promise<void>((_resolve, reject) => {
+            rejectShow = reject
+          })
+        ),
+      style: { opacity: '0' }
+    }
+    const previous = {
+      animate: () => animation('previous-hide', new Promise<void>(() => {})),
+      getAnimations: () => [],
+      style: { opacity: '1' }
+    }
+    const base = {
+      animate: () => animation('base-hide', new Promise<void>(() => {})),
+      style: { opacity: '1' }
+    }
+    const frame = { stage }
+    const originalDocument = globalThis.document
+
+    try {
+      Object.defineProperty(globalThis, 'document', {
+        configurable: true,
+        value: { timeline: { currentTime: 500 } }
+      })
+      Object.assign(renderer, {
+        _canvas: base,
+        _stagedCanvases: new Set([previous, stage]),
+        _stageFrameIndices: new Map([
+          [previous, 10],
+          [stage, 11]
+        ]),
+        _stageDisplayTimes: new Map(),
+        _destroyed: false
+      })
+
+      renderer._schedulePreparedFrame(frame, performance.now() + 100)
+      rejectShow(new Error('superseded'))
+      await Promise.resolve()
+      await Promise.resolve()
+
+      expect(canceled.sort()).toEqual(['base-hide', 'previous-hide', 'show'])
+      expect(frame.animations).toBeUndefined()
     } finally {
       if (originalDocument === undefined) {
         Reflect.deleteProperty(globalThis, 'document')

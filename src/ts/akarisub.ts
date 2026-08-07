@@ -147,7 +147,8 @@ export default class AkariSub extends EventTarget {
   private _frameTimeline: (Float64Array & { mediaTimeOrigin?: number; subtitleTimeOffset?: number }) | null
   private _preparedFrames = new Map<number, PreparedFrame>()
   private _stagedCanvases = new Set<HTMLCanvasElement>()
-  private _scheduledStage: HTMLCanvasElement | null = null
+  private _stageFrameIndices = new Map<HTMLCanvasElement, number>()
+  private _stageDisplayTimes = new Map<HTMLCanvasElement, number>()
   private _predictedDisplayTimes = new Map<number, number>()
   private _displayClockOffsets: number[] = []
   private _displayGridAnchorMs?: number
@@ -1069,7 +1070,8 @@ export default class AkariSub extends EventTarget {
       for (const animation of frame.stage.getAnimations()) animation.cancel()
       frame.stage.remove()
       this._stagedCanvases.delete(frame.stage)
-      if (this._scheduledStage === frame.stage) this._scheduledStage = null
+      this._stageFrameIndices.delete(frame.stage)
+      this._stageDisplayTimes.delete(frame.stage)
       frame.stage = undefined
     }
   }
@@ -1091,6 +1093,7 @@ export default class AkariSub extends EventTarget {
     frame.bitmap = undefined
     frame.stage = stage
     this._stagedCanvases.add(stage)
+    this._stageFrameIndices.set(stage, index)
     this._canvasParent.appendChild(stage)
 
     const targetDisplayTime = this._predictedDisplayTimes.get(index)
@@ -1103,7 +1106,14 @@ export default class AkariSub extends EventTarget {
     const stage = frame.stage
     if (!stage || frame.scheduled || this._destroyed || targetDisplayTime <= performance.now()) return
 
-    const previous = this._scheduledStage ?? this._canvas
+    // Each swap independently hides every other layer. Do not form a single
+    // predecessor chain: removing one skipped prefetched frame would otherwise
+    // cancel the only animation capable of hiding its predecessor. Future and
+    // unscheduled stages are hidden too, but retained for their own later show.
+    const frameIndex = this._stageFrameIndices.get(stage)
+    const previousStages = [...this._stagedCanvases].filter((candidate) => candidate !== stage)
+    this._stageDisplayTimes.set(stage, targetDisplayTime)
+
     const performanceTime = performance.now()
     const documentTime = Number(document.timeline?.currentTime)
     const hasDocumentTime = Number.isFinite(documentTime)
@@ -1112,35 +1122,69 @@ export default class AkariSub extends EventTarget {
       : undefined
     const animationOptions: KeyframeAnimationOptions = {
       delay: hasDocumentTime ? 0 : Math.max(0, targetDisplayTime - performanceTime),
-      duration: 1,
+      // A near-zero positive interval keeps the swap compositor-scheduled while
+      // allowing its cleanup promise to run in the same refresh. A full 1 ms
+      // interval can survive until the next paint when animation composite order
+      // temporarily favors an older stage.
+      duration: 0.001,
       easing: 'steps(1, jump-start)',
       fill: 'forwards'
     }
 
     const showAnimation = stage.animate([{ opacity: '0' }, { opacity: '1' }], animationOptions)
-    let hideAnimation: Animation | undefined
-    if (previous !== stage) {
-      hideAnimation = previous.animate([{ opacity: '1' }, { opacity: '0' }], animationOptions)
-    }
+    const hiddenLayers = [this._canvas, ...previousStages]
+    const hideAnimations = hiddenLayers.map((layer) =>
+      layer.animate([{ opacity: '1' }, { opacity: '0' }], animationOptions)
+    )
 
     if (sharedStartTime != null) {
       showAnimation.startTime = sharedStartTime
-      if (hideAnimation) hideAnimation.startTime = sharedStartTime
+      for (const animation of hideAnimations) animation.startTime = sharedStartTime
     }
 
     frame.scheduled = true
-    frame.animations = hideAnimation ? [showAnimation, hideAnimation] : [showAnimation]
-    this._scheduledStage = stage
-
-    if (hideAnimation && previous !== this._canvas) {
-      void hideAnimation.finished
-        .then(() => {
-          if (this._destroyed || previous === this._scheduledStage) return
-          previous.remove()
-          this._stagedCanvases.delete(previous)
-        })
-        .catch(() => undefined)
+    frame.animations = [showAnimation, ...hideAnimations]
+    const releaseSwapAnimations = (): void => {
+      for (const animation of frame.animations ?? []) animation.cancel()
+      frame.animations = undefined
     }
+
+    // The show animation is the authoritative commit. Once it completes, make
+    // its state explicit, release this swap's fill animations, and remove all
+    // older layers. A later prefetched swap may already have its own independent
+    // hide animation on this stage; it is intentionally left untouched.
+    void showAnimation.finished.then(
+      () => {
+        try {
+          if (this._destroyed || !this._stagedCanvases.has(stage)) return
+
+          stage.style.opacity = '1'
+          this._canvas.style.opacity = '0'
+          // Include stages prepared after this swap was scheduled. Worker results
+          // can complete out of frame order, so the captured animation targets are
+          // not a complete ownership list by the time the compositor commits.
+          const committedStages = [...this._stagedCanvases].filter((candidate) => candidate !== stage)
+          for (const previous of committedStages) {
+            previous.style.opacity = '0'
+            const previousFrameIndex = this._stageFrameIndices.get(previous)
+            const previousDisplayTime = this._stageDisplayTimes.get(previous)
+            const shouldRetire =
+              (frameIndex != null && previousFrameIndex != null && previousFrameIndex < frameIndex) ||
+              (previousDisplayTime != null && previousDisplayTime <= targetDisplayTime)
+            if (shouldRetire) {
+              for (const animation of previous.getAnimations()) animation.cancel()
+              previous.remove()
+              this._stagedCanvases.delete(previous)
+              this._stageFrameIndices.delete(previous)
+              this._stageDisplayTimes.delete(previous)
+            }
+          }
+        } finally {
+          releaseSwapAnimations()
+        }
+      },
+      releaseSwapAnimations
+    )
   }
 
   private _recordPresentationClock(frameIndex: number, mediaTime: number, expectedDisplayTime?: number): void {
@@ -1196,7 +1240,8 @@ export default class AkariSub extends EventTarget {
       stage.remove()
     }
     this._stagedCanvases.clear()
-    this._scheduledStage = null
+    this._stageFrameIndices.clear()
+    this._stageDisplayTimes.clear()
     for (const animation of this._canvas?.getAnimations?.() ?? []) animation.cancel()
     if (this._canvas) this._canvas.style.opacity = '1'
     this._predictedDisplayTimes.clear()
@@ -1345,7 +1390,7 @@ export default class AkariSub extends EventTarget {
   private _presentPreparedFrame(
     frame: PreparedFrame,
     presentationId: number,
-    _expectedDisplayTime?: number
+    expectedDisplayTime?: number
   ): void {
     if (!this._activatePresentation(presentationId)) {
       // Scheduling happens on the display clock before RVFC validation. If a
@@ -1364,14 +1409,30 @@ export default class AkariSub extends EventTarget {
     const { bitmap, width, height, stage } = frame
     if (stage) {
       if (!frame.scheduled) {
-        const previous = this._scheduledStage ?? this._canvas
         for (const animation of stage.getAnimations()) animation.cancel()
         stage.style.opacity = '1'
-        if (previous !== stage) {
+        this._canvas.style.opacity = '0'
+        const frameIndex = this._stageFrameIndices.get(stage)
+        for (const previous of [...this._stagedCanvases]) {
+          const previousFrameIndex = this._stageFrameIndices.get(previous)
+          if (
+            previous === stage ||
+            frameIndex == null ||
+            previousFrameIndex == null ||
+            previousFrameIndex >= frameIndex
+          ) {
+            continue
+          }
           for (const animation of previous.getAnimations()) animation.cancel()
-          previous.style.opacity = '0'
+          previous.remove()
+          this._stagedCanvases.delete(previous)
+          this._stageFrameIndices.delete(previous)
+          this._stageDisplayTimes.delete(previous)
         }
-        this._scheduledStage = stage
+        this._stageDisplayTimes.set(
+          stage,
+          Number.isFinite(expectedDisplayTime) ? expectedDisplayTime! : performance.now()
+        )
       }
       bitmap?.close()
       frame.bitmap = undefined
