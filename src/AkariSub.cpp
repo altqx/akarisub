@@ -72,6 +72,9 @@ void msg_callback(int level, const char *fmt, va_list va, void *data) {
 }
 
 const float INV_255 = 1.0f / 255.0f;
+static const size_t MAX_RENDER_IMAGES = 8192;
+static const size_t MAX_RENDER_PIXELS = 32 * 1024 * 1024;
+static const size_t MAX_RENDER_BUFFER_BYTES = 256 * 1024 * 1024;
 
 // libass accepts integer milliseconds and treats event ranges as
 // Start <= now < Start + Duration. Floor seconds to that same millisecond
@@ -466,6 +469,8 @@ public:
    * Updates the class member scanned_events to last scanned index.
    */
   void scanAnimations(int i) {
+    if (!track)
+      return;
     for (; i < track->n_events; i++) {
       _is_event_animated(track->events + i, drop_animations);
     }
@@ -480,7 +485,8 @@ public:
     track = ass_read_memory(ass_library, (char *)data, size, NULL);
     if (!track) {
       fprintf(stderr, "AkariSub: Failed to start a track\n");
-      exit(4);
+      scanned_events = 0;
+      return;
     }
 
     if (drop_animations) {
@@ -507,33 +513,62 @@ public:
     this->canvas_h = canvas_h;
     this->canvas_w = canvas_w;
   }
-  int getBufferSize(ASS_Image *img) {
-    int size = 0;
+  bool getBufferSize(ASS_Image *img, size_t *outSize) {
+    size_t size = 0;
+    size_t pixels = 0;
+    size_t images = 0;
     for (ASS_Image *tmp = img; tmp; tmp = tmp->next) {
-      if (tmp->w == 0 || tmp->h == 0) {
+      if (tmp->w <= 0 || tmp->h <= 0) {
         continue;
       }
-      size += sizeof(uint32_t) * tmp->w * tmp->h + sizeof(RenderResult);
+      if (++images > MAX_RENDER_IMAGES)
+        return false;
+      const size_t width = static_cast<size_t>(tmp->w);
+      const size_t height = static_cast<size_t>(tmp->h);
+      if (width > std::numeric_limits<size_t>::max() / height)
+        return false;
+      const size_t imagePixels = width * height;
+      if (imagePixels > MAX_RENDER_PIXELS ||
+          pixels > MAX_RENDER_PIXELS - imagePixels)
+        return false;
+      pixels += imagePixels;
+      if (imagePixels >
+          (std::numeric_limits<size_t>::max() - sizeof(RenderResult)) /
+              sizeof(uint32_t))
+        return false;
+      const size_t imageBytes = imagePixels * sizeof(uint32_t) +
+                                sizeof(RenderResult);
+      if (imageBytes > MAX_RENDER_BUFFER_BYTES ||
+          size > MAX_RENDER_BUFFER_BYTES - imageBytes)
+        return false;
+      size += imageBytes;
     }
-    return size;
+    *outSize = size;
+    return true;
   }
   RenderResult *processImages(ASS_Image *img) {
     RenderResult *renderResult = NULL;
-    char *rawbuffer = (char *)m_buffer.take(getBufferSize(img));
+    size_t bufferSize = 0;
+    if (!getBufferSize(img, &bufferSize) || bufferSize == 0) {
+      fprintf(stderr, "AkariSub: render output exceeds safety limit\n");
+      return NULL;
+    }
+    char *rawbuffer = (char *)m_buffer.take(bufferSize);
     if (rawbuffer == NULL) {
       fprintf(stderr, "AkariSub: cannot allocate buffer for rendering\n");
       return NULL;
     }
     for (RenderResult *tmp = renderResult; img; img = img->next) {
       int w = img->w, h = img->h;
-      if (w == 0 || h == 0)
+      if (w <= 0 || h <= 0)
         continue;
 
       double alpha = (255 - (img->color & 255)) / 255.0;
       if (alpha == 0.0)
         continue;
 
-      unsigned int datasize = sizeof(uint32_t) * w * h;
+      size_t datasize = sizeof(uint32_t) * static_cast<size_t>(w) *
+                        static_cast<size_t>(h);
       uint32_t *data = (uint32_t *)rawbuffer;
       decodeBitmap(alpha, data, img, w, h);
       RenderResult *result = (RenderResult *)(rawbuffer + datasize);
@@ -584,6 +619,8 @@ public:
     time = 0;
     count = 0;
 
+    if (!track)
+      return NULL;
     ASS_Image *imgs = ass_render_frame(
         ass_renderer, track, toLibassTimestampMs(tm), &changed);
     if (imgs == NULL || (changed == 0 && !force))
@@ -599,6 +636,8 @@ public:
     time = 0;
     count = 0;
 
+    if (!track)
+      return NULL;
     ASS_Image *imgs = ass_render_frame(
         ass_renderer, track, toLibassTimestampMs(tm), &changed);
     if (imgs == NULL || (changed == 0 && !force))
@@ -622,6 +661,8 @@ public:
     time = 0;
     count = 0;
 
+    if (!track)
+      return NULL;
     ASS_Image *imgs = ass_render_frame(
         ass_renderer, track, toLibassTimestampMs(tm), &changed);
     if (debug)
