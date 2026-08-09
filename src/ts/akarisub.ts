@@ -144,6 +144,7 @@ export default class AkariSub extends EventTarget {
   private _playstate: boolean = true
   private _destroyed: boolean = false
   private _workerReady: boolean = false
+  private _frameBufferReadyEvent: 'ready' | 'trackReady' | null = null
   private _ro?: ResizeObserver
   private _worker: Worker
   private _pendingDemandTimes: DemandMetadata[] = []
@@ -305,7 +306,7 @@ export default class AkariSub extends EventTarget {
     this.prescaleHeightLimit = options.prescaleHeightLimit || 1080
     this.maxRenderHeight = options.maxRenderHeight || 0
     this.renderAhead = options.renderAhead ?? DEFAULT_RENDER_AHEAD
-    this.framePrefetch = Math.max(0, Math.min(4, Math.floor(options.framePrefetch ?? 2)))
+    this.framePrefetch = Math.max(0, Math.min(24, Math.floor(options.framePrefetch ?? 2)))
 
     // Bind methods
     this._boundResize = this.resize.bind(this)
@@ -1053,6 +1054,23 @@ export default class AkariSub extends EventTarget {
     this.busy = false
     this._primePreparedFrames(this._currentExactFrameMediaTime())
     this._dispatchNextPreparation()
+    this._dispatchReadyWhenFrameBufferFilled()
+  }
+
+  private _dispatchReadyWhenFrameBufferFilled(): void {
+    if (
+      !this._frameBufferReadyEvent ||
+      this.busy ||
+      this._pendingDemandTimes.length > 0 ||
+      this._prepareQueue.length > 0 ||
+      this._prepareRequests.size > 0
+    ) {
+      return
+    }
+
+    const event = this._frameBufferReadyEvent
+    this._frameBufferReadyEvent = null
+    this.dispatchEvent(new CustomEvent(event))
   }
 
   private _startRefreshSampling(): void {
@@ -1534,8 +1552,7 @@ export default class AkariSub extends EventTarget {
       !timeline ||
       timeline.length === 0 ||
       this.framePrefetch <= 0 ||
-      this._destroyed ||
-      this._isVideoPausedForWorker()
+      this._destroyed
     ) {
       return
     }
@@ -2322,6 +2339,9 @@ export default class AkariSub extends EventTarget {
     if (this._video) {
       const currentTime = this._video.currentTime
       const isPaused = this._isVideoPausedForWorker()
+      const bufferExactFrames =
+        isPaused && this._onDemandRender && !!this._frameTimeline?.length && this.framePrefetch > 0
+      this._frameBufferReadyEvent = bufferExactFrames ? 'ready' : null
       this.setCurrentTime(isPaused, currentTime + this.timeOffset, this._videoPlaybackRateForWorker())
 
       if (!this._onDemandRender) {
@@ -2343,6 +2363,7 @@ export default class AkariSub extends EventTarget {
       this._pendingDemandTimes.length = 0
       this.busy = true
       this._demandRender(pending)
+      if (bufferExactFrames) return
     }
 
     this.dispatchEvent(new CustomEvent('ready'))
@@ -2358,7 +2379,19 @@ export default class AkariSub extends EventTarget {
   }
 
   private _trackReady(): void {
+    const bufferExactFrames =
+      this._workerReady &&
+      this._isVideoPausedForWorker() &&
+      this._onDemandRender &&
+      !!this._frameTimeline?.length &&
+      this.framePrefetch > 0
+    this._frameBufferReadyEvent = bufferExactFrames ? 'trackReady' : null
     this._syncVideoClock()
+    if (bufferExactFrames) {
+      this._primePreparedFrames(this._currentExactFrameMediaTime())
+      this._dispatchNextPreparation()
+      return
+    }
     this.dispatchEvent(new CustomEvent('trackReady'))
   }
 

@@ -997,6 +997,89 @@ describe('subtitle timing compensation', () => {
     expect(renderer._currentExactFrameIndex()).toBe(2)
   })
 
+  test('fills the exact-frame buffer while video is paused', () => {
+    const renderer = Object.create(AkariSub.prototype) as any
+
+    Object.assign(renderer, {
+      _frameTimeline: new Float64Array([0, 0.042, 0.083, 0.125]),
+      _frameBufferReadyEvent: null,
+      _video: { paused: true, ended: false, currentTime: 0, playbackRate: 1 },
+      _playstate: true,
+      _destroyed: false,
+      _preparedFrames: new Map(),
+      _prepareQueue: [],
+      _prepareRequests: new Map(),
+      framePrefetch: 2
+    })
+
+    renderer._primePreparedFrames(0)
+
+    expect(renderer._prepareQueue).toEqual([1, 2])
+  })
+
+  test('does not announce exact readiness until the initial frame buffer is full', () => {
+    const renderer = Object.create(AkariSub.prototype) as any
+    let ready = 0
+
+    Object.assign(renderer, {
+      _frameBufferReadyEvent: 'ready',
+      _frameTimeline: new Float64Array([0, 0.042, 0.083]),
+      _video: { paused: true, ended: false, currentTime: 0, playbackRate: 1 },
+      _playstate: true,
+      _destroyed: false,
+      _pendingDemandTimes: [],
+      _demandTimings: new Map(),
+      _preparedFrames: new Map([
+        [1, {}],
+        [2, {}]
+      ]),
+      _prepareQueue: [],
+      _prepareRequests: new Map(),
+      framePrefetch: 2,
+      busy: true,
+      _workerReady: true,
+      _dispatchNextPreparation: () => {},
+      dispatchEvent: (event: Event) => {
+        if (event.type === 'ready') ready++
+        return true
+      }
+    })
+
+    renderer._finishWorkerSlot()
+
+    expect(ready).toBe(1)
+    expect(renderer._frameBufferReadyEvent).toBe(null)
+  })
+
+  test('holds track readiness while a paused exact-frame renderer refills', () => {
+    const renderer = Object.create(AkariSub.prototype) as any
+    let syncs = 0
+    let trackReady = 0
+
+    Object.assign(renderer, {
+      _workerReady: true,
+      _video: { paused: true, ended: false, currentTime: 42, playbackRate: 1 },
+      _playstate: true,
+      _onDemandRender: true,
+      _frameTimeline: new Float64Array([41.958, 42, 42.042, 42.083]),
+      framePrefetch: 2,
+      _syncVideoClock: () => syncs++,
+      _currentExactFrameMediaTime: () => 42,
+      _primePreparedFrames: () => {},
+      _dispatchNextPreparation: () => {},
+      dispatchEvent: (event: Event) => {
+        if (event.type === 'trackReady') trackReady++
+        return true
+      }
+    })
+
+    renderer._trackReady()
+
+    expect(syncs).toBe(1)
+    expect(trackReady).toBe(0)
+    expect(renderer._frameBufferReadyEvent).toBe('trackReady')
+  })
+
   test('retires consumed compositor predictions during long playback', () => {
     const renderer = Object.create(AkariSub.prototype) as any
     const timeline = new Float64Array([1499.916, 1499.958, 1500, 1500.042])

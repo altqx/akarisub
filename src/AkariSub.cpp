@@ -77,12 +77,23 @@ static const size_t MAX_RENDER_PIXELS = 32 * 1024 * 1024;
 static const size_t MAX_RENDER_BUFFER_BYTES = 256 * 1024 * 1024;
 
 // libass accepts integer milliseconds and treats event ranges as
-// Start <= now < Start + Duration. Floor seconds to that same millisecond
-// timeline so a fractional timestamp can never activate a cue early. Keep the
-// full 64-bit range expected by ass_render_frame instead of narrowing long
-// media timelines to int.
+// Start <= now < Start + Duration. JavaScript seconds that came from an exact
+// integer millisecond can land one floating-point step below that integer after
+// multiplication (for example, 1.001 * 1000). Snap only that round-off error,
+// then floor genuine fractional timestamps so they cannot activate a cue early.
+// Keep the full 64-bit range expected by ass_render_frame instead of narrowing
+// long media timelines to int.
 static long long toLibassTimestampMs(double seconds) {
-  const double milliseconds = std::floor(seconds * 1000.0);
+  const double raw_milliseconds = seconds * 1000.0;
+  const double nearest_millisecond = std::round(raw_milliseconds);
+  const double magnitude =
+      std::abs(raw_milliseconds) > 1.0 ? std::abs(raw_milliseconds) : 1.0;
+  const double round_off_tolerance =
+      magnitude * std::numeric_limits<double>::epsilon() * 4.0;
+  const double milliseconds =
+      std::abs(raw_milliseconds - nearest_millisecond) <= round_off_tolerance
+          ? nearest_millisecond
+          : std::floor(raw_milliseconds);
   const double max_timestamp =
       static_cast<double>(std::numeric_limits<long long>::max());
   const double min_timestamp =

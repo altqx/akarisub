@@ -65,6 +65,11 @@ Dialogue: 0,600:00:00.00,600:00:01.00,Default,,0,0,0,,LONG TIMELINE
       renderer.addEventListener('error', (event) => reject(event.error || new Error('renderer error')), { once: true })
     })
 
+    // 8.008 * 1000 is 8007.999999999999 in JavaScript. This event verifies
+    // that an exact millisecond survives the seconds-to-libass conversion.
+    renderer.createEvent({ Start: 8008, Duration: 10, Style: 'Default', Text: 'MILLISECOND' })
+    await renderer.getEvents()
+
     const observations = [
       ['negative-fraction', await sample(-0.0001), false],
       ['zero-start', await sample(0), true],
@@ -74,6 +79,8 @@ Dialogue: 0,600:00:00.00,600:00:01.00,Default,,0,0,0,,LONG TIMELINE
       ['at-start', await sample(1), true],
       ['before-end', await sample(1.9999), true],
       ['at-end', await sample(2), false],
+      ['millisecond-boundary-start', await sample(8.008), true],
+      ['millisecond-boundary-end', await sample(8.018), false],
       ['long-before-start', await sample(2159999.9999), false],
       ['long-at-start', await sample(2160000), true],
       ['long-at-end', await sample(2160001), false]
