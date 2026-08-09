@@ -29,6 +29,7 @@ import { WebGPURenderer, isWebGPUSupported } from './webgpu-renderer'
 import { WebGL2Renderer, isWebGL2Supported } from './webgl2-renderer'
 import {
   compensatedMediaTime,
+  compositorScheduleLeadMs,
   estimateRefreshIntervalMs,
   isStalePresentation,
   normalizeFrameTimeline,
@@ -1376,11 +1377,13 @@ export default class AkariSub extends EventTarget {
     this._stageDisplayTimes.set(stage, targetDisplayTime)
 
     const performanceTime = performance.now()
+    const compositorSwapTime =
+      targetDisplayTime - compositorScheduleLeadMs(estimateRefreshIntervalMs(this._refreshSamples ?? []))
     const documentTime = Number(document.timeline?.currentTime)
     const hasDocumentTime = Number.isFinite(documentTime)
-    const sharedStartTime = hasDocumentTime ? documentTime + (targetDisplayTime - performanceTime) : undefined
+    const sharedStartTime = hasDocumentTime ? documentTime + (compositorSwapTime - performanceTime) : undefined
     const animationOptions: KeyframeAnimationOptions = {
-      delay: hasDocumentTime ? 0 : Math.max(0, targetDisplayTime - performanceTime),
+      delay: hasDocumentTime ? 0 : Math.max(0, compositorSwapTime - performanceTime),
       // A near-zero positive interval keeps the swap compositor-scheduled while
       // allowing its cleanup promise to run in the same refresh. A full 1 ms
       // interval can survive until the next paint when animation composite order

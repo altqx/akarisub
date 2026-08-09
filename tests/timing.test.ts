@@ -3,6 +3,7 @@ import AkariSub from '../src/ts/akarisub'
 import { WebGPURenderer } from '../src/ts/webgpu-renderer'
 import {
   compensatedMediaTime,
+  compositorScheduleLeadMs,
   estimateRefreshIntervalMs,
   frameIndexAtOrAfter,
   nearestFrameIndex,
@@ -56,6 +57,13 @@ describe('subtitle timing compensation', () => {
 
   test('predicts the exact six-refresh boundary on a 144 Hz display', () => {
     expect(predictFrameDisplayTimeMs(3.9633, 1, [-2921.588, -2921.588], 1000, 1000 / 144)).toBeCloseTo(1041.667, 2)
+  })
+
+  test('schedules prepared swaps inside the target refresh interval', () => {
+    expect(compositorScheduleLeadMs(1000 / 60)).toBe(2)
+    expect(compositorScheduleLeadMs(1000 / 144)).toBeCloseTo(1.7361, 3)
+    expect(compositorScheduleLeadMs(1000 / 360)).toBeCloseTo(0.6944, 3)
+    expect(compositorScheduleLeadMs(Number.NaN)).toBe(0)
   })
 
   test('normalizes backend frame timestamps for reusable frame sync', () => {

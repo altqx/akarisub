@@ -72,6 +72,17 @@ export const estimateRefreshIntervalMs = (
 }
 
 /**
+ * Put a prepared canvas transition safely inside the interval before its video
+ * refresh. A transition exactly on the boundary can be composited one refresh
+ * later; staying within one quarter-refresh prevents it appearing on the
+ * previous refresh while giving the compositor time to include it.
+ */
+export const compositorScheduleLeadMs = (refreshIntervalMs: number): number => {
+  if (!Number.isFinite(refreshIntervalMs) || refreshIntervalMs <= 0) return 0
+  return Math.min(2, refreshIntervalMs * 0.25)
+}
+
+/**
  * Predict the display refresh assigned to an encoded frame before its RVFC.
  * RVFC clock offsets straddle the ideal media clock on cadence-converted
  * displays (for example 23.976 fps on 60 Hz), so average several observations
