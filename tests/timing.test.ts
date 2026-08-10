@@ -1106,4 +1106,28 @@ describe('subtitle timing compensation', () => {
 
     expect(renderer._predictedDisplayTimes.has(2)).toBe(false)
   })
+
+  test('reanchors the compositor grid to the latest RVFC during long playback', () => {
+    const renderer = Object.create(AkariSub.prototype) as any
+    const timeline = new Float64Array([1199.958292, 1200, 1200.041708])
+
+    Object.assign(renderer, {
+      _frameTimeline: timeline,
+      _video: { paused: false, ended: false, playbackRate: 1 },
+      _playstate: false,
+      _predictedDisplayTimes: new Map(),
+      _displayClockOffsets: [-8.056, 0.133, -8.278, 0.111, -8.289],
+      _displayGridAnchorMs: 1003,
+      _lastClockMediaTime: timeline[0],
+      _lastClockPlaybackRate: 1,
+      _refreshSamples: [16.67, 16.66, 16.68, 16.67],
+      _preparedFrames: new Map(),
+      _scheduleNextPreparedFrame: () => {}
+    })
+
+    renderer._recordPresentationClock(1, timeline[1], 1_200_000)
+
+    expect(renderer._displayGridAnchorMs).toBe(1_200_000)
+    expect(renderer._predictedDisplayTimes.get(2)).toBeCloseTo(1_200_000 + 2 * (1000 / 60), 3)
+  })
 })

@@ -1330,7 +1330,7 @@ export default class AkariSub extends EventTarget {
     this._lastClockMediaTime = mediaTime
     this._lastClockPlaybackRate = playbackRate
 
-    if (!Number.isFinite(this._displayGridAnchorMs)) this._displayGridAnchorMs = expectedDisplayTime
+    this._displayGridAnchorMs = expectedDisplayTime
     const frameMediaTime = timeline[frameIndex]
     this._displayClockOffsets.push(expectedDisplayTime! - (frameMediaTime * 1000) / playbackRate)
     if (this._displayClockOffsets.length > 12) this._displayClockOffsets.shift()
