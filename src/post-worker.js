@@ -49,57 +49,67 @@ if (typeof updateMemoryViews === 'function') {
   }
 }
 
-// Expose `_malloc`/`_free`, FS functions, all akarisub C exports, and initial heap views
-// when the module becomes ready.
-const __akarisub_ready = typeof ready === 'function' ? ready : null
-if (__akarisub_ready) {
-  // eslint-disable-next-line no-global-assign
-  ready = () => {
-    // Use bracket assignment instead of an object literal. Prettier removes
-    // quotes from valid identifier keys, and Closure then renames those public
-    // Module properties; the worker expects stable Emscripten-style names.
-    Module['_malloc'] = _malloc
-    Module['_free'] = _free
-    Module['_akarisub_create'] = _akarisub_create
-    Module['_akarisub_destroy'] = _akarisub_destroy
-    Module['_akarisub_set_drop_animations'] = _akarisub_set_drop_animations
-    Module['_akarisub_set_adaptive_blend_layouts'] = _akarisub_set_adaptive_blend_layouts
-    Module['_akarisub_create_track_mem'] = _akarisub_create_track_mem
-    Module['_akarisub_remove_track'] = _akarisub_remove_track
-    Module['_akarisub_resize_canvas'] = _akarisub_resize_canvas
-    Module['_akarisub_add_font'] = _akarisub_add_font
-    Module['_akarisub_reload_fonts'] = _akarisub_reload_fonts
-    Module['_akarisub_set_default_font'] = _akarisub_set_default_font
-    Module['_akarisub_set_fallback_fonts'] = _akarisub_set_fallback_fonts
-    Module['_akarisub_set_use_fontconfig_provider'] = _akarisub_set_use_fontconfig_provider
-    Module['_akarisub_set_memory_limits'] = _akarisub_set_memory_limits
-    Module['_akarisub_get_event_count'] = _akarisub_get_event_count
-    Module['_akarisub_alloc_event'] = _akarisub_alloc_event
-    Module['_akarisub_remove_event'] = _akarisub_remove_event
-    Module['_akarisub_get_style_count'] = _akarisub_get_style_count
-    Module['_akarisub_alloc_style'] = _akarisub_alloc_style
-    Module['_akarisub_remove_style'] = _akarisub_remove_style
-    Module['_akarisub_style_override_index'] = _akarisub_style_override_index
-    Module['_akarisub_disable_style_override'] = _akarisub_disable_style_override
-    Module['_akarisub_get_track_color_space'] = _akarisub_get_track_color_space
-    Module['_akarisub_event_get_int'] = _akarisub_event_get_int
-    Module['_akarisub_event_set_int'] = _akarisub_event_set_int
-    Module['_akarisub_event_get_str'] = _akarisub_event_get_str
-    Module['_akarisub_event_set_str'] = _akarisub_event_set_str
-    Module['_akarisub_style_get_num'] = _akarisub_style_get_num
-    Module['_akarisub_style_set_num'] = _akarisub_style_set_num
-    Module['_akarisub_style_get_str'] = _akarisub_style_get_str
-    Module['_akarisub_style_set_str'] = _akarisub_style_set_str
-    Module['_akarisub_get_event_time_range'] = _akarisub_get_event_time_range
-    Module['_akarisub_get_empty_window'] = _akarisub_get_empty_window
-    Module['_akarisub_render_blend_collect'] = _akarisub_render_blend_collect
-    Module['_akarisub_render_image_collect'] = _akarisub_render_image_collect
-    Module['_akarisub_render_raw_collect'] = _akarisub_render_raw_collect
-    if (typeof FS !== 'undefined') {
-      Module['FS_createPath'] = FS.createPath
-      Module['FS_createDataFile'] = FS.createDataFile
+// Use bracket assignment instead of an object literal. Prettier removes
+// quotes from valid identifier keys, and Closure then renames those public
+// Module properties; the worker expects stable Emscripten-style names.
+const __akarisub_expose = () => {
+  Module['_malloc'] = _malloc
+  Module['_free'] = _free
+  Module['_akarisub_create'] = _akarisub_create
+  Module['_akarisub_destroy'] = _akarisub_destroy
+  Module['_akarisub_set_drop_animations'] = _akarisub_set_drop_animations
+  Module['_akarisub_set_adaptive_blend_layouts'] = _akarisub_set_adaptive_blend_layouts
+  Module['_akarisub_create_track_mem'] = _akarisub_create_track_mem
+  Module['_akarisub_remove_track'] = _akarisub_remove_track
+  Module['_akarisub_resize_canvas'] = _akarisub_resize_canvas
+  Module['_akarisub_add_font'] = _akarisub_add_font
+  Module['_akarisub_reload_fonts'] = _akarisub_reload_fonts
+  Module['_akarisub_set_default_font'] = _akarisub_set_default_font
+  Module['_akarisub_set_fallback_fonts'] = _akarisub_set_fallback_fonts
+  Module['_akarisub_set_use_fontconfig_provider'] = _akarisub_set_use_fontconfig_provider
+  Module['_akarisub_set_memory_limits'] = _akarisub_set_memory_limits
+  Module['_akarisub_get_event_count'] = _akarisub_get_event_count
+  Module['_akarisub_alloc_event'] = _akarisub_alloc_event
+  Module['_akarisub_remove_event'] = _akarisub_remove_event
+  Module['_akarisub_get_style_count'] = _akarisub_get_style_count
+  Module['_akarisub_alloc_style'] = _akarisub_alloc_style
+  Module['_akarisub_remove_style'] = _akarisub_remove_style
+  Module['_akarisub_style_override_index'] = _akarisub_style_override_index
+  Module['_akarisub_disable_style_override'] = _akarisub_disable_style_override
+  Module['_akarisub_get_track_color_space'] = _akarisub_get_track_color_space
+  Module['_akarisub_event_get_int'] = _akarisub_event_get_int
+  Module['_akarisub_event_set_int'] = _akarisub_event_set_int
+  Module['_akarisub_event_get_str'] = _akarisub_event_get_str
+  Module['_akarisub_event_set_str'] = _akarisub_event_set_str
+  Module['_akarisub_style_get_num'] = _akarisub_style_get_num
+  Module['_akarisub_style_set_num'] = _akarisub_style_set_num
+  Module['_akarisub_style_get_str'] = _akarisub_style_get_str
+  Module['_akarisub_style_set_str'] = _akarisub_style_set_str
+  Module['_akarisub_get_event_time_range'] = _akarisub_get_event_time_range
+  Module['_akarisub_get_empty_window'] = _akarisub_get_empty_window
+  Module['_akarisub_render_blend_collect'] = _akarisub_render_blend_collect
+  Module['_akarisub_render_image_collect'] = _akarisub_render_image_collect
+  Module['_akarisub_render_raw_collect'] = _akarisub_render_raw_collect
+  if (typeof FS !== 'undefined') {
+    Module['FS_createPath'] = FS.createPath
+    Module['FS_createDataFile'] = FS.createDataFile
+  }
+  __akarisub_sync_heap()
+}
+
+// Emscripten 6.0.6+ MINIMAL_RUNTIME async Modularize awaits WASM instantiation, then
+// runs post-js. By then `ready()` has already been called inside the instantiate
+// continuation, so wrapping `ready` is too late — expose exports immediately.
+// Older runtimes still invoke `ready` after post-js, so keep that path as fallback.
+if (typeof _malloc === 'function') {
+  __akarisub_expose()
+} else {
+  const __akarisub_ready = typeof ready === 'function' ? ready : null
+  if (__akarisub_ready) {
+    // eslint-disable-next-line no-global-assign
+    ready = () => {
+      __akarisub_expose()
+      return __akarisub_ready()
     }
-    __akarisub_sync_heap()
-    return __akarisub_ready()
   }
 }
