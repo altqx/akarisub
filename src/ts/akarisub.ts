@@ -2209,6 +2209,8 @@ export default class AkariSub extends EventTarget {
         }
       } else {
         const hasAlphaBug = AkariSub._hasAlphaBug ?? false
+        const bufferCanvas = this._bufferCanvas
+        const bufferCtx = this._bufferCtx
 
         for (let i = 0; i < imageCount; i++) {
           const image = images[i]
@@ -2224,7 +2226,12 @@ export default class AkariSub extends EventTarget {
                   ? new Uint8ClampedArray(rawImage.buffer, rawImage.byteOffset, rawImage.byteLength)
                   : new Uint8ClampedArray(rawImage as ArrayBuffer)
             const fixedData = fixAlpha(rawData, hasAlphaBug)
-            ctx.putImageData(new ImageData(fixedData as Uint8ClampedArray<ArrayBuffer>, imgW, imgH), image.x, image.y)
+            if (bufferCanvas.width !== imgW || bufferCanvas.height !== imgH) {
+              bufferCanvas.width = imgW
+              bufferCanvas.height = imgH
+            }
+            bufferCtx.putImageData(new ImageData(fixedData as Uint8ClampedArray<ArrayBuffer>, imgW, imgH), 0, 0)
+            ctx.drawImage(bufferCanvas, image.x, image.y)
           }
         }
       }

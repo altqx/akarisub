@@ -574,14 +574,14 @@ public:
       if (w <= 0 || h <= 0)
         continue;
 
-      double alpha = (255 - (img->color & 255)) / 255.0;
-      if (alpha == 0.0)
+      int opacity = 255 - (img->color & 255);
+      if (opacity == 0)
         continue;
 
       size_t datasize = sizeof(uint32_t) * static_cast<size_t>(w) *
                         static_cast<size_t>(h);
       uint32_t *data = (uint32_t *)rawbuffer;
-      decodeBitmap(alpha, data, img, w, h);
+      decodeBitmap(opacity, data, img, w, h);
       RenderResult *result = (RenderResult *)(rawbuffer + datasize);
       result->w = w;
       result->h = h;
@@ -603,7 +603,7 @@ public:
     return renderResult;
   }
 
-  void decodeBitmap(double alpha, uint32_t *out, ASS_Image *img, int w, int h) {
+  void decodeBitmap(int opacity, uint32_t *out, ASS_Image *img, int w, int h) {
     uint32_t color = ((img->color << 8) & 0xff0000) |
                      ((img->color >> 8) & 0xff00) | ((img->color >> 24) & 0xff);
     uint8_t *bitmap = img->bitmap;
@@ -612,11 +612,10 @@ public:
     // alpha and color are constant for the whole bitmap, so each of the 256
     // possible mask values maps to exactly one output pixel: precompute them
     // once and the per-pixel work becomes a single table lookup.
-    float alpha_f = (float)alpha;
     uint32_t lut[256];
     lut[0] = 0;
     for (int i = 1; i < 256; ++i)
-      lut[i] = (((uint32_t)(alpha_f * i)) << 24) | color;
+      lut[i] = (((uint32_t)(opacity * i + 127) / 255) << 24) | color;
 
     for (int y = 0; y < h; ++y) {
       uint8_t *row = bitmap + y * stride;
@@ -1100,7 +1099,9 @@ public:
 
     // now build the result
     int total_pixels = width * height;
-    const float MIN_ALPHA_THRESHOLD = 4.0f / 255.0f;
+    // Preserve every contribution that rounds to a visible 8-bit alpha.
+    // A higher cutoff truncates the low-coverage edge of libass blur masks.
+    const float MIN_ALPHA_THRESHOLD = 0.5f / 255.0f;
 
     const v128_t v_zero = wasm_f32x4_splat(0.0f);
     const v128_t v_one = wasm_f32x4_splat(1.0f);
