@@ -10,15 +10,15 @@ Regenerate it with `bun run license:third-party` after dependency, submodule, fo
 
 | Component | Version/source | License | Use |
 | --- | --- | --- | --- |
-| Brotli | v1.2.0-132-gf0328d1 (lib/brotli) | MIT | Compiled into the WebAssembly worker for Brotli-compressed font data. |
-| Expat | R_2_8_1 (lib/expat) | MIT | Compiled into the WebAssembly worker as an XML parser dependency. |
-| FreeType | VER-2-14-3-23-g7d600a022 (lib/freetype) | FreeType License | Compiled into the WebAssembly worker for font loading and rasterization. |
+| Brotli | v1.2.0-145-g8e10eeb (lib/brotli) | MIT | Compiled into the WebAssembly worker for Brotli-compressed font data. |
+| Expat | R_2_8_2 (lib/expat) | MIT | Compiled into the WebAssembly worker as an XML parser dependency. |
+| FreeType | VER-2-14-3-81-g9e9d3b73f (lib/freetype) | FreeType License | Compiled into the WebAssembly worker for font loading and rasterization. |
 | FriBidi | v1.0.16-5-g069a7e3 (lib/fribidi) | LGPL-2.1-or-later | Compiled into the WebAssembly worker for bidirectional text support. |
-| fontconfig | 2.18.1-16-gee5ee310 (lib/fontconfig) | HPND-style license with additional notices | Compiled into the WebAssembly worker for font fallback and matching. |
-| HarfBuzz | 14.2.1-12-ge113622a9 (lib/harfbuzz) | Old MIT | Compiled into the WebAssembly worker for text shaping. |
-| libass | 6a421c0 (lib/libass) | ISC | Compiled into the WebAssembly worker for ASS/SSA subtitle rendering. |
+| fontconfig | 2.18.3 (lib/fontconfig) | HPND-style license with additional notices | Compiled into the WebAssembly worker for font fallback and matching. |
+| HarfBuzz | 14.3.0 (lib/harfbuzz) | Old MIT | Compiled into the WebAssembly worker for text shaping. |
+| libass | d3941ab (lib/libass) | ISC | Compiled into the WebAssembly worker for ASS/SSA subtitle rendering. |
 | Liberation Sans | dist/default.woff2 (dist/default.woff2) | OFL-1.1 | Bundled fallback font asset used by default renderer options. |
-| Emscripten runtime | 6.0.0 (dist/js/akarisub-worker.js) | MIT OR NCSA | Generated JavaScript runtime wrapper used by the WebAssembly worker. |
+| Emscripten runtime | 6.0.6 (dist/js/akarisub-worker.js) | MIT OR NCSA | Generated JavaScript runtime wrapper used by the WebAssembly worker. |
 
 ## Bun/npm Packages
 
@@ -47,9 +47,9 @@ Regenerate it with `bun run license:third-party` after dependency, submodule, fo
 | `@typescript/typescript-sunos-x64` | 7.0.2 | Apache-2.0 | https://github.com/microsoft/TypeScript.git |
 | `@typescript/typescript-win32-arm64` | 7.0.2 | Apache-2.0 | https://github.com/microsoft/TypeScript.git |
 | `@typescript/typescript-win32-x64` | 7.0.2 | Apache-2.0 | https://github.com/microsoft/TypeScript.git |
-| `@webgpu/types` | 0.1.70 | BSD-3-Clause | gpuweb/types |
+| `@webgpu/types` | 0.1.71 | BSD-3-Clause | gpuweb/types |
 | `bun-types` | 1.3.14 | MIT | https://github.com/oven-sh/bun |
-| `prettier` | 3.8.4 | MIT | prettier/prettier |
+| `prettier` | 3.9.6 | MIT | prettier/prettier |
 | `typescript` | 7.0.2 | Apache-2.0 | https://github.com/microsoft/TypeScript.git |
 | `undici-types` | 7.16.0 | MIT | git+https://github.com/nodejs/undici.git |
 

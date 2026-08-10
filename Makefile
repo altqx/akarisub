@@ -177,6 +177,7 @@ $(DIST_DIR)/lib/libfontconfig.a: $(DIST_DIR)/lib/libfreetype.a $(DIST_DIR)/lib/l
 		--with-configdir=/etc/fonts/conf.d \
 	&& \
 	$(JSO_MAKE) -C fc-const/ && \
+	$(JSO_MAKE) -C fc-genericfamily/ && \
 	$(JSO_MAKE) -C src/ && \
 	$(JSO_MAKE) -C src/ install && \
 	$(JSO_MAKE) -C fontconfig/ install && \
