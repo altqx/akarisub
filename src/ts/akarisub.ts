@@ -1273,10 +1273,11 @@ export default class AkariSub extends EventTarget {
 
     frame.scheduled = true
     this._scheduledPreparedFrame = frame
-    frame.animations = [showAnimation, ...hideAnimations]
+    const swapAnimations = [showAnimation, ...hideAnimations]
+    frame.animations = swapAnimations
     const releaseSwapAnimations = (): void => {
-      for (const animation of frame.animations ?? []) animation.cancel()
-      frame.animations = undefined
+      for (const animation of swapAnimations) animation.cancel()
+      if (frame.animations === swapAnimations) frame.animations = undefined
     }
 
     // The show animation is the authoritative commit. Once it completes, make
@@ -1285,12 +1286,14 @@ export default class AkariSub extends EventTarget {
     // hide animation on this stage; it is intentionally left untouched.
     void showAnimation.finished.then(
       () => {
+        if (frame.animations !== swapAnimations) return
         if (!frame.committed) this._commitPreparedStage(frame)
         releaseSwapAnimations()
         if (this._scheduledPreparedFrame === frame) this._scheduledPreparedFrame = null
         this._scheduleNextPreparedFrame()
       },
       () => {
+        if (frame.animations !== swapAnimations) return
         releaseSwapAnimations()
         if (this._scheduledPreparedFrame === frame) this._scheduledPreparedFrame = null
         frame.scheduled = false
@@ -1562,14 +1565,26 @@ export default class AkariSub extends EventTarget {
     const { bitmap, width, height, stage } = frame
     if (stage) {
       if (!frame.committed || this._committedStage !== stage) {
-        for (const animation of frame.animations ?? []) {
-          try {
-            animation.finish()
-          } catch {
-            animation.cancel()
-          }
+        // Prediction only gets the prepared layer onto the compositor ahead of
+        // time. Validate its swap against this frame's authoritative RVFC
+        // deadline: finishing the animation here turns it into a main-thread
+        // style commit, which can miss the video's refresh by one frame.
+        const authoritativeDisplayTime = Number.isFinite(expectedDisplayTime)
+          ? Math.max(expectedDisplayTime!, performance.now() + 0.001)
+          : undefined
+        if (authoritativeDisplayTime != null) {
+          const previousAnimations = frame.animations
+          frame.animations = undefined
+          frame.scheduled = false
+          if (this._scheduledPreparedFrame === frame) this._scheduledPreparedFrame = null
+          for (const animation of previousAnimations ?? []) animation.cancel()
+          stage.style.opacity = '0'
+          this._schedulePreparedFrame(frame, authoritativeDisplayTime)
+          if (!frame.scheduled) this._commitPreparedStage(frame)
+        } else {
+          for (const animation of frame.animations ?? []) animation.cancel()
+          this._commitPreparedStage(frame)
         }
-        this._commitPreparedStage(frame)
       }
       this._stageDisplayTimes.set(
         stage,
