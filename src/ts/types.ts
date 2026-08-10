@@ -95,9 +95,9 @@ export interface AkariSubOptions {
   blendMode?: 'js' | 'wasm'
   /** Use async rendering with ImageBitmap (default: true) */
   asyncRender?: boolean
-  /** Use offscreen canvas rendering (default: true for video-managed canvases, false for caller-provided custom canvases) */
+  /** Use offscreen canvas rendering (default: true for video-managed canvases and WebGL2-capable custom canvases) */
   offscreenRender?: boolean
-  /** Use worker-side raw ASS_Image WebGL2 compositor (experimental; default: false) */
+  /** Use worker-side raw ASS_Image WebGL2 compositor (default: true for WebGL2-capable custom canvases outside WebKit) */
   rawAssImageGpu?: boolean
   /** Use requestVideoFrameCallback for precise sync (default: true) */
   onDemandRender?: boolean

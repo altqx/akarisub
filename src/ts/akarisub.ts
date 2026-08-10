@@ -237,19 +237,17 @@ export default class AkariSub extends EventTarget {
     this._onCanvasFallback = options.onCanvasFallback
 
     const isCustomCanvas = !!options.canvas
-    const wantsOffscreenRender = options.offscreenRender ?? !isCustomCanvas
+    const rawAssImageGpu = options.rawAssImageGpu ?? (isCustomCanvas && !this._isLikelyWebKit && isWebGL2Supported())
+    const wantsOffscreenRender = options.offscreenRender ?? (!isCustomCanvas || rawAssImageGpu)
     const canTransferOffscreen = 'transferControlToOffscreen' in HTMLCanvasElement.prototype
     const canUseGPURenderer = !this._isLikelyWebKit && !isCustomCanvas && (isWebGPUSupported() || isWebGL2Supported())
     const shouldUseAsyncRender =
       typeof createImageBitmap !== 'undefined' && (options.asyncRender ?? (!this._isLikelyWebKit && !canUseGPURenderer))
 
-    // A caller-provided canvas is usually used by manual render/benchmark
-    // integrations where end-to-end latency matters more than moving all paint
-    // work off the main thread. Use the async ImageBitmap main-thread path by
-    // default there; video-managed canvases still use worker OffscreenCanvas
-    // when no main-thread GPU renderer is active. Callers can set
-    // offscreenRender=true to force worker painting or rawAssImageGpu=true to
-    // opt into the experimental raw ASS_Image WebGL2 compositor.
+    // Transfer custom canvases to the worker when its raw ASS_Image WebGL2
+    // compositor is available. This avoids the CPU preblend, ImageBitmap, and
+    // main-thread paint round trips for animation-heavy manual rendering.
+    // Explicit offscreenRender/rawAssImageGpu options still override the default.
     this._offscreenRender = canTransferOffscreen && !canUseGPURenderer && wantsOffscreenRender
 
     this.timeOffset = options.timeOffset || 0
@@ -326,7 +324,7 @@ export default class AkariSub extends EventTarget {
         blockingFullTrackWarmup: options.blockingFullTrackWarmup ?? false,
         fullTrackWarmupStep: options.fullTrackWarmupStep ?? 1,
         adaptiveBlendLayouts: options.adaptiveBlendLayouts ?? false,
-        rawAssImageGpu: options.rawAssImageGpu ?? false,
+        rawAssImageGpu,
         onDemandRender: this._onDemandRender,
         initialTime,
         initialIsPaused: this._isVideoPausedForWorker(),
@@ -369,7 +367,7 @@ export default class AkariSub extends EventTarget {
         this._worker.postMessage(
           {
             target: 'offscreenCanvas',
-            rawAssImageGpu: options.rawAssImageGpu ?? false,
+            rawAssImageGpu,
             transferable: [offscreenCanvas]
           },
           [offscreenCanvas]

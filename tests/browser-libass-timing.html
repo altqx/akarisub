@@ -33,7 +33,8 @@ Dialogue: 0,600:00:00.00,600:00:01.00,Default,,0,0,0,,LONG TIMELINE
     wasmUrl: '/dist/akarisub-worker.wasm',
     onDemandRender: false,
     adaptiveTiming: false,
-    asyncRender: false
+    asyncRender: false,
+    offscreenRender: false
   })
 
   const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms))

@@ -122,58 +122,6 @@ struct RenderBlendStorage {
 #define MIN(x, y) (((x) < (y)) ? (x) : (y))
 #define MAX(x, y) (((x) > (y)) ? (x) : (y))
 
-struct RawAssTrimmedImage {
-  int dst_x;
-  int dst_y;
-  int w;
-  int h;
-  unsigned char *bitmap;
-  int stride;
-};
-
-static bool trimRawAssImage(ASS_Image *img, RawAssTrimmedImage *trim) {
-  if (!img || !trim || img->w <= 0 || img->h <= 0 || !img->bitmap)
-    return false;
-
-  int stride = img->stride > 0 ? img->stride : img->w;
-  int min_x = img->w;
-  int min_y = img->h;
-  int max_x = -1;
-  int max_y = -1;
-
-  for (int y = 0; y < img->h; y++) {
-    unsigned char *row = img->bitmap + y * stride;
-    int left = 0;
-    while (left < img->w && row[left] == 0)
-      left++;
-    if (left == img->w)
-      continue;
-
-    int right = img->w - 1;
-    while (right > left && row[right] == 0)
-      right--;
-
-    if (left < min_x)
-      min_x = left;
-    if (right > max_x)
-      max_x = right;
-    if (y < min_y)
-      min_y = y;
-    max_y = y;
-  }
-
-  if (max_x < min_x || max_y < min_y)
-    return false;
-
-  trim->dst_x = img->dst_x + min_x;
-  trim->dst_y = img->dst_y + min_y;
-  trim->w = max_x - min_x + 1;
-  trim->h = max_y - min_y + 1;
-  trim->bitmap = img->bitmap + min_y * stride + min_x;
-  trim->stride = stride;
-  return true;
-}
-
 class BoundingBox {
 public:
   int min_x, max_x, min_y, max_y;
@@ -1749,18 +1697,20 @@ EMSCRIPTEN_KEEPALIVE int akarisub_render_raw_collect(
     if ((255 - (cur->color & 0xFF)) == 0)
       continue;
 
-    RawAssTrimmedImage trim;
-    if (!trimRawAssImage(cur, &trim))
+    // libass already bounds each image. Uploading its zero mask pixels is
+    // output-equivalent and avoids an O(total mask pixels) trimming scan on
+    // every animated frame.
+    if (cur->w <= 0 || cur->h <= 0 || !cur->bitmap)
       continue;
 
     int base = written * 8;
-    img_out[base + 0] = trim.dst_x;
-    img_out[base + 1] = trim.dst_y;
-    img_out[base + 2] = trim.w;
-    img_out[base + 3] = trim.h;
-    img_out[base + 4] = (int)(uintptr_t)trim.bitmap;
+    img_out[base + 0] = cur->dst_x;
+    img_out[base + 1] = cur->dst_y;
+    img_out[base + 2] = cur->w;
+    img_out[base + 3] = cur->h;
+    img_out[base + 4] = (int)(uintptr_t)cur->bitmap;
     img_out[base + 5] = (int)cur->color;
-    img_out[base + 6] = trim.stride;
+    img_out[base + 6] = cur->stride > 0 ? cur->stride : cur->w;
     img_out[base + 7] = cur->type;
     written++;
   }

@@ -94,6 +94,8 @@ const renderer = new AkariSub({
 renderer.setCurrentTime(true, 15)
 ```
 
+On WebGL2-capable browsers, a custom canvas is transferred to AkariSub's worker by default for the fastest raw-mask compositor. Set `offscreenRender: false` if your code needs to call `getContext()` or read pixels from that canvas after construction.
+
 ### Timing semantics
 
 AkariSub sends libass an integer millisecond timestamp. Fractional media times are floored to the current millisecond, matching libass's `Start <= now < Start + Duration` event boundaries. `timeOffset` and `renderAhead` are measured in seconds.
@@ -232,7 +234,8 @@ The default options are best, and automatically fallback to the next fastest opt
 | `canvas`              | HTMLCanvasElement                    | -                                        | Canvas to use for manual handling (optional if video is provided)                                                                                          |
 | `blendMode`           | `'js'` \| `'wasm'`                   | `'wasm'`                                 | Image blending mode. WASM is better for low-end devices, JS for hardware acceleration                                                                      |
 | `asyncRender`         | boolean                              | auto                                     | Render via ImageBitmap. Defaults to `true` on Canvas2D paths and `false` when a GPU renderer is active (raw buffers upload with fewer copies) or on WebKit |
-| `offscreenRender`     | boolean                              | `true`                                   | Render fully on the worker, greatly reduces CPU usage                                                                                                      |
+| `offscreenRender`     | boolean                              | automatic                                | Render fully on the worker; enabled for video-managed canvases and WebGL2-capable custom canvases                                                          |
+| `rawAssImageGpu`      | boolean                              | automatic                                | Compose raw libass masks with worker WebGL2; enabled for WebGL2-capable custom canvases outside WebKit                                                     |
 | `onDemandRender`      | boolean                              | `true`                                   | Render subtitles as the video player renders frames                                                                                                        |
 | `adaptiveTiming`      | boolean                              | `true`                                   | Compensate measured queue, worker, bitmap, IPC, and paint latency while video is playing; pause and seek renders remain frame-exact                        |
 | `frameTimeline`       | FrameTimeline                        | -                                        | Encoded browser-frame timestamps plus optional media/subtitle clock offsets; enables frame-locked libass sampling                                          |
