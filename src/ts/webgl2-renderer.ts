@@ -3,7 +3,6 @@ import type { RenderImage } from './types'
 const MAX_IMAGES_PER_BATCH = 256
 const MAX_TEXTURE_ARRAY_LAYERS = 256
 
-// GLSL Vertex Shader (GLSL ES 3.00)
 const VERTEX_SHADER = /* glsl */ `#version 300 es
 precision highp float;
 
@@ -40,7 +39,6 @@ void main() {
 }
 `
 
-// GLSL Fragment Shader (GLSL ES 3.00)
 const FRAGMENT_SHADER = /* glsl */ `#version 300 es
 precision highp float;
 precision highp sampler2DArray;
@@ -57,14 +55,10 @@ out vec4 fragColor;
 void main() {
   vec2 normalizedCoord = v_uv * v_texSize / vec2(u_texArraySize);
   vec4 color = texture(u_texArray, vec3(normalizedCoord, float(v_texIndex)));
-  // Premultiplied alpha output (matches WebGPU renderer behaviour)
   fragColor = vec4(color.rgb * color.a, color.a);
 }
 `
 
-/**
- * Check if WebGL2 is supported in the current browser.
- */
 export function isWebGL2Supported(): boolean {
   if (typeof document === 'undefined') return false
   try {
@@ -91,9 +85,6 @@ function compileShader(gl: WebGL2RenderingContext, type: number, source: string)
   return shader
 }
 
-/**
- * High-performance WebGL2 subtitle renderer for AkariSub.
- */
 export class WebGL2Renderer {
   private _gl: WebGL2RenderingContext | null = null
   private _canvas: HTMLCanvasElement | null = null
@@ -139,7 +130,6 @@ export class WebGL2Renderer {
     if (!gl) throw new Error('Failed to create WebGL2 context')
     this._gl = gl
 
-    // Compile and link program
     const vert = compileShader(gl, gl.VERTEX_SHADER, VERTEX_SHADER)
     const frag = compileShader(gl, gl.FRAGMENT_SHADER, FRAGMENT_SHADER)
     const program = gl.createProgram()!
@@ -156,13 +146,11 @@ export class WebGL2Renderer {
     this._resolutionLoc = gl.getUniformLocation(program, 'u_resolution')
     this._texArraySizeLoc = gl.getUniformLocation(program, 'u_texArraySize')
 
-    // VAO + instance VBO
     this._vao = gl.createVertexArray()!
     gl.bindVertexArray(this._vao)
 
     this._instanceBuffer = gl.createBuffer()!
     gl.bindBuffer(gl.ARRAY_BUFFER, this._instanceBuffer)
-    // Size: MAX_IMAGES * 8 floats * 4 bytes
     gl.bufferData(gl.ARRAY_BUFFER, MAX_IMAGES_PER_BATCH * 32, gl.DYNAMIC_DRAW)
 
     // stride = 32 bytes (8 × float)
@@ -178,20 +166,14 @@ export class WebGL2Renderer {
 
     gl.bindVertexArray(null)
 
-    // Texture array
     this._allocateTextureArray(256, 256, 32)
 
-    // Premultiplied-alpha blending
     gl.enable(gl.BLEND)
     gl.blendEquation(gl.FUNC_ADD)
     gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA)
 
     this._initialized = true
   }
-
-  // ==========================================================================
-  // Texture management
-  // ==========================================================================
 
   // Round up to a multiple of 64: gives headroom against size jitter without
   // power-of-2 over-allocation (a 1920x1080 blend region would otherwise
@@ -200,7 +182,6 @@ export class WebGL2Renderer {
     return (Math.max(n, 64) + 63) & ~63
   }
 
-  // Round layers up to a multiple of 8, clamped to the layer cap
   private _roundLayers(n: number): number {
     return Math.min((Math.max(n, 8) + 7) & ~7, MAX_TEXTURE_ARRAY_LAYERS)
   }
@@ -234,10 +215,6 @@ export class WebGL2Renderer {
     this._allocateTextureArray(newW, newH, newL)
   }
 
-  // ==========================================================================
-  // Public interface
-  // ==========================================================================
-
   async setCanvas(canvas: HTMLCanvasElement, width: number, height: number): Promise<void> {
     await this.init()
     if (width <= 0 || height <= 0) return
@@ -260,9 +237,6 @@ export class WebGL2Renderer {
     this._lastCanvasHeight = height
   }
 
-  /**
-   * Render from ImageBitmaps (async render mode)
-   */
   renderBitmaps(
     images: { image: ImageBitmap; x: number; y: number }[],
     _canvasWidth: number,
@@ -325,9 +299,6 @@ export class WebGL2Renderer {
     }
   }
 
-  /**
-   * Render from raw ArrayBuffer data (non-async render mode)
-   */
   render(
     images: RenderImage[],
     _canvasWidth: number,

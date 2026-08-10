@@ -7,7 +7,6 @@ function assert(c, m) {
 
 let asm = null
 
-// Safari compatibility
 ;(function () {
   var _origStreaming = typeof WebAssembly !== 'undefined' && WebAssembly.instantiateStreaming
   if (!_origStreaming) return

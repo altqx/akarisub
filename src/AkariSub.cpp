@@ -37,13 +37,11 @@ public:
   void *take(size_t new_size) {
     if (size >= new_size) {
       if (size >= 1.3 * new_size) {
-        // big reduction request
         lessen_counter++;
       } else {
         lessen_counter = 0;
       }
       if (lessen_counter < 128) {
-        // not reducing the buffer yet
         return buffer;
       }
     }
@@ -206,7 +204,7 @@ public:
              other.min_y > max_y || other.max_y < min_y);
   }
 
-  // Check intersection with margin - for blur overlap detection
+  // Blur overlap: expand both boxes by margin before testing intersection.
   bool intersetsWithMargin(const BoundingBox &other, int margin) const {
     return !(other.min_x > max_x + margin || other.max_x < min_x - margin ||
              other.min_y > max_y + margin || other.max_y < min_y - margin);
@@ -223,7 +221,6 @@ public:
     return true;
   }
 
-  // Merge with margin check - for blur overlap
   bool tryMergeWithMargin(BoundingBox &other, int margin) {
     if (!intersetsWithMargin(other, margin))
       return false;
@@ -283,7 +280,6 @@ static bool _is_animated_tag(char *begin, char *end) {
     return check_complex_tag("t");
   case 'm':
     // Movement: complex tag; again no other valid tag begins with m
-    // but ensure it's complex just to be sure
     return check_complex_tag("move");
   case 'f':
     // Fade: \fad and Fade (complex): \fade; both complex
@@ -335,14 +331,12 @@ static bool _is_block_animated(char *start, char *end, bool drop_animations) {
            (i.e. when dropping animations this is always false)
  */
 static bool _is_event_animated(ASS_Event *event, bool drop_animations) {
-  // Event is animated if it has an Effect or animated override tags
   if (event->Effect && event->Effect[0] != '\0') {
     if (!drop_animations)
       return 1;
     event->Effect[0] = '\0';
   }
 
-  // Search for override blocks
   // Only closed {...}-blocks are parsed by VSFilters and libass
   if (!event->Text)
     return false;
@@ -488,7 +482,6 @@ public:
     scanned_events = i;
   }
 
-  /* TRACK */
   // ass_read_memory copies the buffer internally, so the caller's heap
   // pointer can be passed straight through without intermediate copies.
   void createTrackMem(const char *data, size_t size) {
@@ -515,9 +508,7 @@ public:
       track = NULL;
     }
   }
-  /* TRACK */
 
-  /* CANVAS */
   void resizeCanvas(int canvas_w, int canvas_h, int video_w, int video_h) {
     ass_set_storage_size(ass_renderer, video_w, video_h);
     ass_set_frame_size(ass_renderer, canvas_w, canvas_h);
@@ -695,14 +686,12 @@ public:
     reloadFonts();
   }
 
-  // Set multiple fallback fonts (comma-separated list)
-  // The first font is the primary, rest are fallbacks for fontconfig
+  // Comma-separated list; first is primary, rest are fontconfig fallbacks.
   void setFallbackFonts(const std::string &fonts) {
     fallbackFonts = fonts;
     reloadFonts();
   }
 
-  // Add a fallback font to the list (appends to existing)
   void addFallbackFont(const std::string &font) {
     if (!fallbackFonts.empty()) {
       fallbackFonts += ",";
@@ -711,7 +700,6 @@ public:
     // Note: don't reload fonts here, call reloadFonts() manually after adding all
   }
 
-  // Get the current fallback fonts string
   std::string getFallbackFonts() const {
     return fallbackFonts;
   }
@@ -941,7 +929,6 @@ public:
   }
 
   RenderResult *renderBlendPart(const BoundingBox &rect, ASS_Image *img) {
-    // Clamp to canvas bounds
     int actual_min_x = MAX(rect.min_x, 0);
     int actual_min_y = MAX(rect.min_y, 0);
     int actual_max_x = MIN(rect.max_x, canvas_w - 1);
@@ -953,7 +940,6 @@ public:
     if (width <= 0 || height <= 0)
       return NULL;
 
-    // make float buffer for blending
     const size_t buffer_size = width * height * 4 * sizeof(float);
     float *buf = (float *)m_buffer.take(buffer_size);
     if (buf == NULL) {
@@ -963,15 +949,13 @@ public:
 
     memset(buf, 0, buffer_size);
 
-    // blend things in
     for (ASS_Image *cur = img; cur != NULL; cur = cur->next) {
       int curx_abs = cur->dst_x, cury_abs = cur->dst_y;
       int curw = cur->w, curh = cur->h;
       if (curw == 0 || curh == 0)
         continue; // skip empty images
 
-      // Calculate image center - only render if center is in our region
-      // This ensures each image is rendered exactly once by one region
+      // Assign each image to exactly one region by its center point.
       int center_x = curx_abs + (curw >> 1);
       int center_y = cury_abs + (curh >> 1);
       if (center_x < rect.min_x || center_x > rect.max_x ||
@@ -984,7 +968,6 @@ public:
 
       int curs = (cur->stride >= curw) ? cur->stride : curw;
 
-      // Render full image, clipped only to canvas/actual bounds
       int img_right = curx_abs + curw - 1;
       int img_bottom = cury_abs + curh - 1;
 
@@ -1005,7 +988,6 @@ public:
 
       unsigned char *bitmap = cur->bitmap;
 
-      // Pre-compute color components as floats
       float normalized_a = a * INV_255;
       float r = ((cur->color >> 24) & 0xFF) * INV_255;
       float g = ((cur->color >> 16) & 0xFF) * INV_255;
@@ -1063,7 +1045,6 @@ public:
       }
     }
 
-    // find closest free buffer
     size_t needed = sizeof(unsigned int) * width * height;
     RenderBlendStorage *storage = m_blendParts, *bigBuffer = NULL,
                        *smallBuffer = NULL;
@@ -1097,7 +1078,6 @@ public:
     storage->taken = true;
     memset(result, 0, needed);
 
-    // now build the result
     int total_pixels = width * height;
     // Preserve every contribution that rounds to a visible 8-bit alpha.
     // A higher cutoff truncates the low-coverage edge of libass blur masks.
@@ -1112,7 +1092,6 @@ public:
       int buf_coord = i << 2;
       float alpha = buf[buf_coord + 3];
 
-      // Only output if alpha is above minimum threshold
       if (alpha >= MIN_ALPHA_THRESHOLD) {
         // un-multiply RGB (alpha lane scales by 1), scale to 0-255 with
         // rounding, then narrow the four lanes to RGBA bytes. The final
@@ -1129,7 +1108,6 @@ public:
       }
     }
 
-    // return the thing
     storage->next.x = actual_min_x;
     storage->next.y = actual_min_y;
     storage->next.w = width;
@@ -1139,7 +1117,6 @@ public:
     return &storage->next;
   }
 
-  // BINDING
   ASS_Event *getEvent(int i) { return &track->events[i]; }
 
   ASS_Style *getStyle(int i) { return &track->styles[i]; }
@@ -1684,7 +1661,6 @@ EMSCRIPTEN_KEEPALIVE int akarisub_render_blend_collect(
 
   RenderResult *result = instance->renderBlend(tm, force);
 
-  // Write header: changed, count, time
   out[0] = instance->changed;
   out[1] = instance->count;
   out[2] = instance->time;
@@ -1692,7 +1668,6 @@ EMSCRIPTEN_KEEPALIVE int akarisub_render_blend_collect(
   if (!result || instance->count == 0)
     return 0;
 
-  // Collect render results starting at out[3]
   int *img_out = out + 3;
   int written = 0;
   int img_max = (max_items - 3) / 5; // 5 ints per image
@@ -1714,7 +1689,6 @@ EMSCRIPTEN_KEEPALIVE int akarisub_render_blend_collect(
   return written;
 }
 
-// Same as above but for renderImage mode
 EMSCRIPTEN_KEEPALIVE int akarisub_render_image_collect(
     AkariSub *instance, double tm, int force, int *out, int max_items) {
   if (!instance || !out || max_items < 3)

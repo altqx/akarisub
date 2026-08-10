@@ -2,13 +2,10 @@
 
 import type { RenderImage } from './types'
 
-// Maximum images per batch
 const MAX_IMAGES_PER_BATCH = 256
 
-// WebGPU max texture array layers
 const MAX_TEXTURE_ARRAY_LAYERS = 256
 
-// WGSL Vertex Shader
 const VERTEX_SHADER = /* wgsl */ `
 struct VertexOutput {
   @builtin(position) position: vec4f,
@@ -29,7 +26,6 @@ struct ImageData {
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
 @group(0) @binding(1) var<storage, read> imageData: array<ImageData>;
 
-// Quad vertices (two triangles)
 const QUAD_POSITIONS = array<vec2f, 6>(
   vec2f(0.0, 0.0),
   vec2f(1.0, 0.0),
@@ -50,10 +46,8 @@ fn vertexMain(
   let quadPos = QUAD_POSITIONS[vertexIndex];
   let wh = data.destRect.zw;
   
-  // Calculate pixel position
   let pixelPos = data.destRect.xy + quadPos * wh;
   
-  // Convert to clip space (-1 to 1)
   var clipPos = (pixelPos / uniforms.resolution) * 2.0 - 1.0;
   clipPos.y = -clipPos.y;
   
@@ -66,7 +60,6 @@ fn vertexMain(
 }
 `
 
-// WGSL Fragment Shader
 const FRAGMENT_SHADER = /* wgsl */ `
 @group(0) @binding(2) var texArray: texture_2d_array<f32>;
 
@@ -89,27 +82,20 @@ fn fragmentMain(input: FragmentInput) -> @location(0) vec4f {
   let data = imageData[input.instanceIndex];
   let texIndex = u32(data.texInfo.z);
   
-  // Calculate texel coordinates
   let texCoordF = floor(input.fragCoord.xy - input.destXY);
   let texCoord = vec2i(texCoordF);
   
-  // Bounds check
   let texSizeI = vec2i(input.texSize);
   if (texCoord.x < 0 || texCoord.y < 0 || texCoord.x >= texSizeI.x || texCoord.y >= texSizeI.y) {
     discard;
   }
   
-  // Load from texture array
   let color = textureLoad(texArray, texCoord, texIndex, 0);
   
-  // Premultiplied alpha output
   return vec4f(color.rgb * color.a, color.a);
 }
 `
 
-/**
- * Check if WebGPU is supported in the current browser.
- */
 export function isWebGPUSupported(): boolean {
   return typeof navigator !== 'undefined' && 'gpu' in navigator
 }
@@ -122,9 +108,6 @@ function toUint8View(data: ArrayBuffer | Uint8Array | Uint8ClampedArray): Uint8A
   return new Uint8Array(data.buffer, data.byteOffset, data.byteLength)
 }
 
-/**
- * High-performance WebGPU subtitle renderer for AkariSub.
- */
 export class WebGPURenderer {
   private device: GPUDevice | null = null
   private context: GPUCanvasContext | null = null
@@ -135,7 +118,6 @@ export class WebGPURenderer {
   private uniformBuffer: GPUBuffer | null = null
   private imageDataBuffer: GPUBuffer | null = null
 
-  // Texture array for batched rendering
   private textureArray: GPUTexture | null = null
   private textureArrayView: GPUTextureView | null = null
   private textureArraySize = 0
@@ -147,15 +129,12 @@ export class WebGPURenderer {
   private externalUploadContext: OffscreenCanvasRenderingContext2D | CanvasRenderingContext2D | null = null
   private warnedExternalUploadFallback = false
 
-  // Pre-allocated typed arrays (reused every frame - ZERO allocations in hot path)
   private readonly imageDataArray: Float32Array
   private readonly resolutionArray = new Float32Array(2)
 
-  // Bind group (recreated only when texture array changes)
   private bindGroup: GPUBindGroup | null = null
   private bindGroupDirty = true
 
-  // Track canvas size to avoid redundant updates
   private lastCanvasWidth = 0
   private lastCanvasHeight = 0
 
@@ -166,7 +145,6 @@ export class WebGPURenderer {
   private _initialized = false
 
   constructor() {
-    // Pre-allocate buffer for max images (8 floats per image: destRect + texInfo)
     this.imageDataArray = new Float32Array(MAX_IMAGES_PER_BATCH * 8)
   }
 
@@ -200,13 +178,11 @@ export class WebGPURenderer {
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
     })
 
-    // Large storage buffer for all image data
     this.imageDataBuffer = this.device.createBuffer({
       size: MAX_IMAGES_PER_BATCH * 8 * 4,
       usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
     })
 
-    // Create initial texture array with reasonable defaults
     this.createTextureArray(256, 256, 32)
 
     this.bindGroupLayout = this.device.createBindGroupLayout({
@@ -258,7 +234,6 @@ export class WebGPURenderer {
     return (Math.max(n, 64) + 63) & ~63
   }
 
-  // Round layers up to a multiple of 8, clamped to the WebGPU max
   private roundLayers(n: number): number {
     return Math.min((Math.max(n, 8) + 7) & ~7, MAX_TEXTURE_ARRAY_LAYERS)
   }
@@ -283,7 +258,6 @@ export class WebGPURenderer {
     this.textureArraySize = l
     this.bindGroupDirty = true
 
-    // Clear all texture layers to transparent to prevent garbage border artifacts
     const commandEncoder = this.device!.createCommandEncoder()
     for (let layer = 0; layer < l; layer++) {
       const layerView = this.textureArray.createView({
@@ -307,7 +281,6 @@ export class WebGPURenderer {
   }
 
   private ensureTextureArray(maxWidth: number, maxHeight: number, count: number): boolean {
-    // Clamp count to max layers
     const clampedCount = Math.min(count, MAX_TEXTURE_ARRAY_LAYERS)
 
     if (
@@ -419,10 +392,6 @@ export class WebGPURenderer {
     this.lastCanvasHeight = height
   }
 
-  /**
-   * Render ImageBitmaps (async render mode)
-   * Handles batching when image count exceeds MAX_TEXTURE_ARRAY_LAYERS
-   */
   renderBitmaps(
     images: { image: ImageBitmap; x: number; y: number }[],
     canvasWidth: number,
@@ -456,7 +425,6 @@ export class WebGPURenderer {
     const currentTexture = context.getCurrentTexture()
     if (currentTexture.width === 0 || currentTexture.height === 0) return false
 
-    // Single pass: find max dimensions and count valid images
     let maxW = 0,
       maxH = 0,
       validCount = 0
@@ -475,7 +443,6 @@ export class WebGPURenderer {
       return this.clearContext(context)
     }
 
-    // Ensure texture array is large enough (capped at MAX_TEXTURE_ARRAY_LAYERS)
     const batchSize = Math.min(validCount, MAX_TEXTURE_ARRAY_LAYERS)
     this.ensureTextureArray(maxW, maxH, batchSize)
     this.updateBindGroup()
@@ -486,7 +453,6 @@ export class WebGPURenderer {
     const imageDataArray = this.imageDataArray
     const textureView = currentTexture.createView()
 
-    // Process images in batches if needed
     let imageIndex = 0
     let isFirstBatch = true
     let renderedAnyBatch = false
@@ -494,7 +460,6 @@ export class WebGPURenderer {
     while (imageIndex < len) {
       let texIndex = 0
 
-      // Upload batch of textures
       while (imageIndex < len && texIndex < MAX_TEXTURE_ARRAY_LAYERS) {
         const img = images[imageIndex++]
         const bitmap = img.image
@@ -504,7 +469,6 @@ export class WebGPURenderer {
 
         if (!this.uploadImageBitmap(texIndex, bitmap, w, h)) continue
 
-        // Fill pre-allocated array
         const offset = texIndex << 3
         imageDataArray[offset] = img.x
         imageDataArray[offset + 1] = img.y
@@ -520,7 +484,6 @@ export class WebGPURenderer {
 
       if (texIndex === 0) continue
 
-      // Upload buffer and draw batch
       queue.writeBuffer(this.imageDataBuffer!, 0, imageDataArray.buffer, 0, texIndex << 5)
 
       const commandEncoder = device.createCommandEncoder()
@@ -550,10 +513,6 @@ export class WebGPURenderer {
     return renderedAnyBatch
   }
 
-  /**
-   * Render from raw ArrayBuffer data (non-async render mode)
-   * Handles batching when image count exceeds MAX_TEXTURE_ARRAY_LAYERS
-   */
   render(images: RenderImage[], _canvasWidth: number, _canvasHeight: number): boolean {
     if (!this.device || !this.context || !this.pipeline) return false
 
@@ -569,7 +528,6 @@ export class WebGPURenderer {
     const currentTexture = this.context.getCurrentTexture()
     if (currentTexture.width === 0 || currentTexture.height === 0) return false
 
-    // Single pass: find max dimensions and count valid images
     let maxW = 0,
       maxH = 0,
       validCount = 0
@@ -586,7 +544,6 @@ export class WebGPURenderer {
       return this.clear()
     }
 
-    // Ensure texture array is large enough (capped at MAX_TEXTURE_ARRAY_LAYERS)
     const batchSize = Math.min(validCount, MAX_TEXTURE_ARRAY_LAYERS)
     this.ensureTextureArray(maxW, maxH, batchSize)
     this.updateBindGroup()
@@ -597,7 +554,6 @@ export class WebGPURenderer {
     const imageDataArray = this.imageDataArray
     const textureView = currentTexture.createView()
 
-    // Process images in batches if needed
     let imageIndex = 0
     let isFirstBatch = true
     let renderedAnyBatch = false
@@ -605,14 +561,12 @@ export class WebGPURenderer {
     while (imageIndex < len) {
       let texIndex = 0
 
-      // Upload batch of textures
       while (imageIndex < len && texIndex < MAX_TEXTURE_ARRAY_LAYERS) {
         const img = images[imageIndex++]
         const w = img.w,
           h = img.h
         if (w <= 0 || h <= 0) continue
 
-        // Upload texture data
         const imgData = img.image
         if (imgData instanceof ImageBitmap) {
           if (!this.uploadImageBitmap(texIndex, imgData, w, h)) continue
@@ -626,7 +580,6 @@ export class WebGPURenderer {
           continue
         }
 
-        // Fill pre-allocated array
         const offset = texIndex << 3
         imageDataArray[offset] = img.x
         imageDataArray[offset + 1] = img.y
@@ -642,7 +595,6 @@ export class WebGPURenderer {
 
       if (texIndex === 0) continue
 
-      // Upload buffer and draw batch
       queue.writeBuffer(this.imageDataBuffer!, 0, imageDataArray.buffer, 0, texIndex << 5)
 
       const commandEncoder = device.createCommandEncoder()

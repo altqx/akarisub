@@ -6,11 +6,9 @@
  * @packageDocumentation
  */
 
-// Main AkariSub class
 export { default } from './ts/akarisub'
 export { default as AkariSub } from './ts/akarisub'
 
-// Type exports
 export type {
   ASSEvent,
   ASSStyle,
@@ -29,7 +27,6 @@ export type {
   EncryptedSubtitleContent
 } from './ts/types'
 
-// Utility exports (for advanced usage)
 export {
   webYCbCrMap,
   colorMatrixConversionMap,
@@ -47,8 +44,6 @@ export {
   getColorSpaceFilterUrl
 } from './ts/utils'
 
-// WebGPU renderer exports
 export { WebGPURenderer, isWebGPUSupported } from './ts/webgpu-renderer'
 
-// WebGL2 renderer exports
 export { WebGL2Renderer, isWebGL2Supported } from './ts/webgl2-renderer'

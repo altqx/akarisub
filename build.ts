@@ -4,7 +4,6 @@ import { copyFile } from 'fs/promises'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
-// Build main library (ES module)
 const esResult = await Bun.build({
   entrypoints: [resolve(__dirname, 'src/index.ts')],
   outdir: resolve(__dirname, 'dist'),
@@ -35,11 +34,9 @@ if (!umdResult.success) {
   process.exit(1)
 }
 
-// Wrap the IIFE output as UMD
 const umdPath = resolve(__dirname, 'dist/akarisub.umd.js')
 let umdContent = await Bun.file(umdPath).text()
 
-// Add UMD wrapper
 const umdWrapper = `(function(root, factory) {
   if (typeof define === 'function' && define.amd) {
     define([], factory);
@@ -57,8 +54,6 @@ await Bun.write(umdPath, umdWrapper)
 
 console.log('Built UMD bundle: dist/akarisub.umd.js')
 
-// Build worker from TypeScript
-// First, we need to create a temporary file that imports the wasm module correctly
 const workerBuildResult = await Bun.build({
   entrypoints: [resolve(__dirname, 'src/ts/worker.ts')],
   outdir: resolve(__dirname, 'dist'),
@@ -73,7 +68,6 @@ const workerBuildResult = await Bun.build({
     {
       name: 'wasm-alias',
       setup(build) {
-        // Resolve 'wasm' import to the actual wasm JS loader
         build.onResolve({ filter: /^wasm$/ }, () => {
           return { path: resolve(__dirname, 'dist/js/akarisub-worker.js') }
         })
@@ -87,14 +81,12 @@ if (!workerBuildResult.success) {
   process.exit(1)
 }
 
-// Copy package metadata assets to dist root
 await copyFile(
   resolve(__dirname, 'THIRD_PARTY_NOTICES.md'),
   resolve(__dirname, 'dist/COPYRIGHT')
 )
 console.log('Copied THIRD_PARTY_NOTICES.md to dist/COPYRIGHT')
 
-// Copy the wasm file to dist root
 try {
   await copyFile(
     resolve(__dirname, 'dist/js/akarisub-worker.wasm'),

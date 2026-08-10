@@ -1,21 +1,11 @@
-/**
- * Utility functions for AkariSub.
- */
-
 import type { SubtitleColorSpace, WebYCbCrColorSpace } from './types'
 
-// =============================================================================
-// Color Space Utilities
-// =============================================================================
-
-/** Map video color space to standard name */
 export const webYCbCrMap: Record<string, WebYCbCrColorSpace> = {
   bt709: 'BT709',
   bt470bg: 'BT601', // BT.601 PAL
   smpte170m: 'BT601' // BT.601 NTSC
 }
 
-/** Color matrix conversion values for SVG filter */
 export const colorMatrixConversionMap: Record<string, Record<string, string>> = {
   BT601: {
     BT709: '1.0863 -0.0723 -0.014 0 0 0.0965 0.8451 0.0584 0 0 -0.0141 -0.0277 1.0418'
@@ -33,7 +23,6 @@ export const colorMatrixConversionMap: Record<string, Record<string, string>> = 
   }
 }
 
-/** libass YCbCr color space index map */
 export const libassYCbCrMap: (SubtitleColorSpace | null)[] = [
   null,
   'BT601',
@@ -48,9 +37,6 @@ export const libassYCbCrMap: (SubtitleColorSpace | null)[] = [
   'FCC'
 ]
 
-/**
- * Generate SVG filter URL for color space conversion.
- */
 export function getColorSpaceFilterUrl(
   subtitleColorSpace: SubtitleColorSpace,
   videoColorSpace: WebYCbCrColorSpace
@@ -64,13 +50,6 @@ export function getColorSpaceFilterUrl(
   return `url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg'><filter id='f'><feColorMatrix type='matrix' values='${matrix} 0 0 0 0 0 1 0'/></filter></svg>#f")`
 }
 
-// =============================================================================
-// Canvas Utilities
-// =============================================================================
-
-/**
- * Compute canvas size with prescaling.
- */
 export function computeCanvasSize(
   width: number,
   height: number,
@@ -104,9 +83,6 @@ export function computeCanvasSize(
   return { width, height }
 }
 
-/**
- * Get video position and size accounting for aspect ratio.
- */
 export function getVideoPosition(
   video: HTMLVideoElement,
   videoWidth: number = video.videoWidth,
@@ -131,10 +107,6 @@ export function getVideoPosition(
   return { width, height, x, y }
 }
 
-// =============================================================================
-// Alpha Bug Fix
-// =============================================================================
-
 /**
  * Fix alpha bug in some browsers (transparent pixels rendered as non-black).
  */
@@ -144,7 +116,6 @@ export function fixAlpha(uint8: Uint8ClampedArray, hasAlphaBug: boolean): Uint8C
   const len = uint8.length
   const len4 = len - (len % 16) // Process 4 pixels at a time (16 bytes)
 
-  // Unrolled loop for 4 pixels at a time
   let j = 3
   for (; j < len4; j += 16) {
     if (uint8[j] < 2) uint8[j] = 1
@@ -153,17 +124,12 @@ export function fixAlpha(uint8: Uint8ClampedArray, hasAlphaBug: boolean): Uint8C
     if (uint8[j + 12] < 2) uint8[j + 12] = 1
   }
 
-  // Handle remaining pixels
   for (; j < len; j += 4) {
     if (uint8[j] < 2) uint8[j] = 1
   }
 
   return uint8
 }
-
-// =============================================================================
-// ASS Parsing Utilities (for font detection)
-// =============================================================================
 
 interface ASSSection {
   name: string
@@ -176,11 +142,6 @@ interface ASSBodyEntry {
   value: string | string[] | Record<string, string>
 }
 
-/**
- * Parse ASS file content.
- * @param content - ASS file content
- * @param stopAtEvents - Stop parsing when [Events] section is reached (for font detection)
- */
 export function parseAss(content: string, stopAtEvents: boolean = false): ASSSection[] {
   const sections: ASSSection[] = []
   const lines = content.split(/[\r\n]+/g)
@@ -197,7 +158,6 @@ export function parseAss(content: string, stopAtEvents: boolean = false): ASSSec
     if (firstChar === '[') {
       const m = line.match(/^\[(.*)\]$/)
       if (m) {
-        // Early termination for font detection performance
         if (stopAtEvents && m[1].toLowerCase() === 'events') {
           break
         }
@@ -258,20 +218,12 @@ export function parseAss(content: string, stopAtEvents: boolean = false): ASSSec
   return sections
 }
 
-// =============================================================================
-// ASS Content Transformation Utilities
-// =============================================================================
-
 const blurRegex = /\\blur(?:[0-9]+\.)?[0-9]+/gm
 
-/**
- * Remove all blur tags from subtitle content.
- */
 export function dropBlur(subContent: string): string {
   return subContent.replace(blurRegex, '')
 }
 
-// Common video resolutions to detect source resolution
 const commonResolutions = [
   { w: 7680, h: 4320 }, // 8K
   { w: 3840, h: 2160 }, // 4K UHD
@@ -280,9 +232,6 @@ const commonResolutions = [
   { w: 1280, h: 720 } // 720p
 ]
 
-/**
- * Detect the likely source resolution based on max position values.
- */
 function detectSourceResolution(maxX: number, maxY: number): { w: number; h: number } {
   const sorted = [...commonResolutions].sort((a, b) => a.w - b.w)
   for (const res of sorted) {
@@ -419,16 +368,9 @@ export function fixPlayRes(subContent: string): string {
   return newContent.substring(0, eventsMatch.index!) + eventsSection
 }
 
-// =============================================================================
-// Feature Detection
-// =============================================================================
-
 let _hasAlphaBug: boolean | null = null
 let _hasBitmapBug: boolean | null = null
 
-/**
- * Test for browser image bugs.
- */
 export async function testImageBugs(): Promise<{ hasAlphaBug: boolean; hasBitmapBug: boolean }> {
   if (_hasAlphaBug !== null && _hasBitmapBug !== null) {
     return { hasAlphaBug: _hasAlphaBug, hasBitmapBug: _hasBitmapBug }
@@ -438,7 +380,6 @@ export async function testImageBugs(): Promise<{ hasAlphaBug: boolean; hasBitmap
   const ctx1 = canvas1.getContext('2d', { willReadFrequently: true })
   if (!ctx1) throw new Error('Canvas rendering not supported')
 
-  // Test ImageData constructor
   if (typeof ImageData.prototype.constructor === 'function') {
     try {
       new ImageData(new Uint8ClampedArray([0, 0, 0, 0]), 1, 1)
@@ -447,7 +388,6 @@ export async function testImageBugs(): Promise<{ hasAlphaBug: boolean; hasBitmap
     }
   }
 
-  // Test for alpha bug
   const canvas2 = document.createElement('canvas')
   const ctx2 = canvas2.getContext('2d', { willReadFrequently: true })
   if (!ctx2) throw new Error('Canvas rendering not supported')
@@ -467,7 +407,6 @@ export async function testImageBugs(): Promise<{ hasAlphaBug: boolean; hasBitmap
     console.log('Detected a browser having issue with transparent pixels, applying workaround')
   }
 
-  // Test for bitmap bug
   if (typeof createImageBitmap !== 'undefined') {
     const subarray = new Uint8ClampedArray([255, 0, 255, 0, 255]).subarray(1, 5)
     ctx2.drawImage(await createImageBitmap(new ImageData(subarray, 1)), 0, 0)
@@ -491,9 +430,6 @@ export async function testImageBugs(): Promise<{ hasAlphaBug: boolean; hasBitmap
   return { hasAlphaBug: _hasAlphaBug, hasBitmapBug: _hasBitmapBug }
 }
 
-/**
- * Run all feature detection tests.
- */
 export async function runFeatureTests(): Promise<{
   hasAlphaBug: boolean
   hasBitmapBug: boolean
@@ -501,12 +437,10 @@ export async function runFeatureTests(): Promise<{
   return testImageBugs()
 }
 
-/** Get cached alpha bug value */
 export function getAlphaBug(): boolean | null {
   return _hasAlphaBug
 }
 
-/** Get cached bitmap bug value */
 export function getBitmapBug(): boolean | null {
   return _hasBitmapBug
 }

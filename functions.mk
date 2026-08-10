@@ -1,12 +1,3 @@
-# For inclusion in toplevel Makefile
-#	 Defines some useful macros and variables for building etc
-#	 If arguments are expected (macro) it needs to be invoked with $(call ...),
-#	 if no arguments are supported the definition is aregular avariable and can be used as such.
-#	 Special macros of the name TR_... create targets (and always take arguments)
-#	 and thus also need to be $(eval ...)'ed
-
-## Build stuff
-
 # @arg1: name of submodule
 define PREPARE_SRC_PATCHED
 	rm -rf build/lib/$(1)
@@ -52,8 +43,6 @@ endef
 # faster non-reproducible local builds explicitly.
 AKARISUB_BUILD_JOBS ?= 1
 JSO_MAKE := emmake make -j "$(AKARISUB_BUILD_JOBS)"
-
-## Clean and git related
 
 # @arg1: submodule name
 define TR_GIT_SM_RESET

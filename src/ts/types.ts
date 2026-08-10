@@ -1,54 +1,31 @@
-/**
- * Type definitions for AkariSub TypeScript implementation.
- */
-
-// =============================================================================
-// ASS/SSA Subtitle Types
-// =============================================================================
-
-/** ASS Event (dialogue/subtitle entry) */
 export interface ASSEvent {
-  /** Start Time of the Event (in milliseconds) */
   Start: number
-  /** Duration of the Event (in milliseconds) */
   Duration: number
-  /** Style name */
   Style: string
   /** Character name (for information only) */
   Name: string
-  /** Left Margin override in pixels */
   MarginL: number
-  /** Right Margin override in pixels */
   MarginR: number
-  /** Bottom Margin override in pixels */
   MarginV: number
-  /** Transition Effect */
   Effect: string
-  /** Subtitle Text */
   Text: string
-  /** Read order number */
   ReadOrder: number
-  /** Z-index layer */
   Layer: number
-  /** Internal index */
   _index?: number
 }
 
-/** ASS Style definition */
 export interface ASSStyle {
   /** Style name (case sensitive) */
   Name: string
-  /** Font family name */
   FontName: string
-  /** Font size */
   FontSize: number
-  /** Primary color (RGBA as uint32) */
+  /** RGBA packed as uint32 */
   PrimaryColour: number
-  /** Secondary color (RGBA as uint32) */
+  /** RGBA packed as uint32 */
   SecondaryColour: number
-  /** Outline color (RGBA as uint32) */
+  /** RGBA packed as uint32 */
   OutlineColour: number
-  /** Background/shadow color (RGBA as uint32) */
+  /** RGBA packed as uint32 */
   BackColour: number
   /** Bold (-1 = true, 0 = false) */
   Bold: number
@@ -58,55 +35,33 @@ export interface ASSStyle {
   Underline: number
   /** StrikeOut (-1 = true, 0 = false) */
   StrikeOut: number
-  /** Width scale (percent) */
+  /** Width scale percent */
   ScaleX: number
-  /** Height scale (percent) */
+  /** Height scale percent */
   ScaleY: number
-  /** Extra spacing between characters (pixels) */
   Spacing: number
-  /** Rotation angle (degrees) */
   Angle: number
   /** Border style (1 = outline + shadow, 3 = opaque box) */
   BorderStyle: number
-  /** Outline width (0-4 pixels) */
   Outline: number
-  /** Shadow depth (0-4 pixels) */
   Shadow: number
   /** Alignment (1-9, numpad style) */
   Alignment: number
-  /** Left margin (pixels) */
   MarginL: number
-  /** Right margin (pixels) */
   MarginR: number
-  /** Vertical margin (pixels) */
   MarginV: number
-  /** Font encoding */
   Encoding: number
-  /** Treat font name as pattern */
   treat_fontname_as_pattern: number
-  /** Blur amount */
   Blur: number
-  /** Text justification */
   Justify: number
 }
 
-// =============================================================================
-// Performance Stats Types
-// =============================================================================
-
-/** Performance statistics for the renderer */
 export interface PerformanceStats {
-  /** Total frames rendered since reset */
   framesRendered: number
-  /** Number of frames dropped */
   framesDropped: number
-  /** Average render time in milliseconds */
   avgRenderTime: number
-  /** Maximum render time in milliseconds */
   maxRenderTime: number
-  /** Minimum render time in milliseconds */
   minRenderTime: number
-  /** Last render time in milliseconds */
   lastRenderTime: number
   /** Current automatically learned presentation-latency compensation in milliseconds */
   timingCompensationMs?: number
@@ -114,31 +69,18 @@ export interface PerformanceStats {
   lastImageCount?: number
   /** Total RGBA/raw image pixels emitted by the last render */
   lastImagePixels?: number
-  /** Estimated render FPS based on timing */
   renderFps: number
-  /** Whether using Web Worker */
   usingWorker: boolean
   /** Whether worker-side raw ASS_Image WebGL2 composition is active */
   rawAssImageGpu?: boolean
-  /** Active worker renderer backend */
   workerRenderer?: 'webgl2-raw-ass' | 'canvas2d' | 'hybrid' | 'main-thread'
-  /** Whether offscreen rendering is enabled */
   offscreenRender: boolean
-  /** Whether on-demand rendering is enabled */
   onDemandRender: boolean
-  /** Number of pending render operations */
   pendingRenders: number
-  /** Total subtitle events in current track */
   totalEvents: number
-  /** Number of cache hits (unchanged frames) */
   cacheHits: number
-  /** Number of cache misses (rendered frames) */
   cacheMisses: number
 }
-
-// =============================================================================
-// AkariSub Options Types
-// =============================================================================
 
 /** Encoded-frame timestamps with optional media/subtitle clock offsets. */
 export interface FrameTimeline extends ArrayLike<number> {
@@ -146,11 +88,8 @@ export interface FrameTimeline extends ArrayLike<number> {
   subtitleTimeOffset?: number
 }
 
-/** Configuration options for AkariSub */
 export interface AkariSubOptions {
-  /** Video element to sync with and overlay */
   video?: HTMLVideoElement
-  /** Custom canvas element (optional if video is provided) */
   canvas?: HTMLCanvasElement
   /** Image blending mode: 'js' for hardware acceleration, 'wasm' for software */
   blendMode?: 'js' | 'wasm'
@@ -186,19 +125,13 @@ export interface AkariSubOptions {
   dropAllBlur?: boolean
   /** Clamp \\pos values to script resolution (default: false) */
   clampPos?: boolean
-  /** URL to the worker script */
   workerUrl?: string
-  /** URL to the WASM binary */
   wasmUrl?: string
-  /** URL to subtitle file */
   subUrl?: string
-  /** Subtitle content as string or UTF-8 bytes */
   subContent?: string | Uint8Array | ArrayBuffer
   /** Encrypted subtitle content decrypted inside the worker before loading into libass */
   encryptedSubContent?: EncryptedSubtitleContent
-  /** Array of font URLs or Uint8Arrays */
   fonts?: (string | Uint8Array)[]
-  /** Available fonts map (lowercase name -> URL/data) */
   availableFonts?: Record<string, string | Uint8Array>
   /** Fallback font families in order (default: ['liberation sans']). Fontconfig uses these for cascade. */
   fallbackFonts?: string[]
@@ -233,10 +166,6 @@ export interface EncryptedSubtitleContent {
   encryptedChunks?: ArrayBuffer[]
 }
 
-// =============================================================================
-// Callback Types (deprecated - use Promise-based API instead)
-// =============================================================================
-
 /** @deprecated Use Promise-based getEvents() instead */
 export type ASSEventCallback = (error: Error | null, events: ASSEvent[]) => void
 /** @deprecated Use Promise-based getStyles() instead */
@@ -246,11 +175,6 @@ export type PerformanceStatsCallback = (error: Error | null, stats: PerformanceS
 /** @deprecated Use Promise-based resetStats() instead */
 export type ResetStatsCallback = (error: Error | null) => void
 
-// =============================================================================
-// Worker Message Types
-// =============================================================================
-
-/** Image data for rendering */
 export interface RenderImage {
   x: number
   y: number
@@ -261,25 +185,18 @@ export interface RenderImage {
 
 /** Raw libass ASS_Image plane exposed directly from WASM for GPU mask composition. */
 export interface RawASSImage {
-  /** ASS_Image.dst_x */
   dst_x: number
-  /** ASS_Image.dst_y */
   dst_y: number
-  /** ASS_Image.w */
   w: number
-  /** ASS_Image.h */
   h: number
   /** Pointer to ASS_Image.bitmap in WASM memory */
   bitmap: number
   /** ASS_Image.color packed as RRGGBBAA */
   color: number
-  /** ASS_Image.stride in bytes */
   stride: number
-  /** ASS_Image.type when provided by libass */
   type: number
 }
 
-/** Render timing debug info */
 export interface RenderTimes {
   WASMRenderTime?: number
   WASMBitmapDecodeTime?: number
@@ -289,7 +206,6 @@ export interface RenderTimes {
   bitmaps?: number
 }
 
-/** Worker -> Main thread message for rendering */
 export interface RenderMessage {
   target: 'render'
   asyncRender: boolean
@@ -303,7 +219,6 @@ export interface RenderMessage {
   presentationId?: number
 }
 
-/** Worker -> Main thread messages */
 export type WorkerOutboundMessage =
   | { target: 'ready' }
   | { target: 'trackReady' }
@@ -319,7 +234,6 @@ export type WorkerOutboundMessage =
   | { target: 'getStyleCount'; count: number }
   | RenderMessage
 
-/** Main thread -> Worker init message */
 export interface WorkerInitMessage {
   target: 'init'
   wasmUrl: string
@@ -358,7 +272,6 @@ export interface WorkerInitMessage {
   hasBitmapBug: boolean
 }
 
-/** Main thread -> Worker messages */
 export type WorkerInboundMessage =
   | WorkerInitMessage
   | { target: 'offscreenCanvas'; rawAssImageGpu?: boolean; transferable: [OffscreenCanvas] }
@@ -407,40 +320,19 @@ export type WorkerInboundMessage =
   | { target: 'getStyleCount' }
   | { target: 'getColorSpace' }
 
-// =============================================================================
-// RVFC Types
-// =============================================================================
-
-/** requestVideoFrameCallback metadata */
 export interface VideoFrameCallbackMetadata {
-  /** The current media time of the frame being displayed (seconds) */
   mediaTime: number
-  /** Video intrinsic width */
   width: number
-  /** Video intrinsic height */
   height: number
-  /** Number of frames presented so far */
   presentedFrames?: number
-  /** Time spent processing the frame (milliseconds) */
   processingDuration?: number
-  /** Expected time when this frame will be displayed (DOMHighResTimeStamp) */
   expectedDisplayTime?: number
-  /** Time at which the frame was presented (DOMHighResTimeStamp) */
   presentationTime?: number
 }
-
-// =============================================================================
-// Color Space Types
-// =============================================================================
 
 export type WebYCbCrColorSpace = 'BT709' | 'BT601'
 export type SubtitleColorSpace = 'BT601' | 'BT709' | 'SMPTE240M' | 'FCC' | null
 
-// =============================================================================
-// AkariSub WASM Module Types
-// =============================================================================
-
-/** Emscripten AkariSub Module (C ABI exports) */
 export interface AkariSubModule extends EmscriptenModule {
   _malloc: (size: number) => number
   _free: (ptr: number) => void

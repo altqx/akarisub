@@ -1,8 +1,3 @@
-/**
- * Main AkariSub class - TypeScript implementation.
- * High-level ASS/SSA subtitle renderer for web browsers using libass.
- */
-
 import type {
   AkariSubOptions,
   ASSEvent,
@@ -119,11 +114,9 @@ export default class AkariSub extends EventTarget {
   private static readonly MAX_PENDING_DEMANDS = 3
   private static readonly MAX_FONT_BYTES = 32 * 1024 * 1024
 
-  // Feature detection cache (static)
   private static _hasAlphaBug: boolean | null = null
   private static _hasBitmapBug: boolean | null = null
 
-  // Instance properties
   private _loaded: Promise<void>
   private _init!: () => void
   private _destroyedSignal: Promise<void>
@@ -181,24 +174,20 @@ export default class AkariSub extends EventTarget {
   private _nextFontRequestId: number = 1
   private readonly _isLikelyWebKit: boolean
 
-  // Bound methods for event listeners
   private _boundResize: () => void
   private _boundTimeUpdate: (e: Event) => void
   private _boundSetRate: () => void
   private _boundUpdateColorSpace: () => void
   private _boundHandleRVFC: (now: number, metadata: VideoFrameCallbackMetadata) => void
 
-  // GPU renderer (WebGPU or WebGL2 – whichever initialises first in the fallback chain)
   private _gpuRenderer: AnyGPURenderer | null = null
   private _rendererType: 'webgpu' | 'webgl2' | 'canvas2d' = 'canvas2d'
   private _onCanvasFallback?: () => void
 
-  // Cached render data to reduce allocations
   private _lastRenderWidth: number = 0
   private _lastRenderHeight: number = 0
   private _gpuBitmapImages: Array<{ image: ImageBitmap; x: number; y: number }> = []
 
-  // Public properties
   public timeOffset: number
   public debug: boolean
   public prescaleFactor: number
@@ -239,7 +228,6 @@ export default class AkariSub extends EventTarget {
 
     this._isLikelyWebKit = isLikelyWebKit()
 
-    // Run feature tests
     const test = AkariSub._test()
 
     this._onDemandRender = 'requestVideoFrameCallback' in HTMLVideoElement.prototype && (options.onDemandRender ?? true)
@@ -288,7 +276,6 @@ export default class AkariSub extends EventTarget {
     if (!bufferCtx) throw this.destroy(new Error('Canvas rendering not supported'))
     this._bufferCtx = bufferCtx
 
-    // Try GPU renderers first (WebGPU → WebGL2 → Canvas2D)
     if (canUseGPURenderer) {
       this._initGPURenderer()
     } else if (!this._offscreenRender) {
@@ -309,7 +296,6 @@ export default class AkariSub extends EventTarget {
     this.renderAhead = options.renderAhead ?? DEFAULT_RENDER_AHEAD
     this.framePrefetch = Math.max(0, Math.min(24, Math.floor(options.framePrefetch ?? 2)))
 
-    // Bind methods
     this._boundResize = this.resize.bind(this)
     this._boundTimeUpdate = this._timeupdate.bind(this)
     this._boundSetRate = () => this._syncVideoClock(new Event('ratechange'))
@@ -325,12 +311,10 @@ export default class AkariSub extends EventTarget {
       this._pendingDemandTimes.length = 0
     }
 
-    // Create worker
     this._worker = new Worker(options.workerUrl || 'akarisub-worker.js')
     this._worker.onmessage = (e) => this._onmessage(e)
     this._worker.onerror = (e) => this._error(e)
 
-    // Initialize worker after feature tests complete
     test.then(() => {
       const initialTime = (this._video?.currentTime ?? 0) + this.timeOffset
       const initialPlaybackRate = this._videoPlaybackRateForWorker()
@@ -394,10 +378,6 @@ export default class AkariSub extends EventTarget {
     })
   }
 
-  // ==========================================================================
-  // Static Methods
-  // ==========================================================================
-
   private static async _testImageBugs(): Promise<void> {
     if (AkariSub._hasBitmapBug !== null) return
 
@@ -405,7 +385,6 @@ export default class AkariSub extends EventTarget {
     const ctx1 = canvas1.getContext('2d', { willReadFrequently: true })
     if (!ctx1) throw new Error('Canvas rendering not supported')
 
-    // Test ImageData constructor
     if (typeof ImageData.prototype.constructor === 'function') {
       try {
         new ImageData(new Uint8ClampedArray([0, 0, 0, 0]), 1, 1)
@@ -481,13 +460,6 @@ export default class AkariSub extends EventTarget {
     return transfers
   }
 
-  // ==========================================================================
-  // GPU Renderer Management (WebGPU → WebGL2 → Canvas2D fallback)
-  // ==========================================================================
-
-  /**
-   * Attempt to initialise the best available GPU renderer.
-   */
   private async _initGPURenderer(): Promise<void> {
     if (isWebGPUSupported()) {
       try {
@@ -549,7 +521,6 @@ export default class AkariSub extends EventTarget {
     this._onCanvasFallback?.()
   }
 
-  /** Returns which renderer backend is currently active. */
   get rendererType(): 'webgpu' | 'webgl2' | 'canvas2d' {
     return this._rendererType
   }
@@ -559,14 +530,9 @@ export default class AkariSub extends EventTarget {
     return this._rendererType === 'webgpu'
   }
 
-  /** Returns true when a hardware-accelerated GPU renderer is active. */
   get isUsingGPURenderer(): boolean {
     return this._gpuRenderer !== null
   }
-
-  // ==========================================================================
-  // Canvas Management
-  // ==========================================================================
 
   private _createCanvas(): HTMLCanvasElement {
     this._canvas = document.createElement('canvas')
@@ -578,9 +544,6 @@ export default class AkariSub extends EventTarget {
     return this._canvas
   }
 
-  /**
-   * Resize the canvas to given parameters. Auto-generated if values are omitted.
-   */
   resize(
     width: number = 0,
     height: number = 0,
@@ -634,7 +597,6 @@ export default class AkariSub extends EventTarget {
       this._canvasctrl.height = height
     }
 
-    // Update GPU renderer size if using a GPU renderer
     if (this._gpuRenderer && width > 0 && height > 0) {
       this._gpuRenderer.updateSize(width, height)
     }
@@ -657,17 +619,10 @@ export default class AkariSub extends EventTarget {
     })
   }
 
-  // ==========================================================================
-  // Video Management
-  // ==========================================================================
-
   private _timeupdate(event: Event): void {
     this._syncVideoClock(event)
   }
 
-  /**
-   * Change the video to use as target for event listeners.
-   */
   setVideo(video: HTMLVideoElement): void {
     if (video instanceof HTMLVideoElement) {
       this._removeListeners()
@@ -712,13 +667,6 @@ export default class AkariSub extends EventTarget {
     }
   }
 
-  // ==========================================================================
-  // Track Management
-  // ==========================================================================
-
-  /**
-   * Overwrites the current subtitle content by URL.
-   */
   setTrackByUrl(url: string): void {
     this._bumpRenderEpoch()
     this.sendMessage('setTrackByUrl', { url })
@@ -726,9 +674,6 @@ export default class AkariSub extends EventTarget {
     if (this._ctx) this._ctx.filter = 'none'
   }
 
-  /**
-   * Overwrites the current subtitle content.
-   */
   setTrack(content: string | Uint8Array | ArrayBuffer): void {
     this._bumpRenderEpoch()
     this.sendMessage('setTrack', { content }, AkariSub._getSubtitleTransfers(content))
@@ -748,20 +693,10 @@ export default class AkariSub extends EventTarget {
     if (this._ctx) this._ctx.filter = 'none'
   }
 
-  /**
-   * Free currently used subtitle track.
-   */
   freeTrack(): void {
     this._sendMutatingMessage('freeTrack')
   }
 
-  // ==========================================================================
-  // Playback Control
-  // ==========================================================================
-
-  /**
-   * Sets the playback state of the media.
-   */
   setIsPaused(isPaused: boolean): void {
     if (this._video) {
       this._playstate = isPaused
@@ -772,9 +707,6 @@ export default class AkariSub extends EventTarget {
     this.sendMessage('video', { isPaused })
   }
 
-  /**
-   * Sets the playback rate of the media.
-   */
   setRate(rate: number): void {
     if (this._video) {
       this.setCurrentTime(this._isVideoPausedForWorker(), this._currentVideoTimeWithOffset(), rate)
@@ -784,9 +716,6 @@ export default class AkariSub extends EventTarget {
     this.sendMessage('video', { rate })
   }
 
-  /**
-   * Sets the current time, playback state and rate of the subtitles.
-   */
   setCurrentTime(isPaused?: boolean, currentTime?: number, rate?: number): void {
     this.sendMessage('video', {
       isPaused,
@@ -797,93 +726,48 @@ export default class AkariSub extends EventTarget {
     })
   }
 
-  // ==========================================================================
-  // Event Management
-  // ==========================================================================
-
-  /**
-   * Create a new ASS event directly.
-   */
   createEvent(event: Partial<ASSEvent>): void {
     this._sendMutatingMessage('createEvent', { event })
   }
 
-  /**
-   * Overwrite the data of the event with the specified index.
-   */
   setEvent(event: Partial<ASSEvent>, index: number): void {
     this._sendMutatingMessage('setEvent', { event, index })
   }
 
-  /**
-   * Remove the event with the specified index.
-   */
   removeEvent(index: number): void {
     this._sendMutatingMessage('removeEvent', { index })
   }
 
-  /**
-   * Get all ASS events.
-   */
   async getEvents(): Promise<ASSEvent[]> {
     const data = await this._fetchFromWorker<{ events: ASSEvent[] }>({ target: 'getEvents' })
     return data.events ?? []
   }
 
-  // ==========================================================================
-  // Style Management
-  // ==========================================================================
-
-  /**
-   * Set a style override.
-   */
   styleOverride(style: Partial<ASSStyle>): void {
     this._sendMutatingMessage('styleOverride', { style })
   }
 
-  /**
-   * Disable style override.
-   */
   disableStyleOverride(): void {
     this._sendMutatingMessage('disableStyleOverride')
   }
 
-  /**
-   * Create a new ASS style directly.
-   */
   createStyle(style: Partial<ASSStyle>): void {
     this._sendMutatingMessage('createStyle', { style })
   }
 
-  /**
-   * Overwrite the data of the style with the specified index.
-   */
   setStyle(style: Partial<ASSStyle>, index: number): void {
     this._sendMutatingMessage('setStyle', { style, index })
   }
 
-  /**
-   * Remove the style with the specified index.
-   */
   removeStyle(index: number): void {
     this._sendMutatingMessage('removeStyle', { index })
   }
 
-  /**
-   * Get all ASS styles.
-   */
   async getStyles(): Promise<ASSStyle[]> {
     const data = await this._fetchFromWorker<{ styles: ASSStyle[] }>({ target: 'getStyles' })
     return data.styles ?? []
   }
 
-  // ==========================================================================
-  // Font Management
-  // ==========================================================================
-
-  /**
-   * Adds a font to the renderer.
-   */
   async addFont(font: string | Uint8Array): Promise<void> {
     this._bumpRenderEpoch()
     if (typeof font !== 'string' && font.byteLength > AkariSub.MAX_FONT_BYTES) {
@@ -904,20 +788,10 @@ export default class AkariSub extends EventTarget {
     this._syncVideoClock()
   }
 
-  /**
-   * Changes the font family of the default font.
-   */
   setDefaultFont(font: string): void {
     this._sendMutatingMessage('defaultFont', { font })
   }
 
-  // ==========================================================================
-  // Performance Stats
-  // ==========================================================================
-
-  /**
-   * Get real-time performance statistics.
-   */
   async getStats(): Promise<PerformanceStats> {
     const data = await this._fetchFromWorker<{ stats: Partial<PerformanceStats> }>({ target: 'getStats' })
     const stats = data.stats ?? {}
@@ -946,9 +820,6 @@ export default class AkariSub extends EventTarget {
     }
   }
 
-  /**
-   * Reset performance statistics counters.
-   */
   async resetStats(): Promise<void> {
     await this._fetchFromWorker({ target: 'resetStats' })
   }
@@ -969,25 +840,15 @@ export default class AkariSub extends EventTarget {
     this._dispatchNextPreparation()
   }
 
-  /**
-   * Get event count
-   */
   async getEventCount(): Promise<number> {
     const data = await this._fetchFromWorker<{ count: number }>({ target: 'getEventCount' })
     return data.count
   }
 
-  /**
-   * Get style count
-   */
   async getStyleCount(): Promise<number> {
     const data = await this._fetchFromWorker<{ count: number }>({ target: 'getStyleCount' })
     return data.count
   }
-
-  // ==========================================================================
-  // Private Methods
-  // ==========================================================================
 
   private async _sendLocalFont(name: string): Promise<void> {
     let success = false
@@ -2169,7 +2030,6 @@ export default class AkariSub extends EventTarget {
         data.times.IPCTime = Date.now() - (data.times.JSRenderTime || 0)
       }
 
-      // Check if canvas size changed
       const sizeChanged = this._canvasctrl.width !== dataWidth || this._canvasctrl.height !== dataHeight
       if (sizeChanged) {
         this._canvasctrl.width = dataWidth
@@ -2177,7 +2037,6 @@ export default class AkariSub extends EventTarget {
         this._lastRenderWidth = dataWidth
         this._lastRenderHeight = dataHeight
 
-        // Update GPU renderer size if canvas size changed
         if (this._gpuRenderer) {
           this._gpuRenderer.updateSize(dataWidth, dataHeight)
         }
@@ -2185,7 +2044,6 @@ export default class AkariSub extends EventTarget {
         this._verifyColorSpace({ subtitleColorSpace: data.colorSpace })
       }
 
-      // Use GPU renderer (WebGPU or WebGL2) if available
       if (this._gpuRenderer) {
         this._renderGPU(data)
         return
@@ -2281,7 +2139,6 @@ export default class AkariSub extends EventTarget {
 
     let painted: boolean | void
     if (data.asyncRender) {
-      // For async render mode with ImageBitmaps
       const bitmapImages = this._gpuBitmapImages
       let bitmapCount = 0
 
@@ -2304,7 +2161,6 @@ export default class AkariSub extends EventTarget {
         painted = false
         console.warn('[AkariSub] GPU bitmap render failed; preserving the last subtitle frame.', error)
       } finally {
-        // Close ImageBitmaps after rendering
         for (const img of data.images) {
           if (img.image instanceof ImageBitmap) {
             img.image.close()
@@ -2312,7 +2168,6 @@ export default class AkariSub extends EventTarget {
         }
       }
     } else {
-      // For non-async render mode with ArrayBuffer data
       try {
         painted = renderer.render(data.images, this._canvasctrl.width, this._canvasctrl.height)
       } catch (error) {
@@ -2379,11 +2234,6 @@ export default class AkariSub extends EventTarget {
     this.dispatchEvent(new CustomEvent('ready'))
   }
 
-  /**
-   * Handler for partial_ready message from worker.
-   * Emitted early for large subtitle files to allow playback to start
-   * while font loading and track parsing continues.
-   */
   private _partial_ready(): void {
     this.dispatchEvent(new CustomEvent('partial_ready'))
   }
@@ -2405,9 +2255,6 @@ export default class AkariSub extends EventTarget {
     this.dispatchEvent(new CustomEvent('trackReady'))
   }
 
-  /**
-   * Send data and execute function in the worker.
-   */
   async sendMessage(target: string, data: Record<string, any> = {}, transferable?: Transferable[]): Promise<void> {
     if (this._workerReady) {
       this._postWorkerMessage(target, data, transferable)
@@ -2544,9 +2391,6 @@ export default class AkariSub extends EventTarget {
     }
   }
 
-  /**
-   * Destroy the object, worker, listeners and all data.
-   */
   destroy(err?: Error | string): Error | undefined {
     const error = err ? this._error(err) : undefined
 
@@ -2562,7 +2406,6 @@ export default class AkariSub extends EventTarget {
       this._video.parentNode?.removeChild(this._canvasParent)
     }
 
-    // Clean up GPU renderer
     if (this._gpuRenderer) {
       this._gpuRenderer.destroy()
       this._gpuRenderer = null

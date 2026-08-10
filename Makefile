@@ -1,6 +1,3 @@
-# AkariSub.js - Makefile
-
-# make - Build Dependencies and the AkariSub.js
 BASE_DIR:=$(dir $(realpath $(firstword $(MAKEFILE_LIST))))
 DIST_DIR:=$(BASE_DIR)dist/libraries
 
@@ -20,7 +17,6 @@ WASM_FEATURES = \
 	-mextended-const \
 	-mreference-types
 
-# Base compiler flags for all C/C++ compilation
 # -fno-unwind-tables/-fno-asynchronous-unwind-tables: no exceptions = no need for unwind info
 BASE_CFLAGS = -O3 -flto -fno-exceptions -fno-unwind-tables -fno-asynchronous-unwind-tables -fno-math-errno -ffast-math \
 	-ffile-prefix-map=$(BASE_DIR)=/src/akarisub/ \
@@ -43,7 +39,6 @@ akarisub: dist
 
 include functions.mk
 
-# FriBidi
 build/lib/fribidi/configure: lib/fribidi $(wildcard $(BASE_DIR)build/patches/fribidi/*.patch)
 	$(call PREPARE_SRC_PATCHED,fribidi)
 	cd build/lib/fribidi && $(RECONF_AUTO)
@@ -55,7 +50,6 @@ $(DIST_DIR)/lib/libfribidi.a: build/lib/fribidi/configure
 	$(JSO_MAKE) -C lib/ install && \
 	$(JSO_MAKE) install-pkgconfigDATA
 
-# Expat
 build/lib/expat/configured: lib/expat
 	$(call PREPARE_SRC_VPATH,expat)
 	touch build/lib/expat/configured
@@ -72,7 +66,6 @@ $(DIST_DIR)/lib/libexpat.a: build/lib/expat/configured
 	&& \
 	$(JSO_MAKE) install
 
-# Brotli
 build/lib/brotli/configured: lib/brotli $(wildcard $(BASE_DIR)build/patches/brotli/*.patch)
 	$(call PREPARE_SRC_PATCHED,brotli)
 	touch build/lib/brotli/configured
@@ -90,7 +83,6 @@ $(DIST_DIR)/lib/libbrotlicommon.a: build/lib/brotli/configured
 		fi \
 	done || true
 
-# Freetype without Harfbuzz (Bootstrap)
 build/lib/freetype/configure: lib/freetype $(wildcard $(BASE_DIR)build/patches/freetype/*.patch)
 	$(call PREPARE_SRC_PATCHED,freetype)
 	cd build/lib/freetype && $(RECONF_AUTO)
@@ -108,7 +100,6 @@ build/lib/freetype/build_hb/dist_hb/lib/libfreetype.a: $(DIST_DIR)/lib/libbrotli
 		&& \
 		$(JSO_MAKE) install
 
-# Harfbuzz (CMake)
 build/lib/harfbuzz/configured: lib/harfbuzz $(wildcard $(BASE_DIR)build/patches/harfbuzz/*.patch)
 	$(call PREPARE_SRC_PATCHED,harfbuzz)
 	touch build/lib/harfbuzz/configured
@@ -132,7 +123,6 @@ $(DIST_DIR)/lib/libharfbuzz.a: build/lib/freetype/build_hb/dist_hb/lib/libfreety
 	&& \
 	emmake make -j "$(AKARISUB_BUILD_JOBS)" install
 
-# Freetype with Harfbuzz
 $(DIST_DIR)/lib/libfreetype.a: $(DIST_DIR)/lib/libharfbuzz.a $(DIST_DIR)/lib/libbrotlidec.a
 	cd build/lib/freetype && \
 	EM_PKG_CONFIG_PATH=$(PKG_CONFIG_PATH) \
@@ -149,7 +139,6 @@ $(DIST_DIR)/lib/libfreetype.a: $(DIST_DIR)/lib/libharfbuzz.a $(DIST_DIR)/lib/lib
 	&& \
 	$(JSO_MAKE) install
 
-# Fontconfig
 build/lib/fontconfig/configure: lib/fontconfig $(wildcard $(BASE_DIR)build/patches/fontconfig/*.patch)
 	$(call PREPARE_SRC_PATCHED,fontconfig)
 	cd build/lib/fontconfig && $(RECONF_AUTO)
@@ -193,8 +182,6 @@ $(DIST_DIR)/lib/libfontconfig.a: $(DIST_DIR)/lib/libfreetype.a $(DIST_DIR)/lib/l
 	$(JSO_MAKE) -C fontconfig/ install && \
 	$(JSO_MAKE) install-pkgconfigDATA
 
-
-# libass
 build/lib/libass/configured: lib/libass
 	cd lib/libass && $(RECONF_AUTO)
 	$(call PREPARE_SRC_VPATH,libass)
@@ -236,12 +223,10 @@ LIBASS_DEPS = \
 	$(DIST_DIR)/lib/libfontconfig.a \
 	$(DIST_DIR)/lib/libass.a
 
-
 dist: $(LIBASS_DEPS) dist/js/$(WORKER_NAME).js
 
 # Dist Files https://github.com/emscripten-core/emscripten/blob/main/src/settings.js
 
-# args for increasing performance
 # https://github.com/emscripten-core/emscripten/issues/13899
 PERFORMANCE_ARGS = \
 		-s BINARYEN_EXTRA_PASSES="--one-caller-inline-max-function-size=19306,--flatten,--rereloop,--coalesce-locals,--reorder-locals,--vacuum,--simplify-locals,--precompute-propagate,--dce,--remove-unused-names" \
@@ -252,7 +237,6 @@ PERFORMANCE_ARGS = \
 		-s MALLOC=emmalloc \
 		-ffast-math
 
-# args for reducing size
 SIZE_ARGS = \
 		-s POLYFILL=0 \
 		-s NO_FILESYSTEM=0 \
@@ -267,7 +251,6 @@ SIZE_ARGS = \
 		-s IGNORE_MISSING_MAIN=1 \
 		-s STRICT=1
 
-# args that are required for this to even work at all
 # Modern browser targets: Chrome 114+, Safari 16.4+ (for all WASM features)
 COMPAT_ARGS = \
 		-s EXPORTED_FUNCTIONS="['_malloc','_free','_akarisub_create','_akarisub_destroy','_akarisub_set_drop_animations','_akarisub_set_adaptive_blend_layouts','_akarisub_create_track_mem','_akarisub_remove_track','_akarisub_resize_canvas','_akarisub_add_font','_akarisub_reload_fonts','_akarisub_set_default_font','_akarisub_set_fallback_fonts','_akarisub_set_use_fontconfig_provider','_akarisub_set_memory_limits','_akarisub_get_event_count','_akarisub_alloc_event','_akarisub_remove_event','_akarisub_get_style_count','_akarisub_alloc_style','_akarisub_remove_style','_akarisub_style_override_index','_akarisub_disable_style_override','_akarisub_get_track_color_space','_akarisub_event_get_int','_akarisub_event_set_int','_akarisub_event_get_str','_akarisub_event_set_str','_akarisub_style_get_num','_akarisub_style_set_num','_akarisub_style_get_str','_akarisub_style_set_str','_akarisub_get_event_time_range','_akarisub_get_empty_window','_akarisub_render_blend_collect','_akarisub_render_image_collect','_akarisub_render_raw_collect']" \
@@ -309,8 +292,6 @@ worker: dist/js/akarisub-worker.js
 dist/js/akarisub.js: src/akarisub.js
 	mkdir -p dist/js
 	cp src/akarisub.js $@
-
-# Clean Tasks
 
 clean: clean-dist clean-libs clean-akarisub
 

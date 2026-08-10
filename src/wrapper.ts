@@ -1,9 +1,4 @@
-/**
- * TypeScript wrapper for AkariSub.
- * Re-exports all types and the main AkariSub class.
- */
 
-// Re-export all types
 export type {
   ASSEvent,
   ASSStyle,
@@ -24,7 +19,6 @@ export type {
   WorkerOutboundMessage
 } from './ts/types'
 
-// Re-export utilities
 export {
   webYCbCrMap,
   colorMatrixConversionMap,
@@ -42,5 +36,4 @@ export {
   getColorSpaceFilterUrl
 } from './ts/utils'
 
-// Re-export main class
 export { default as AkariSub } from './ts/akarisub'

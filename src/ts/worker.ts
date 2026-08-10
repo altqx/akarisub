@@ -1,8 +1,3 @@
-/**
- * AkariSub Worker - TypeScript implementation.
- * Runs in a Web Worker to offload subtitle rendering from the main thread.
- */
-
 /// <reference lib="webworker" />
 
 // @ts-ignore - WASM module is aliased during build
@@ -19,10 +14,6 @@ import type {
 } from './types'
 import { parseAss, dropBlur, fixPlayRes, libassYCbCrMap } from './utils'
 import { compensatedMediaTime, isStalePresentation, updateTimingCompensation } from './timing'
-
-// =============================================================================
-// Worker State
-// =============================================================================
 
 interface WorkerMetrics {
   framesRendered: number
@@ -95,7 +86,6 @@ const queuedRenders: QueuedRender[] = []
 self.width = 0
 self.height = 0
 
-// Performance metrics
 const metrics: WorkerMetrics = {
   framesRendered: 0,
   framesDropped: 0,
@@ -191,7 +181,6 @@ interface AkariSubApi {
 
 let akariSubApi: AkariSubApi | null = null
 
-// Pre-allocated object pool for render results
 const MAX_POOLED_IMAGES = 128
 const RENDER_COLLECT_MAX_IMAGES = Math.max(MAX_POOLED_IMAGES, 4096)
 const PREWARM_MAX_IMAGES = RENDER_COLLECT_MAX_IMAGES
@@ -211,7 +200,6 @@ let poolInitialized = false
 const RRC_HEADER_INTS = 3
 const RRC_IMG_STRIDE = 5
 const RAW_RRC_IMG_STRIDE = 8
-// Pre-allocated buffer for batch render-collect calls
 let rrcBufPtr = 0
 let rrcBufCapacity = 0
 // Cached views over the render-collect buffer; refreshed when the wasm memory
@@ -622,7 +610,6 @@ const initPool = (): void => {
 const getPooledItem = (index: number): RenderResultItem => {
   let item = imagePool[index]
   if (!item) {
-    // Grow the pool on demand so frames with many images reuse items too
     item = { w: 0, h: 0, x: 0, y: 0, image: 0 }
     imagePool[index] = item
   }
@@ -1082,10 +1069,6 @@ const requireHandle = (): number => {
   return akariSubHandle
 }
 
-// =============================================================================
-// Font Management
-// =============================================================================
-
 // Fonts added via addFont are explicitly requested, so they should be attached (high priority).
 // A correlated acknowledgement prevents callers from treating rejected bytes as loaded.
 const readBoundedFontUrl = async (url: string): Promise<Uint8Array> => {
@@ -1198,7 +1181,6 @@ const asyncWrite = (
   }
 }
 
-// Debounced font reload
 let pendingFontReload: ReturnType<typeof setTimeout> | null = null
 const scheduleReloadFonts = (): void => {
   if (pendingFontReload) return
@@ -1228,14 +1210,12 @@ const addFontAsEmbedded = (uint8: Uint8Array, name: string): boolean => {
 
   try {
     const api = requireApi()
-    // Allocate memory in WASM heap and copy font data
     const ptr = _Module._malloc(uint8.length)
     if (!ptr) {
       console.warn('[AkariSub] Failed to allocate memory for embedded font:', name)
       return false
     }
 
-    // Copy font data to WASM heap
     self.HEAPU8.set(uint8, ptr)
 
     let handedToNative = false
@@ -1306,18 +1286,15 @@ const processAvailableFonts = (content: string): void => {
   const isLargeFile = content.length > 500000
 
   if (isLargeFile) {
-    // Extract only the styles section for large files
     const stylesMatch = content.match(/\[V4\+?\s*Styles?\][^\[]*(?=\[|$)/i)
     if (stylesMatch) {
       const stylesSection = stylesMatch[0]
-      // Parse only the styles section
       const styleFontMatches = stylesSection.matchAll(/^Style:[^,]*,([^,]+)/gm)
       for (const match of styleFontMatches) {
         findAvailableFonts(match[1].trim())
       }
     }
 
-    // For Events section in large files, limit to first 1000 \fn tags
     const eventsMatch = content.match(/\[Events\][\s\S]*/i)
     if (eventsMatch) {
       const eventsContent = eventsMatch[0]
@@ -1329,7 +1306,6 @@ const processAvailableFonts = (content: string): void => {
       }
     }
   } else {
-    // Original behavior for small files
     const sections = parseAss(content, true)
 
     for (let i = 0; i < sections.length; i++) {
@@ -1341,7 +1317,6 @@ const processAvailableFonts = (content: string): void => {
       }
     }
 
-    // Use matchAll for Events section
     const eventsMatch = content.match(/\[Events\][\s\S]*/i)
     if (eventsMatch) {
       const eventsContent = eventsMatch[0]
@@ -1352,10 +1327,6 @@ const processAvailableFonts = (content: string): void => {
     }
   }
 }
-
-// =============================================================================
-// Network Utilities
-// =============================================================================
 
 const read_ = (url: string, ab?: boolean): string | ArrayBuffer => {
   const xhr = new XMLHttpRequest()
@@ -1377,10 +1348,6 @@ const readAsync = (url: string, load: (data: ArrayBuffer) => void, err: (e: any)
   xhr.onerror = err
   xhr.send(null)
 }
-
-// =============================================================================
-// Track Management
-// =============================================================================
 
 const finishTrackLoad = (): void => {
   const api = requireApi()
@@ -1446,10 +1413,6 @@ self.freeTrack = (): void => {
 self.setTrackByUrl = ({ url }: { url: string }): void => {
   self.setTrack({ content: read_(url) as string })
 }
-
-// =============================================================================
-// Time Management
-// =============================================================================
 
 let _isPaused = true
 
@@ -1550,10 +1513,6 @@ const setIsPaused = (isPaused: boolean): void => {
     rafId = requestAnimationFrame(renderLoop)
   }
 }
-
-// =============================================================================
-// Rendering
-// =============================================================================
 
 interface RenderTimes {
   WASMRenderTime?: number
@@ -1664,7 +1623,6 @@ const render = (
   const handle = requireHandle()
   const forceInt = force ? 1 : 0
 
-  // Use the batch render-collect API: single WASM call does render + metadata + image data extraction.
   const useRawAssImagePath = prepareId == null && !!rawAssWebGL2Renderer && offscreenRender === true
   const imageStride = useRawAssImagePath ? RAW_RRC_IMG_STRIDE : RRC_IMG_STRIDE
   ensureRenderCollectBuffer(RENDER_COLLECT_MAX_IMAGES, imageStride)
@@ -1685,7 +1643,6 @@ const render = (
     computeEmptyWindow(time)
   }
 
-  // Update metrics
   const renderEndTime = performance.now()
   const renderDuration = renderEndTime - renderStartTime
   metrics.lastRenderTime = renderDuration
@@ -2062,7 +2019,6 @@ const paintImages = ({
   }
 
   if (offscreenRender) {
-    // Only resize canvas when dimensions actually change
     if (offCanvas!.height !== height || offCanvas!.width !== width) {
       offCanvas!.width = width
       offCanvas!.height = height
@@ -2084,14 +2040,12 @@ const paintImages = ({
         }
       }
     } else {
-      // Non-async path with buffer canvas
       for (let i = 0; i < imageCount; i++) {
         const img = images[i]
         if (img.image) {
           const imgW = img.w
           const imgH = img.h
 
-          // Only resize buffer canvas when needed
           if (bufferCanvas!.width !== imgW || bufferCanvas!.height !== imgH) {
             bufferCanvas!.width = imgW
             bufferCanvas!.height = imgH
@@ -2143,7 +2097,6 @@ const paintImages = ({
   }
 }
 
-// Custom requestAnimationFrame for worker
 const requestAnimationFrame = self.requestAnimationFrame
   ? self.requestAnimationFrame.bind(self)
   : ((): ((func: () => void) => number) => {
@@ -2163,10 +2116,6 @@ const requestAnimationFrame = self.requestAnimationFrame
     })()
 
 const cancelAnimationFrame = self.cancelAnimationFrame ? self.cancelAnimationFrame.bind(self) : clearTimeout
-
-// =============================================================================
-// WASM Initialization
-// =============================================================================
 
 self.init = async (data: any): Promise<void> => {
   hasBitmapBug = data.hasBitmapBug
@@ -2251,7 +2200,6 @@ self.init = async (data: any): Promise<void> => {
       renderRawCollect: Module._akarisub_render_raw_collect
     }
 
-    // Normalize fallback fonts and deduplicate
     const fallbackFonts: string[] = []
     const fallbackFontKeys = new Set<string>()
     if (data.fallbackFonts && data.fallbackFonts.length > 0) {
@@ -2380,13 +2328,11 @@ self.init = async (data: any): Promise<void> => {
               })
             fontPromises.push(promise)
           } else {
-            // Font data directly provided - synchronous write is OK here
             if (writeFontToFSImmediate(fontUrl, true)) fontMap_[fontKey] = true
           }
         }
       }
 
-      // Wait for all fonts to load (with 30s timeout to prevent blocking forever)
       if (fontPromises.length > 0) {
         let timeoutId: ReturnType<typeof setTimeout> | null = null
         let timedOut = false
@@ -2436,8 +2382,6 @@ self.init = async (data: any): Promise<void> => {
       if (!subContent) subContent = read_(data.subUrl) as string
     }
 
-    // For large files, emit partial_ready early to allow playback to start
-    // while font loading and track parsing continues in the background
     const isLargeSubtitle =
       typeof subContent === 'string' ? subContent.length > 500000 : toUint8Array(subContent).byteLength > 500000
     if (isLargeSubtitle) {
@@ -2567,10 +2511,6 @@ self.init = async (data: any): Promise<void> => {
       postMessage({ target: 'error', error: 'WASM loading failed: ' + (e && e.message ? e.message : String(e)) })
     })
 }
-
-// =============================================================================
-// Canvas Management
-// =============================================================================
 
 self.offscreenCanvas = ({
   transferable,
@@ -2726,10 +2666,6 @@ self.setAsyncRender = ({ value }: { value: boolean }): void => {
   asyncRender = value && typeof createImageBitmap !== 'undefined'
 }
 
-// =============================================================================
-// Event Management
-// =============================================================================
-
 const applyEventFields = (index: number, event: Partial<ASSEvent>): void => {
   const api = requireApi()
   const handle = requireHandle()
@@ -2855,10 +2791,6 @@ self.removeEvent = ({ index }: { index: number }): void => {
   markNextRenderForced()
 }
 
-// =============================================================================
-// Style Management
-// =============================================================================
-
 self.createStyle = ({ style }: { style: Partial<ASSStyle> }): any => {
   const index = requireApi().allocStyle(requireHandle())
   if (index >= 0) applyStyleFields(index, style)
@@ -2905,10 +2837,6 @@ self.defaultFont = ({ font }: { font: string }): void => {
   })
   markNextRenderForced()
 }
-
-// =============================================================================
-// Performance Metrics
-// =============================================================================
 
 self.getStats = (): void => {
   const avgRenderTime = metrics.framesRendered > 0 ? metrics.totalRenderTime / metrics.framesRendered : 0
@@ -2958,10 +2886,6 @@ self.getStyleCount = (): void => {
   const count = akariSubHandle ? requireApi().getStyleCount(akariSubHandle) : 0
   postMessage({ target: 'getStyleCount', count })
 }
-
-// =============================================================================
-// Message Handler
-// =============================================================================
 
 const RENDER_SAFE_TARGETS = new Set([
   'demand',
