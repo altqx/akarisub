@@ -110,7 +110,14 @@ export const predictFrameDisplayTimeMs = (
   const validOffsets = clockOffsetsMs.filter(Number.isFinite)
   if (validOffsets.length < 2) return undefined
 
-  const clockOffset = validOffsets.reduce((sum, value) => sum + value, 0) / validOffsets.length
+  // Preserve the alternating offset clusters created by cadence conversion,
+  // but prevent a short presentation stall from moving the prediction by a
+  // full refresh. A symmetric quarter-trim keeps the two cadence phases while
+  // rejecting consecutive outliers in the bounded observation window.
+  validOffsets.sort((left, right) => left - right)
+  const trimCount = validOffsets.length >= 5 ? Math.floor(validOffsets.length / 4) : 0
+  const stableOffsets = trimCount > 0 ? validOffsets.slice(trimCount, -trimCount) : validOffsets
+  const clockOffset = stableOffsets.reduce((sum, value) => sum + value, 0) / stableOffsets.length
   const idealDisplayTime = clockOffset + (frameMediaTime * 1000) / playbackRate
   const refreshesFromAnchor = Math.round((idealDisplayTime - displayGridAnchorMs!) / refreshIntervalMs)
   return displayGridAnchorMs! + refreshesFromAnchor * refreshIntervalMs

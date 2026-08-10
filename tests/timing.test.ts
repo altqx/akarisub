@@ -55,6 +55,11 @@ describe('subtitle timing compensation', () => {
     expect(predictFrameDisplayTimeMs(3.9633, 1, offsets, 1710.2, 1000 / 60)).toBeCloseTo(1960.2, 1)
   })
 
+  test('rejects presentation-stall outliers when predicting a compositor slot', () => {
+    const offsets = [-2002.844, -1994.655, -2003.066, -1994.677, -2003.077, -1994.788, -1950, -1945]
+    expect(predictFrameDisplayTimeMs(3.9633, 1, offsets, 1710.2, 1000 / 60)).toBeCloseTo(1960.2, 1)
+  })
+
   test('predicts the exact six-refresh boundary on a 144 Hz display', () => {
     expect(predictFrameDisplayTimeMs(3.9633, 1, [-2921.588, -2921.588], 1000, 1000 / 144)).toBeCloseTo(1041.667, 2)
   })
@@ -678,6 +683,42 @@ describe('subtitle timing compensation', () => {
     expect(frame.animations).toBeUndefined()
     expect(frame.scheduled).toBe(true)
     expect(renderer._scheduledPreparedFrame).toBeNull()
+    expect(renderer._stageDisplayTimes.get(stage)).toBe(expectedDisplayTime)
+  })
+
+  test('keeps an already precise compositor swap armed through its RVFC', () => {
+    const renderer = Object.create(AkariSub.prototype) as any
+    const calls: string[] = []
+    const expectedDisplayTime = performance.now() + 100
+    const animation = { cancel: () => calls.push('cancel') }
+    const stage = { style: { opacity: '0' } }
+    const frame: any = {
+      width: 1920,
+      height: 1080,
+      stage,
+      ready: true,
+      scheduled: true,
+      targetDisplayTime: expectedDisplayTime + 0.1,
+      animations: [animation]
+    }
+
+    Object.assign(renderer, {
+      _activatePresentation: () => true,
+      _scheduledPreparedFrame: frame,
+      _committedStage: null,
+      _stageDisplayTimes: new Map([[stage, frame.targetDisplayTime]]),
+      _schedulePreparedFrame: () => {
+        calls.push('schedule')
+        frame.scheduled = true
+      }
+    })
+
+    renderer._presentPreparedFrame(frame, 14, expectedDisplayTime)
+
+    expect(calls).toEqual([])
+    expect(frame.animations).toEqual([animation])
+    expect(frame.scheduled).toBe(true)
+    expect(renderer._scheduledPreparedFrame).toBe(frame)
     expect(renderer._stageDisplayTimes.get(stage)).toBe(expectedDisplayTime)
   })
 
