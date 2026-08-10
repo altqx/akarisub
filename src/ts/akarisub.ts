@@ -237,17 +237,16 @@ export default class AkariSub extends EventTarget {
     this._onCanvasFallback = options.onCanvasFallback
 
     const isCustomCanvas = !!options.canvas
-    const rawAssImageGpu = options.rawAssImageGpu ?? (isCustomCanvas && !this._isLikelyWebKit && isWebGL2Supported())
-    const wantsOffscreenRender = options.offscreenRender ?? (!isCustomCanvas || rawAssImageGpu)
+    const rawAssImageGpu = options.rawAssImageGpu ?? false
+    const wantsOffscreenRender = options.offscreenRender ?? !isCustomCanvas
     const canTransferOffscreen = 'transferControlToOffscreen' in HTMLCanvasElement.prototype
     const canUseGPURenderer = !this._isLikelyWebKit && !isCustomCanvas && (isWebGPUSupported() || isWebGL2Supported())
     const shouldUseAsyncRender =
       typeof createImageBitmap !== 'undefined' && (options.asyncRender ?? (!this._isLikelyWebKit && !canUseGPURenderer))
 
-    // Transfer custom canvases to the worker when its raw ASS_Image WebGL2
-    // compositor is available. This avoids the CPU preblend, ImageBitmap, and
-    // main-thread paint round trips for animation-heavy manual rendering.
-    // Explicit offscreenRender/rawAssImageGpu options still override the default.
+    // Keep caller-owned canvases on the main thread by default. Worker-side raw
+    // ASS composition remains opt-in because it regresses several ordinary and
+    // animation-heavy custom-canvas workloads despite helping dense overlays.
     this._offscreenRender = canTransferOffscreen && !canUseGPURenderer && wantsOffscreenRender
 
     this.timeOffset = options.timeOffset || 0

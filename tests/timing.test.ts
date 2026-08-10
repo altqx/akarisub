@@ -1130,4 +1130,40 @@ describe('subtitle timing compensation', () => {
     expect(renderer._displayGridAnchorMs).toBe(1_200_000)
     expect(renderer._predictedDisplayTimes.get(2)).toBeCloseTo(1_200_000 + 2 * (1000 / 60), 3)
   })
+
+  test('does not accumulate compositor phase error across twenty minutes of playback', () => {
+    const renderer = Object.create(AkariSub.prototype) as any
+    const frameInterval = 1001 / 24000
+    const actualRefreshInterval = 1000 / 59.94
+    const frameCount = Math.ceil(20 * 60 / frameInterval) + 2
+    const timeline = Float64Array.from({ length: frameCount }, (_, index) => index * frameInterval)
+
+    Object.assign(renderer, {
+      _frameTimeline: timeline,
+      _video: { paused: false, ended: false, playbackRate: 1 },
+      _playstate: false,
+      _predictedDisplayTimes: new Map(),
+      _displayClockOffsets: [],
+      _displayGridAnchorMs: 1000,
+      _refreshSamples: [16.68, 16.69, 16.68, 16.69],
+      _preparedFrames: new Map(),
+      _scheduleNextPreparedFrame: () => {}
+    })
+
+    let maxPredictionError = 0
+    for (let frameIndex = 0; frameIndex + 1 < timeline.length; frameIndex++) {
+      const mediaTime = timeline[frameIndex]
+      const expectedDisplayTime =
+        1000 + Math.round((mediaTime * 1000) / actualRefreshInterval) * actualRefreshInterval
+      renderer._recordPresentationClock(frameIndex, mediaTime, expectedDisplayTime)
+
+      const predicted = renderer._predictedDisplayTimes.get(frameIndex + 1)
+      if (predicted == null) continue
+      const nextExpected =
+        1000 + Math.round((timeline[frameIndex + 1] * 1000) / actualRefreshInterval) * actualRefreshInterval
+      maxPredictionError = Math.max(maxPredictionError, Math.abs(predicted - nextExpected))
+    }
+
+    expect(maxPredictionError).toBeLessThan(0.1)
+  })
 })
