@@ -118,9 +118,11 @@ renderer.setFrameTimeline(frameTimeline)
 renderer.setFrameTimeline(null) // return to adaptive continuous-time rendering
 ```
 
-Use timestamps from the encoded rendition the browser plays, normalized so its first displayed video frame is `0`. Passing a timeline remains optional; cache misses and unsupported paths automatically use normal adaptive rendering.
+Use timestamps from the encoded rendition the browser plays, normalized to the browser media clock. Passing a timeline remains optional; cache misses and unsupported paths automatically use normal adaptive rendering.
 
 If the browser timeline is normalized from decode time rather than the first display PTS, preserve that initial B-frame reorder gap in the array and set `frameTimeline.subtitleTimeOffset` to the first frame timestamp. AkariSub uses the unmodified array to locate the visible video frame, then removes the offset only when sampling libass.
+
+`subtitleTimeOffset` is signed. When the source video starts after the container subtitle clock, subtract that source lead from the reorder offset. For example, an encoded reorder gap of `0.083422` seconds and a source video start of `0.007` seconds use `subtitleTimeOffset = 0.076422`, so the first displayed frame is sampled by libass at `0.007` just like mpv.
 
 ## Changing subtitles
 

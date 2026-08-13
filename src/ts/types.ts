@@ -84,7 +84,9 @@ export interface PerformanceStats {
 
 /** Encoded-frame timestamps with optional media/subtitle clock offsets. */
 export interface FrameTimeline extends ArrayLike<number> {
+  /** Origin subtracted from raw browser media timestamps when locating a frame. */
   mediaTimeOrigin?: number
+  /** Signed offset subtracted from frame time when sampling libass. */
   subtitleTimeOffset?: number
 }
 
@@ -103,7 +105,7 @@ export interface AkariSubOptions {
   onDemandRender?: boolean
   /** Compensate measured render/presentation latency while playing (default: true) */
   adaptiveTiming?: boolean
-  /** Encoded video-frame timestamps and optional RVFC media-time origin, in seconds */
+  /** Encoded video-frame timestamps and optional browser/subtitle clock offsets, in seconds */
   frameTimeline?: FrameTimeline
   /** Number of exact subtitle frames to prepare ahead (default: 2) */
   framePrefetch?: number

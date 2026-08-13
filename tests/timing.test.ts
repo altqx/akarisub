@@ -111,6 +111,24 @@ describe('subtitle timing compensation', () => {
     expect(normalized.subtitleTimeOffset).toBe(0.083422)
   })
 
+  test('preserves a source-video lead when sampling the native container subtitle clock', () => {
+    const timeline = Object.assign(new Float64Array([0.083422, 0.125133, 0.166844]), {
+      mediaTimeOrigin: 1.4,
+      subtitleTimeOffset: 0.076422
+    })
+
+    expect(subtitleTimeForFrame(timeline, 0)).toBeCloseTo(0.007)
+    expect(subtitleTimeForFrame(timeline, 2)).toBeCloseTo(0.090422)
+    expect(normalizeFrameTimeline(timeline).subtitleTimeOffset).toBeCloseTo(0.076422)
+
+    const directTimeline = Object.assign(new Float64Array([7.257, 7.299, 7.341]), {
+      mediaTimeOrigin: 0.007,
+      subtitleTimeOffset: -0.007
+    })
+    expect(snapToSubtitleTimeline(directTimeline, 7.299)).toBeCloseTo(7.306)
+    expect(normalizeFrameTimeline(directTimeline).subtitleTimeOffset).toBeCloseTo(-0.007)
+  })
+
   test('rejects only paints superseded by a newer presentation', () => {
     expect(isStalePresentation(7, 8)).toBe(true)
     expect(isStalePresentation(8, 8)).toBe(false)
@@ -174,6 +192,143 @@ describe('subtitle timing compensation', () => {
     })
 
     expect(renderer._prepareForce).toBe(true)
+  })
+
+  test('uses a just-finished speculative frame instead of rendering the queued RVFC twice', () => {
+    const renderer = Object.create(AkariSub.prototype) as any
+    const bitmap = { close: () => {} }
+    const presentations: Array<{ frame: unknown; presentationId: number }> = []
+    const demands: unknown[] = []
+    let primed = 0
+    Object.assign(renderer, {
+      _pendingDemandTimes: [{ mediaTime: 1, width: 1920, height: 1080, presentationId: 8 }],
+      _preparedFrames: new Map([[1, { width: 1920, height: 1080, bitmap }]]),
+      _frameTimeline: new Float64Array([0, 1, 2]),
+      framePrefetch: 2,
+      _video: { paused: false, ended: false, currentTime: 1, playbackRate: 1 },
+      _playstate: false,
+      _videoWidth: 1920,
+      _videoHeight: 1080,
+      _canvasctrl: { width: 1920, height: 1080 },
+      _lastPresentedFrameIndex: 1,
+      _latestPresentationId: 7,
+      _presentPreparedFrame: (frame: unknown, presentationId: number) => presentations.push({ frame, presentationId }),
+      _demandRender: (metadata: unknown) => demands.push(metadata),
+      _primePreparedFrames: () => primed++,
+      _dispatchNextPreparation: () => {},
+      _dispatchReadyWhenFrameBufferFilled: () => {},
+      busy: true
+    })
+
+    renderer._finishWorkerSlot()
+
+    expect(presentations).toEqual([{ frame: { width: 1920, height: 1080, bitmap }, presentationId: 8 }])
+    expect(demands).toEqual([])
+    expect(renderer._preparedFrames.has(1)).toBe(false)
+    expect(renderer.busy).toBe(false)
+    expect(primed).toBe(1)
+  })
+
+  test('drops an obsolete queued exact frame instead of painting backwards', () => {
+    const renderer = Object.create(AkariSub.prototype) as any
+    const demands: unknown[] = []
+    let primed = 0
+    Object.assign(renderer, {
+      _pendingDemandTimes: [{ mediaTime: 1, width: 1920, height: 1080, presentationId: 8 }],
+      _preparedFrames: new Map(),
+      _frameTimeline: new Float64Array([0, 1, 2]),
+      framePrefetch: 2,
+      _video: { paused: false, ended: false, currentTime: 2, playbackRate: 1 },
+      _playstate: false,
+      _videoWidth: 1920,
+      _videoHeight: 1080,
+      _lastPresentedFrameIndex: 2,
+      _latestPresentationId: 7,
+      _demandRender: (metadata: unknown) => demands.push(metadata),
+      _primePreparedFrames: () => primed++,
+      _dispatchNextPreparation: () => {},
+      _dispatchReadyWhenFrameBufferFilled: () => {},
+      busy: true
+    })
+
+    renderer._finishWorkerSlot()
+
+    expect(demands).toEqual([])
+    expect(renderer.busy).toBe(false)
+    expect(primed).toBe(1)
+  })
+
+  test('coalesces queued RVFCs to the newest cached frame and preserves force', () => {
+    const renderer = Object.create(AkariSub.prototype) as any
+    const olderBitmap = { close: () => {} }
+    const newestBitmap = { close: () => {} }
+    const presentations: Array<{ frame: unknown; presentationId: number }> = []
+    let coalescedForce: boolean | undefined
+    const tryPresentPreparedDemand = (AkariSub.prototype as any)._tryPresentPreparedDemand
+    Object.assign(renderer, {
+      _pendingDemandTimes: [
+        { mediaTime: 1, width: 1920, height: 1080, presentationId: 8, force: true },
+        { mediaTime: 2, width: 1920, height: 1080, presentationId: 9 }
+      ],
+      _preparedFrames: new Map([
+        [1, { width: 1920, height: 1080, bitmap: olderBitmap }],
+        [2, { width: 1920, height: 1080, bitmap: newestBitmap }]
+      ]),
+      _frameTimeline: new Float64Array([0, 1, 2]),
+      framePrefetch: 2,
+      _video: { paused: false, ended: false, currentTime: 2, playbackRate: 1 },
+      _playstate: false,
+      _videoWidth: 1920,
+      _videoHeight: 1080,
+      _canvasctrl: { width: 1920, height: 1080 },
+      _lastPresentedFrameIndex: 2,
+      _latestPresentationId: 7,
+      _tryPresentPreparedDemand: (metadata: { force?: boolean }) => {
+        coalescedForce = metadata.force
+        return tryPresentPreparedDemand.call(renderer, metadata)
+      },
+      _presentPreparedFrame: (frame: unknown, presentationId: number) => presentations.push({ frame, presentationId }),
+      _demandRender: () => {
+        throw new Error('unexpected duplicate render')
+      },
+      _primePreparedFrames: () => {},
+      _dispatchNextPreparation: () => {},
+      _dispatchReadyWhenFrameBufferFilled: () => {},
+      busy: true
+    })
+
+    renderer._finishWorkerSlot()
+
+    expect(presentations).toEqual([{ frame: { width: 1920, height: 1080, bitmap: newestBitmap }, presentationId: 9 }])
+    expect(coalescedForce).toBe(true)
+    expect(renderer._pendingDemandTimes).toEqual([])
+    expect(renderer._preparedFrames.has(1)).toBe(true)
+    expect(renderer._preparedFrames.has(2)).toBe(false)
+  })
+
+  test('falls back once when the queued exact frame is not cached', () => {
+    const renderer = Object.create(AkariSub.prototype) as any
+    const demands: Array<{ presentationId: number }> = []
+    Object.assign(renderer, {
+      _pendingDemandTimes: [{ mediaTime: 1, width: 1920, height: 1080, presentationId: 8 }],
+      _preparedFrames: new Map(),
+      _frameTimeline: new Float64Array([0, 1, 2]),
+      framePrefetch: 2,
+      _video: { paused: false, ended: false, currentTime: 1, playbackRate: 1 },
+      _playstate: false,
+      _videoWidth: 1920,
+      _videoHeight: 1080,
+      _lastPresentedFrameIndex: 1,
+      _latestPresentationId: 7,
+      _demandRender: (metadata: { presentationId: number }) => demands.push(metadata),
+      busy: true
+    })
+
+    renderer._finishWorkerSlot()
+
+    expect(demands).toHaveLength(1)
+    expect(demands[0].presentationId).toBe(8)
+    expect(renderer.busy).toBe(true)
   })
 
   test('renders an unprepared exact presentation into a worker snapshot before its display deadline', () => {

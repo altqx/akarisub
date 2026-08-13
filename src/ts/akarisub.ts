@@ -905,8 +905,10 @@ export default class AkariSub extends EventTarget {
 
       const nextDemand = this._pendingDemandTimes.shift()
       if (nextDemand) {
-        this._demandRender(nextDemand)
-        return
+        if (!this._tryPresentPreparedDemand(nextDemand)) {
+          this._demandRender(nextDemand)
+          return
+        }
       }
     }
 
@@ -914,6 +916,37 @@ export default class AkariSub extends EventTarget {
     this._primePreparedFrames(this._currentExactFrameMediaTime())
     this._dispatchNextPreparation()
     this._dispatchReadyWhenFrameBufferFilled()
+  }
+
+  private _tryPresentPreparedDemand(metadata: DemandMetadata): boolean {
+    if (
+      !this._frameTimeline ||
+      this.framePrefetch <= 0 ||
+      this._isVideoPausedForWorker() ||
+      metadata.presentationId == null
+    ) {
+      return false
+    }
+
+    if (isStalePresentation(metadata.presentationId, this._latestPresentationId)) return true
+
+    const frameIndex = presentedFrameIndex(this._frameTimeline, metadata.mediaTime)
+    if (frameIndex < 0 || this._lastPresentedFrameIndex == null) return false
+    if (frameIndex !== this._lastPresentedFrameIndex) return true
+    if (metadata.width !== this._videoWidth || metadata.height !== this._videoHeight) return false
+
+    const prepared = this._preparedFrames.get(frameIndex)
+    if (!prepared) return false
+    this._preparedFrames.delete(frameIndex)
+
+    if (prepared.width !== this._canvasctrl.width || prepared.height !== this._canvasctrl.height) {
+      this._disposePreparedFrame(prepared)
+      this._prepareForce = true
+      return false
+    }
+
+    this._presentPreparedFrame(prepared, metadata.presentationId, metadata.expectedDisplayTime)
+    return true
   }
 
   private _dispatchReadyWhenFrameBufferFilled(): void {

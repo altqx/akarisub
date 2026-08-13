@@ -20,4 +20,5 @@ dist/ts
 dist/libraries
 dist/license
 test
+tests/akarisub-test/
 .pnpm-store

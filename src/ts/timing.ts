@@ -145,7 +145,7 @@ export const normalizeFrameTimeline = (
     subtitleTimeOffset?: number
   }
   if (Number.isFinite(frameTimes.mediaTimeOrigin)) normalized.mediaTimeOrigin = frameTimes.mediaTimeOrigin
-  if (Number.isFinite(frameTimes.subtitleTimeOffset) && frameTimes.subtitleTimeOffset! >= 0) {
+  if (Number.isFinite(frameTimes.subtitleTimeOffset)) {
     normalized.subtitleTimeOffset = frameTimes.subtitleTimeOffset
   }
   return normalized
@@ -188,7 +188,7 @@ export const snapToSubtitleTimeline = (
   mediaTime: number
 ): number => {
   const frameTime = snapToFrameTimeline(frameTimes, mediaTime)
-  const offset = Number.isFinite(frameTimes.subtitleTimeOffset) ? Math.max(0, frameTimes.subtitleTimeOffset!) : 0
+  const offset = Number.isFinite(frameTimes.subtitleTimeOffset) ? frameTimes.subtitleTimeOffset! : 0
   return Math.max(0, frameTime - offset)
 }
 
@@ -198,7 +198,7 @@ export const subtitleTimeForFrame = (
 ): number => {
   const frameTime = frameTimes[frameIndex]
   if (!Number.isFinite(frameTime)) return Number.NaN
-  const offset = Number.isFinite(frameTimes.subtitleTimeOffset) ? Math.max(0, frameTimes.subtitleTimeOffset!) : 0
+  const offset = Number.isFinite(frameTimes.subtitleTimeOffset) ? frameTimes.subtitleTimeOffset! : 0
   return Math.max(0, frameTime - offset)
 }
 
