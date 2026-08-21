@@ -3,7 +3,7 @@ const MAX_COMPENSATION_SECONDS = 0.1
 const COMPENSATION_RISE_ALPHA = 0.5
 const COMPENSATION_FALL_ALPHA = 0.1
 const MIN_COMPENSATION_SECONDS = 0.0005
-const FRAME_TIMESTAMP_MATCH_TOLERANCE_SECONDS = 0.00005
+const FRAME_TIMESTAMP_MATCH_TOLERANCE_SECONDS = 0.0000005
 
 /**
  * Update a render-pipeline latency estimate from one completed video-frame render.
@@ -180,7 +180,7 @@ export const presentedFrameIndex = (frameTimes: ArrayLike<number>, mediaTime: nu
   // RVFC mediaTime and the probed encoded PTS describe the same frame but can
   // differ by sub-millisecond floating-point/timescale conversion noise. A
   // strict comparison turns a tiny underrun into selection of the previous
-  // frame, delaying libass by an entire frame. Treat only <= 0.05 ms as the
+  // frame, delaying libass by an entire frame. Treat only <= 0.0005 ms as the
   // same encoded timestamp; larger gaps retain normal "currently presented"
   // floor semantics.
   return frameTimes[next] - mediaTime <= FRAME_TIMESTAMP_MATCH_TOLERANCE_SECONDS ? next : next - 1
