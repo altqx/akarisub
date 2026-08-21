@@ -96,6 +96,7 @@ fn fragmentMain(input: FragmentInput) -> @location(0) vec4f {
 }
 `
 
+/** True when `navigator.gpu` is present. */
 export function isWebGPUSupported(): boolean {
   return typeof navigator !== 'undefined' && 'gpu' in navigator
 }
@@ -108,6 +109,7 @@ function toUint8View(data: ArrayBuffer | Uint8Array | Uint8ClampedArray): Uint8A
   return new Uint8Array(data.buffer, data.byteOffset, data.byteLength)
 }
 
+/** Premultiplied-alpha WebGPU compositor for subtitle bitmaps. */
 export class WebGPURenderer {
   private device: GPUDevice | null = null
   private context: GPUCanvasContext | null = null
@@ -138,22 +140,26 @@ export class WebGPURenderer {
   private lastCanvasWidth = 0
   private lastCanvasHeight = 0
 
+  /** Swap-chain texture format used when configuring the canvas. */
   format: GPUTextureFormat = 'bgra8unorm'
 
   private _canvas: HTMLCanvasElement | null = null
   private _initPromise: Promise<void> | null = null
   private _initialized = false
 
+  /** Allocate GPU upload buffers. Call {@linkcode init} before rendering. */
   constructor() {
     this.imageDataArray = new Float32Array(MAX_IMAGES_PER_BATCH * 8)
   }
 
+  /** Acquire a GPU device and compile the subtitle shaders. */
   async init(): Promise<void> {
     if (this._initPromise) return this._initPromise
     this._initPromise = this._initDevice()
     return this._initPromise
   }
 
+  /** @internal */
   private async _initDevice(): Promise<void> {
     if (!navigator.gpu) {
       throw new Error('WebGPU not supported')
@@ -230,14 +236,17 @@ export class WebGPURenderer {
   // Round up to a multiple of 64: gives headroom against size jitter without
   // power-of-2 over-allocation (a 1920x1080 blend region would otherwise
   // round to 2048x2048 and waste ~2x memory).
+  /** @internal */
   private roundDim(n: number): number {
     return (Math.max(n, 64) + 63) & ~63
   }
 
+  /** @internal */
   private roundLayers(n: number): number {
     return Math.min((Math.max(n, 8) + 7) & ~7, MAX_TEXTURE_ARRAY_LAYERS)
   }
 
+  /** @internal */
   private createTextureArray(width: number, height: number, layers: number): void {
     if (this.textureArray) {
       this.pendingDestroyTextures.push(this.textureArray)
@@ -280,6 +289,7 @@ export class WebGPURenderer {
     this.device!.queue.submit([commandEncoder.finish()])
   }
 
+  /** @internal */
   private ensureTextureArray(maxWidth: number, maxHeight: number, count: number): boolean {
     const clampedCount = Math.min(count, MAX_TEXTURE_ARRAY_LAYERS)
 
@@ -299,6 +309,7 @@ export class WebGPURenderer {
     return true
   }
 
+  /** @internal */
   private updateBindGroup(): void {
     if (!this.bindGroupDirty || !this.device || !this.bindGroupLayout) return
 
@@ -313,6 +324,7 @@ export class WebGPURenderer {
     this.bindGroupDirty = false
   }
 
+  /** Bind `canvas` as the primary output and size the swap chain. */
   async setCanvas(canvas: HTMLCanvasElement, width: number, height: number): Promise<void> {
     await this.init()
 
@@ -367,6 +379,7 @@ export class WebGPURenderer {
     return this.renderBitmapsToContext([{ image: bitmap, x: 0, y: 0 }], context, width, height)
   }
 
+  /** Drop a staging canvas previously used with {@linkcode renderBitmapToCanvas}. */
   releaseCanvas(canvas: HTMLCanvasElement): void {
     const context = this.stageContexts.get(canvas)
     if (!context) return
@@ -378,6 +391,7 @@ export class WebGPURenderer {
     this.stageContexts.delete(canvas)
   }
 
+  /** Resize the primary canvas and uniform resolution. */
   updateSize(width: number, height: number): void {
     if (!this.device || !this._canvas || width <= 0 || height <= 0) return
     if (width === this.lastCanvasWidth && height === this.lastCanvasHeight) return
@@ -392,6 +406,7 @@ export class WebGPURenderer {
     this.lastCanvasHeight = height
   }
 
+  /** Composite `images` onto the primary canvas. Returns `false` if the context is missing. */
   renderBitmaps(
     images: { image: ImageBitmap; x: number; y: number }[],
     canvasWidth: number,
@@ -401,10 +416,12 @@ export class WebGPURenderer {
     return this.renderBitmapsToContext(images, this.context, canvasWidth, canvasHeight)
   }
 
+  /** Wait until submitted GPU work has finished. */
   submittedWorkDone(): Promise<void> {
     return this.device?.queue.onSubmittedWorkDone() ?? Promise.resolve()
   }
 
+  /** @internal */
   private renderBitmapsToContext(
     images: { image: ImageBitmap; x: number; y: number }[],
     context: GPUCanvasContext,
@@ -513,6 +530,7 @@ export class WebGPURenderer {
     return renderedAnyBatch
   }
 
+  /** Composite {@linkcode RenderImage} planes onto the primary canvas. */
   render(images: RenderImage[], _canvasWidth: number, _canvasHeight: number): boolean {
     if (!this.device || !this.context || !this.pipeline) return false
 
@@ -624,6 +642,7 @@ export class WebGPURenderer {
     return renderedAnyBatch
   }
 
+  /** @internal */
   private uploadImageBitmap(layerIndex: number, bitmap: ImageBitmap, width: number, height: number): boolean {
     try {
       this.device!.queue.copyExternalImageToTexture(
@@ -671,6 +690,7 @@ export class WebGPURenderer {
     }
   }
 
+  /** @internal */
   private uploadTextureData(
     layerIndex: number,
     rgbaBuffer: ArrayBuffer | Uint8Array | Uint8ClampedArray,
@@ -685,6 +705,7 @@ export class WebGPURenderer {
     )
   }
 
+  /** @internal */
   private cleanupPendingTextures(): void {
     const pending = this.pendingDestroyTextures
     const len = pending.length
@@ -696,12 +717,14 @@ export class WebGPURenderer {
     pending.length = 0
   }
 
+  /** Clear the primary canvas to transparent black. */
   clear(): boolean {
     if (!this.device || !this.context) return false
 
     return this.clearContext(this.context)
   }
 
+  /** @internal */
   private clearContext(context: GPUCanvasContext): boolean {
     if (!this.device) return false
 
@@ -728,10 +751,12 @@ export class WebGPURenderer {
     }
   }
 
+  /** True after {@linkcode init} has completed successfully. */
   get initialized(): boolean {
     return this._initialized
   }
 
+  /** Release GPU resources and unconfigure all canvases. */
   destroy(): void {
     this.cleanupPendingTextures()
 

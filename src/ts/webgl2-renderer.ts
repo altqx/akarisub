@@ -59,6 +59,7 @@ void main() {
 }
 `
 
+/** True when a WebGL2 context can be created. */
 export function isWebGL2Supported(): boolean {
   if (typeof document === 'undefined') return false
   try {
@@ -85,6 +86,7 @@ function compileShader(gl: WebGL2RenderingContext, type: number, source: string)
   return shader
 }
 
+/** Premultiplied-alpha WebGL2 compositor for subtitle bitmaps. */
 export class WebGL2Renderer {
   private _gl: WebGL2RenderingContext | null = null
   private _canvas: HTMLCanvasElement | null = null
@@ -106,22 +108,26 @@ export class WebGL2Renderer {
   private _initialized = false
   private _initPromise: Promise<void> | null = null
 
+  /** Allocate instance buffers. Call {@linkcode init} before rendering. */
   constructor() {
     this._instanceData = new Float32Array(MAX_IMAGES_PER_BATCH * 8)
   }
 
+  /** Compile shaders after {@linkcode setCanvas} is first called. */
   async init(): Promise<void> {
     if (this._initPromise) return this._initPromise
     this._initPromise = this._checkSupport()
     return this._initPromise
   }
 
+  /** @internal */
   private async _checkSupport(): Promise<void> {
     if (typeof document === 'undefined') throw new Error('WebGL2 requires a DOM environment')
     const canvas = document.createElement('canvas')
     if (!canvas.getContext('webgl2')) throw new Error('WebGL2 not supported')
   }
 
+  /** @internal */
   private _initGL(): void {
     if (!this._canvas) throw new Error('Canvas not set before _initGL')
     if (this._gl) return // already initialised
@@ -178,14 +184,17 @@ export class WebGL2Renderer {
   // Round up to a multiple of 64: gives headroom against size jitter without
   // power-of-2 over-allocation (a 1920x1080 blend region would otherwise
   // round to 2048x2048 and waste ~2x memory).
+  /** @internal */
   private _roundDim(n: number): number {
     return (Math.max(n, 64) + 63) & ~63
   }
 
+  /** @internal */
   private _roundLayers(n: number): number {
     return Math.min((Math.max(n, 8) + 7) & ~7, MAX_TEXTURE_ARRAY_LAYERS)
   }
 
+  /** @internal */
   private _allocateTextureArray(width: number, height: number, layers: number): void {
     const gl = this._gl!
     const w = this._roundDim(width)
@@ -206,6 +215,7 @@ export class WebGL2Renderer {
     this._texLayers = l
   }
 
+  /** @internal */
   private _ensureTextureArray(maxW: number, maxH: number, count: number): void {
     const c = Math.min(count, MAX_TEXTURE_ARRAY_LAYERS)
     if (maxW <= this._texWidth && maxH <= this._texHeight && c <= this._texLayers) return
@@ -215,6 +225,7 @@ export class WebGL2Renderer {
     this._allocateTextureArray(newW, newH, newL)
   }
 
+  /** Bind `canvas` as the GL surface and size the viewport. */
   async setCanvas(canvas: HTMLCanvasElement, width: number, height: number): Promise<void> {
     await this.init()
     if (width <= 0 || height <= 0) return
@@ -227,6 +238,7 @@ export class WebGL2Renderer {
     this._lastCanvasHeight = height
   }
 
+  /** Resize the GL viewport to match the canvas. */
   updateSize(width: number, height: number): void {
     if (!this._gl || !this._canvas || width <= 0 || height <= 0) return
     if (width === this._lastCanvasWidth && height === this._lastCanvasHeight) return
@@ -237,6 +249,7 @@ export class WebGL2Renderer {
     this._lastCanvasHeight = height
   }
 
+  /** Composite ImageBitmap planes onto the bound canvas. */
   renderBitmaps(
     images: { image: ImageBitmap; x: number; y: number }[],
     _canvasWidth: number,
@@ -299,6 +312,7 @@ export class WebGL2Renderer {
     }
   }
 
+  /** Composite {@linkcode RenderImage} planes onto the bound canvas. */
   render(
     images: RenderImage[],
     _canvasWidth: number,
@@ -367,16 +381,19 @@ export class WebGL2Renderer {
     }
   }
 
+  /** Clear the bound canvas to transparent black. */
   clear(): void {
     if (!this._gl) return
     this._gl.clearColor(0, 0, 0, 0)
     this._gl.clear(this._gl.COLOR_BUFFER_BIT)
   }
 
+  /** True after {@linkcode init} has completed successfully. */
   get initialized(): boolean {
     return this._initialized
   }
 
+  /** Delete GL objects and drop the context. */
   destroy(): void {
     const gl = this._gl
     if (gl) {

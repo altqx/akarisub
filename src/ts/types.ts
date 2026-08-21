@@ -1,23 +1,38 @@
+/** A single Dialogue or Comment event from an ASS/SSA track. */
 export interface ASSEvent {
+  /** Start time in seconds. */
   Start: number
+  /** Duration in seconds. */
   Duration: number
+  /** Style name referenced by this event. */
   Style: string
   /** Character name (for information only) */
   Name: string
+  /** Left margin in script pixels. */
   MarginL: number
+  /** Right margin in script pixels. */
   MarginR: number
+  /** Vertical margin in script pixels. */
   MarginV: number
+  /** Transition or karaoke effect string. */
   Effect: string
+  /** Dialogue text, including override tags. */
   Text: string
+  /** libass read order used to break timestamp ties. */
   ReadOrder: number
+  /** Collision layer. */
   Layer: number
+  /** Original event index in the loaded track, when known. */
   _index?: number
 }
 
+/** A named style from an ASS/SSA `[V4+ Styles]` section. */
 export interface ASSStyle {
   /** Style name (case sensitive) */
   Name: string
+  /** Typeface family used when the event does not override `\\fn`. */
   FontName: string
+  /** Font size in script pixels. */
   FontSize: number
   /** RGBA packed as uint32 */
   PrimaryColour: number
@@ -39,29 +54,47 @@ export interface ASSStyle {
   ScaleX: number
   /** Height scale percent */
   ScaleY: number
+  /** Extra glyph spacing in script pixels. */
   Spacing: number
+  /** Z-axis rotation in degrees. */
   Angle: number
   /** Border style (1 = outline + shadow, 3 = opaque box) */
   BorderStyle: number
+  /** Outline width in script pixels. */
   Outline: number
+  /** Shadow offset in script pixels. */
   Shadow: number
   /** Alignment (1-9, numpad style) */
   Alignment: number
+  /** Left margin in script pixels. */
   MarginL: number
+  /** Right margin in script pixels. */
   MarginR: number
+  /** Vertical margin in script pixels. */
   MarginV: number
+  /** Windows charset / encoding id. */
   Encoding: number
+  /** When non-zero, `FontName` is treated as a fontconfig pattern. */
   treat_fontname_as_pattern: number
+  /** Gaussian blur strength. */
   Blur: number
+  /** Horizontal justification used with some alignments. */
   Justify: number
 }
 
+/** Snapshot of renderer throughput, latency, and worker mode. */
 export interface PerformanceStats {
+  /** Number of frames the worker finished. */
   framesRendered: number
+  /** Number of frames skipped because a newer demand arrived. */
   framesDropped: number
+  /** Mean worker render time in milliseconds. */
   avgRenderTime: number
+  /** Slowest worker render time in milliseconds. */
   maxRenderTime: number
+  /** Fastest worker render time in milliseconds. */
   minRenderTime: number
+  /** Most recent worker render time in milliseconds. */
   lastRenderTime: number
   /** Current automatically learned presentation-latency compensation in milliseconds */
   timingCompensationMs?: number
@@ -69,16 +102,25 @@ export interface PerformanceStats {
   lastImageCount?: number
   /** Total RGBA/raw image pixels emitted by the last render */
   lastImagePixels?: number
+  /** Estimated frames per second from `avgRenderTime`. */
   renderFps: number
+  /** Always true for this renderer; kept for compatibility. */
   usingWorker: boolean
   /** Whether worker-side raw ASS_Image WebGL2 composition is active */
   rawAssImageGpu?: boolean
+  /** Backend that composed the last frame. */
   workerRenderer?: 'webgl2-raw-ass' | 'canvas2d' | 'hybrid' | 'main-thread'
+  /** Whether the worker owns an OffscreenCanvas. */
   offscreenRender: boolean
+  /** Whether `requestVideoFrameCallback` drives presentation. */
   onDemandRender: boolean
+  /** Demand renders still in flight. */
   pendingRenders: number
+  /** Dialogue events currently in the track. */
   totalEvents: number
+  /** Worker bitmap-cache hits. */
   cacheHits: number
+  /** Worker bitmap-cache misses. */
   cacheMisses: number
 }
 
@@ -90,8 +132,11 @@ export interface FrameTimeline extends ArrayLike<number> {
   subtitleTimeOffset?: number
 }
 
+/** Construction options for {@linkcode AkariSub}. */
 export interface AkariSubOptions {
+  /** Video element to overlay. Either `video` or `canvas` is required. */
   video?: HTMLVideoElement
+  /** Existing canvas to paint into instead of creating an overlay. */
   canvas?: HTMLCanvasElement
   /** Image blending mode: 'js' for hardware acceleration, 'wasm' for software */
   blendMode?: 'js' | 'wasm'
@@ -133,11 +178,15 @@ export interface AkariSubOptions {
   wasmUrl?: string
   /** Optional WASM glue script URL. Defaults to the package glue URL resolved from import.meta.url. */
   glueUrl?: string
+  /** HTTP(S) URL of an ASS/SSA file to load after init. */
   subUrl?: string
+  /** Inline ASS/SSA text or bytes to load after init. */
   subContent?: string | Uint8Array | ArrayBuffer
   /** Encrypted subtitle content decrypted inside the worker before loading into libass */
   encryptedSubContent?: EncryptedSubtitleContent
+  /** Extra fonts as URLs or file bytes. */
   fonts?: (string | Uint8Array)[]
+  /** Map of font family name to URL or file bytes. */
   availableFonts?: Record<string, string | Uint8Array>
   /** Fallback font families in order (default: ['liberation sans']). Fontconfig uses these for cascade. */
   fallbackFonts?: string[]
@@ -163,6 +212,7 @@ export interface AkariSubOptions {
   adaptiveBlendLayouts?: boolean
 }
 
+/** AES-GCM subtitle payload decrypted inside the worker. */
 export interface EncryptedSubtitleContent {
   /** Non-extractable AES-GCM content key from akari-crypto's v2 transport flow */
   contentKey: CryptoKey
@@ -181,11 +231,17 @@ export type PerformanceStatsCallback = (error: Error | null, stats: PerformanceS
 /** @deprecated Use Promise-based resetStats() instead */
 export type ResetStatsCallback = (error: Error | null) => void
 
+/** One blended subtitle bitmap or GPU plane to composite. */
 export interface RenderImage {
+  /** Destination X in canvas pixels. */
   x: number
+  /** Destination Y in canvas pixels. */
   y: number
+  /** Bitmap width in pixels. */
   w: number
+  /** Bitmap height in pixels. */
   h: number
+  /** Premultiplied RGBA bitmap, or a WASM pointer when using raw GPU composition. */
   image: ImageBitmap | ArrayBuffer | Uint8Array | Uint8ClampedArray | number
 }
 
@@ -203,12 +259,19 @@ export interface RawASSImage {
   type: number
 }
 
+/** Timing breakdown for a single worker render, in milliseconds. */
 export interface RenderTimes {
+  /** libass raster time. */
   WASMRenderTime?: number
+  /** Time spent copying WASM bitmaps into JS. */
   WASMBitmapDecodeTime?: number
+  /** Main-thread composite time. */
   JSRenderTime?: number
+  /** ImageBitmap construction time. */
   JSBitmapGenerationTime?: number
+  /** Worker-to-main postMessage latency. */
   IPCTime?: number
+  /** Number of bitmaps in this frame. */
   bitmaps?: number
 }
 
@@ -327,17 +390,27 @@ export type WorkerInboundMessage =
   | { target: 'getStyleCount' }
   | { target: 'getColorSpace' }
 
+/** Metadata passed to `HTMLVideoElement.requestVideoFrameCallback`. */
 export interface VideoFrameCallbackMetadata {
+  /** Media time of the presented frame, in seconds. */
   mediaTime: number
+  /** Presented frame width in CSS pixels. */
   width: number
+  /** Presented frame height in CSS pixels. */
   height: number
+  /** Count of frames presented since the callback was scheduled. */
   presentedFrames?: number
+  /** Time spent processing the frame, in milliseconds. */
   processingDuration?: number
+  /** Predicted compositor display time, in milliseconds. */
   expectedDisplayTime?: number
+  /** Capture timestamp, in milliseconds. */
   presentationTime?: number
 }
 
+/** Video YCbCr matrix used for subtitle color-space conversion. */
 export type WebYCbCrColorSpace = 'BT709' | 'BT601'
+/** libass YCbCr matrix, or `null` when the track does not declare one. */
 export type SubtitleColorSpace = 'BT601' | 'BT709' | 'SMPTE240M' | 'FCC' | null
 
 export interface AkariSubModule extends EmscriptenModule {

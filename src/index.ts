@@ -1,9 +1,22 @@
 /**
- * AkariSub - JavaScript ASS/SSA Subtitle Renderer
+ * AkariSub — ASS/SSA subtitle renderer for the browser.
  *
- * High-performance ASS/SSA subtitle renderer using libass compiled to WebAssembly.
+ * Renders libass subtitles with a WebAssembly worker and an optional WebGPU or
+ * WebGL2 compositor.
  *
- * @packageDocumentation
+ * @example
+ * ```ts
+ * import AkariSub from '@altq/akarisub'
+ *
+ * const renderer = new AkariSub({
+ *   video: document.querySelector('video')!,
+ *   subUrl: '/subtitles/example.ass'
+ * })
+ *
+ * renderer.destroy()
+ * ```
+ *
+ * @module
  */
 
 export { default } from './wrapper'
@@ -26,6 +39,8 @@ export type {
   WebYCbCrColorSpace,
   EncryptedSubtitleContent
 } from './ts/types'
+
+export type { ASSSection, ASSBodyEntry } from './ts/utils'
 
 export {
   webYCbCrMap,

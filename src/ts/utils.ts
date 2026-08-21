@@ -1,11 +1,13 @@
 import type { SubtitleColorSpace, WebYCbCrColorSpace } from './types'
 
+/** Map from HTMLVideoElement color-space names to {@linkcode WebYCbCrColorSpace}. */
 export const webYCbCrMap: Record<string, WebYCbCrColorSpace> = {
   bt709: 'BT709',
   bt470bg: 'BT601', // BT.601 PAL
   smpte170m: 'BT601' // BT.601 NTSC
 }
 
+/** feColorMatrix values that convert a subtitle matrix into a video matrix. */
 export const colorMatrixConversionMap: Record<string, Record<string, string>> = {
   BT601: {
     BT709: '1.0863 -0.0723 -0.014 0 0 0.0965 0.8451 0.0584 0 0 -0.0141 -0.0277 1.0418'
@@ -23,6 +25,7 @@ export const colorMatrixConversionMap: Record<string, Record<string, string>> = 
   }
 }
 
+/** libass `YCbCr Matrix` header values indexed by the libass enum. */
 export const libassYCbCrMap: (SubtitleColorSpace | null)[] = [
   null,
   'BT601',
@@ -37,6 +40,7 @@ export const libassYCbCrMap: (SubtitleColorSpace | null)[] = [
   'FCC'
 ]
 
+/** SVG filter URL that converts `subtitleColorSpace` into `videoColorSpace`, or `null` when none is needed. */
 export function getColorSpaceFilterUrl(
   subtitleColorSpace: SubtitleColorSpace,
   videoColorSpace: WebYCbCrColorSpace
@@ -50,6 +54,7 @@ export function getColorSpaceFilterUrl(
   return `url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg'><filter id='f'><feColorMatrix type='matrix' values='${matrix} 0 0 0 0 0 1 0'/></filter></svg>#f")`
 }
 
+/** Canvas pixel size after device-pixel-ratio and prescale limits. */
 export function computeCanvasSize(
   width: number,
   height: number,
@@ -83,6 +88,7 @@ export function computeCanvasSize(
   return { width, height }
 }
 
+/** Letterboxed video rectangle inside the element's layout box. */
 export function getVideoPosition(
   video: HTMLVideoElement,
   videoWidth: number = video.videoWidth,
@@ -131,17 +137,25 @@ export function fixAlpha(uint8: Uint8ClampedArray, hasAlphaBug: boolean): Uint8C
   return uint8
 }
 
-interface ASSSection {
-  name: string
-  body: ASSBodyEntry[]
-}
-
-interface ASSBodyEntry {
+/** One key/value or comment line inside an {@linkcode ASSSection}. */
+export interface ASSBodyEntry {
+  /** Present for `;` comment lines. */
   type?: 'comment'
+  /** ASS key such as `Dialogue` or `Format`. */
   key?: string
+  /** Raw string, format columns, or a Format-keyed record. */
   value: string | string[] | Record<string, string>
 }
 
+/** A `[Section]` block from an ASS/SSA file. */
+export interface ASSSection {
+  /** Section title without brackets, for example `Events`. */
+  name: string
+  /** Ordered lines in this section. */
+  body: ASSBodyEntry[]
+}
+
+/** Parse ASS/SSA text into named sections. Stops before `[Events]` when `stopAtEvents` is set. */
 export function parseAss(content: string, stopAtEvents: boolean = false): ASSSection[] {
   const sections: ASSSection[] = []
   const lines = content.split(/[\r\n]+/g)
@@ -220,6 +234,7 @@ export function parseAss(content: string, stopAtEvents: boolean = false): ASSSec
 
 const blurRegex = /\\blur(?:[0-9]+\.)?[0-9]+/gm
 
+/** Strip `\\blur` override tags from an ASS document. */
 export function dropBlur(subContent: string): string {
   return subContent.replace(blurRegex, '')
 }
@@ -371,6 +386,7 @@ export function fixPlayRes(subContent: string): string {
 let _hasAlphaBug: boolean | null = null
 let _hasBitmapBug: boolean | null = null
 
+/** Probe canvas `ImageData` and `ImageBitmap` bugs used by the renderer workarounds. */
 export async function testImageBugs(): Promise<{ hasAlphaBug: boolean; hasBitmapBug: boolean }> {
   if (_hasAlphaBug !== null && _hasBitmapBug !== null) {
     return { hasAlphaBug: _hasAlphaBug, hasBitmapBug: _hasBitmapBug }
@@ -430,6 +446,7 @@ export async function testImageBugs(): Promise<{ hasAlphaBug: boolean; hasBitmap
   return { hasAlphaBug: _hasAlphaBug, hasBitmapBug: _hasBitmapBug }
 }
 
+/** Run canvas feature tests. Currently the same as {@linkcode testImageBugs}. */
 export async function runFeatureTests(): Promise<{
   hasAlphaBug: boolean
   hasBitmapBug: boolean
@@ -437,10 +454,12 @@ export async function runFeatureTests(): Promise<{
   return testImageBugs()
 }
 
+/** Last {@linkcode testImageBugs} alpha-bug result, or `null` before the first probe. */
 export function getAlphaBug(): boolean | null {
   return _hasAlphaBug
 }
 
+/** Last {@linkcode testImageBugs} partial-bitmap-bug result, or `null` before the first probe. */
 export function getBitmapBug(): boolean | null {
   return _hasBitmapBug
 }

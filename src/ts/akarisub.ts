@@ -188,15 +188,28 @@ export default class AkariSub extends EventTarget {
   private _lastRenderHeight: number = 0
   private _gpuBitmapImages: Array<{ image: ImageBitmap; x: number; y: number }> = []
 
+  /** Seconds added to video time when sampling the track. */
   public timeOffset: number
+  /** When true, the worker prints libass and renderer logs. */
   public debug: boolean
+  /** Extra scale applied to the subtitle canvas before height limits. */
   public prescaleFactor: number
+  /** Maximum canvas height that still receives `prescaleFactor`. */
   public prescaleHeightLimit: number
+  /** Hard cap on render height; `0` means unlimited. */
   public maxRenderHeight: number
+  /** True while the worker is rendering a demand frame. */
   public busy: boolean = false
+  /** Extra seconds of subtitle lookahead on top of adaptive timing. */
   public renderAhead: number
+  /** Exact timeline frames to prepare ahead of the playhead. */
   public framePrefetch: number
 
+  /**
+   * Create a renderer and start loading the WASM worker.
+   *
+   * @param options Video or canvas target plus optional fonts and track.
+   */
   constructor(options: AkariSubOptions) {
     super()
 
@@ -378,6 +391,7 @@ export default class AkariSub extends EventTarget {
     })
   }
 
+  /** @internal */
   private static async _testImageBugs(): Promise<void> {
     if (AkariSub._hasBitmapBug !== null) return
 
@@ -433,10 +447,12 @@ export default class AkariSub extends EventTarget {
     canvas2.remove()
   }
 
+  /** @internal */
   private static async _test(): Promise<void> {
     await AkariSub._testImageBugs()
   }
 
+  /** @internal */
   private static _getSubtitleTransfers(
     subContent?: string | Uint8Array | ArrayBuffer,
     encryptedSubContent?: EncryptedSubtitleContent
@@ -460,6 +476,7 @@ export default class AkariSub extends EventTarget {
     return transfers
   }
 
+  /** @internal */
   private async _initGPURenderer(): Promise<void> {
     if (isWebGPUSupported()) {
       try {
@@ -521,6 +538,7 @@ export default class AkariSub extends EventTarget {
     this._onCanvasFallback?.()
   }
 
+  /** Active compositor: WebGPU, WebGL2, or Canvas2D. */
   get rendererType(): 'webgpu' | 'webgl2' | 'canvas2d' {
     return this._rendererType
   }
@@ -530,10 +548,12 @@ export default class AkariSub extends EventTarget {
     return this._rendererType === 'webgpu'
   }
 
+  /** True when WebGPU or WebGL2 is compositing bitmaps. */
   get isUsingGPURenderer(): boolean {
     return this._gpuRenderer !== null
   }
 
+  /** @internal */
   private _createCanvas(): HTMLCanvasElement {
     this._canvas = document.createElement('canvas')
     this._canvas.style.display = 'block'
@@ -544,6 +564,12 @@ export default class AkariSub extends EventTarget {
     return this._canvas
   }
 
+  /**
+   * Resize the overlay canvas.
+   *
+   * When `width` or `height` is `0` and a video is attached, the overlay is
+   * fitted to the letterboxed video rectangle.
+   */
   resize(
     width: number = 0,
     height: number = 0,
@@ -619,10 +645,12 @@ export default class AkariSub extends EventTarget {
     })
   }
 
+  /** @internal */
   private _timeupdate(event: Event): void {
     this._syncVideoClock(event)
   }
 
+  /** Attach a video element and subscribe to its playback and resize events. */
   setVideo(video: HTMLVideoElement): void {
     if (video instanceof HTMLVideoElement) {
       this._removeListeners()
@@ -667,6 +695,7 @@ export default class AkariSub extends EventTarget {
     }
   }
 
+  /** Fetch and load an ASS/SSA track from `url`. */
   setTrackByUrl(url: string): void {
     this._bumpRenderEpoch()
     this.sendMessage('setTrackByUrl', { url })
@@ -674,6 +703,7 @@ export default class AkariSub extends EventTarget {
     if (this._ctx) this._ctx.filter = 'none'
   }
 
+  /** Replace the current track with ASS/SSA text or bytes. */
   setTrack(content: string | Uint8Array | ArrayBuffer): void {
     this._bumpRenderEpoch()
     this.sendMessage('setTrack', { content }, AkariSub._getSubtitleTransfers(content))
@@ -693,10 +723,12 @@ export default class AkariSub extends EventTarget {
     if (this._ctx) this._ctx.filter = 'none'
   }
 
+  /** Unload the current track without destroying the renderer. */
   freeTrack(): void {
     this._sendMutatingMessage('freeTrack')
   }
 
+  /** Tell the worker whether playback is paused. Ignored when a video element is attached. */
   setIsPaused(isPaused: boolean): void {
     if (this._video) {
       this._playstate = isPaused
@@ -707,6 +739,7 @@ export default class AkariSub extends EventTarget {
     this.sendMessage('video', { isPaused })
   }
 
+  /** Tell the worker the playback rate. Ignored when a video element is attached. */
   setRate(rate: number): void {
     if (this._video) {
       this.setCurrentTime(this._isVideoPausedForWorker(), this._currentVideoTimeWithOffset(), rate)
@@ -716,6 +749,11 @@ export default class AkariSub extends EventTarget {
     this.sendMessage('video', { rate })
   }
 
+  /**
+   * Push a manual clock sample to the worker.
+   *
+   * Omit fields to keep the last known paused state, time, or rate.
+   */
   setCurrentTime(isPaused?: boolean, currentTime?: number, rate?: number): void {
     this.sendMessage('video', {
       isPaused,
@@ -726,48 +764,59 @@ export default class AkariSub extends EventTarget {
     })
   }
 
+  /** Append a Dialogue event to the loaded track. */
   createEvent(event: Partial<ASSEvent>): void {
     this._sendMutatingMessage('createEvent', { event })
   }
 
+  /** Overwrite the event at `index`. */
   setEvent(event: Partial<ASSEvent>, index: number): void {
     this._sendMutatingMessage('setEvent', { event, index })
   }
 
+  /** Delete the event at `index`. */
   removeEvent(index: number): void {
     this._sendMutatingMessage('removeEvent', { index })
   }
 
+  /** Return a snapshot of every event in the loaded track. */
   async getEvents(): Promise<ASSEvent[]> {
     const data = await this._fetchFromWorker<{ events: ASSEvent[] }>({ target: 'getEvents' })
     return data.events ?? []
   }
 
+  /** Force a style onto every event until {@linkcode disableStyleOverride}. */
   styleOverride(style: Partial<ASSStyle>): void {
     this._sendMutatingMessage('styleOverride', { style })
   }
 
+  /** Clear a style override previously set with {@linkcode styleOverride}. */
   disableStyleOverride(): void {
     this._sendMutatingMessage('disableStyleOverride')
   }
 
+  /** Append a style to the loaded track. */
   createStyle(style: Partial<ASSStyle>): void {
     this._sendMutatingMessage('createStyle', { style })
   }
 
+  /** Overwrite the style at `index`. */
   setStyle(style: Partial<ASSStyle>, index: number): void {
     this._sendMutatingMessage('setStyle', { style, index })
   }
 
+  /** Delete the style at `index`. */
   removeStyle(index: number): void {
     this._sendMutatingMessage('removeStyle', { index })
   }
 
+  /** Return a snapshot of every style in the loaded track. */
   async getStyles(): Promise<ASSStyle[]> {
     const data = await this._fetchFromWorker<{ styles: ASSStyle[] }>({ target: 'getStyles' })
     return data.styles ?? []
   }
 
+  /** Register a font URL or file. Fonts larger than 32 MiB are rejected. */
   async addFont(font: string | Uint8Array): Promise<void> {
     this._bumpRenderEpoch()
     if (typeof font !== 'string' && font.byteLength > AkariSub.MAX_FONT_BYTES) {
@@ -788,10 +837,12 @@ export default class AkariSub extends EventTarget {
     this._syncVideoClock()
   }
 
+  /** Set the default font family used when a style font is missing. */
   setDefaultFont(font: string): void {
     this._sendMutatingMessage('defaultFont', { font })
   }
 
+  /** Return renderer throughput and latency counters. */
   async getStats(): Promise<PerformanceStats> {
     const data = await this._fetchFromWorker<{ stats: Partial<PerformanceStats> }>({ target: 'getStats' })
     const stats = data.stats ?? {}
@@ -820,6 +871,7 @@ export default class AkariSub extends EventTarget {
     }
   }
 
+  /** Zero the worker-side performance counters. */
   async resetStats(): Promise<void> {
     await this._fetchFromWorker({ target: 'resetStats' })
   }
@@ -840,16 +892,19 @@ export default class AkariSub extends EventTarget {
     this._dispatchNextPreparation()
   }
 
+  /** Number of events in the loaded track. */
   async getEventCount(): Promise<number> {
     const data = await this._fetchFromWorker<{ count: number }>({ target: 'getEventCount' })
     return data.count
   }
 
+  /** Number of styles in the loaded track. */
   async getStyleCount(): Promise<number> {
     const data = await this._fetchFromWorker<{ count: number }>({ target: 'getStyleCount' })
     return data.count
   }
 
+  /** @internal */
   private async _sendLocalFont(name: string): Promise<void> {
     let success = false
     try {
@@ -872,6 +927,7 @@ export default class AkariSub extends EventTarget {
     }
   }
 
+  /** @internal */
   private _getLocalFont(data: { font: string }): void {
     try {
       if (navigator?.permissions?.query) {
@@ -888,6 +944,7 @@ export default class AkariSub extends EventTarget {
     }
   }
 
+  /** @internal */
   private _unbusy(
     data: { requestId?: number; renderEpoch?: number; painted?: boolean; images?: RenderImage[] } = {}
   ): void {
@@ -897,6 +954,7 @@ export default class AkariSub extends EventTarget {
     this._finishWorkerSlot()
   }
 
+  /** @internal */
   private _finishWorkerSlot(): void {
     if (this._pendingDemandTimes.length > 0) {
       if (this._pendingDemandTimes.length > 1) {
@@ -921,6 +979,7 @@ export default class AkariSub extends EventTarget {
     this._dispatchReadyWhenFrameBufferFilled()
   }
 
+  /** @internal */
   private _tryPresentPreparedDemand(metadata: DemandMetadata): boolean {
     if (
       !this._frameTimeline ||
@@ -952,6 +1011,7 @@ export default class AkariSub extends EventTarget {
     return true
   }
 
+  /** @internal */
   private _dispatchReadyWhenFrameBufferFilled(): void {
     if (
       !this._frameBufferReadyEvent ||
@@ -968,6 +1028,7 @@ export default class AkariSub extends EventTarget {
     this.dispatchEvent(new CustomEvent(event))
   }
 
+  /** @internal */
   private _startRefreshSampling(): void {
     if (
       this._refreshRafHandle != null ||
@@ -995,6 +1056,7 @@ export default class AkariSub extends EventTarget {
     this._refreshRafHandle = requestAnimationFrame(sample)
   }
 
+  /** @internal */
   private _syncStagedCanvasLayout(stage: HTMLCanvasElement): void {
     stage.style.display = 'block'
     stage.style.position = 'absolute'
@@ -1007,11 +1069,13 @@ export default class AkariSub extends EventTarget {
     stage.style.zIndex = '0'
   }
 
+  /** @internal */
   private _releaseGPUStage(stage: HTMLCanvasElement): void {
     if (this._rendererType !== 'webgpu') return
     ;(this._gpuRenderer as WebGPURenderer | null)?.releaseCanvas(stage)
   }
 
+  /** @internal */
   private _removeStagedCanvas(stage: HTMLCanvasElement): void {
     for (const animation of stage.getAnimations()) animation.cancel()
     this._releaseGPUStage(stage)
@@ -1022,6 +1086,7 @@ export default class AkariSub extends EventTarget {
     this._stageDisplayTimes.delete(stage)
   }
 
+  /** @internal */
   private _currentExactFrameIndex(): number | undefined {
     if (!this._frameTimeline || !this._video) return undefined
     if (!this._isVideoPausedForWorker() && this._lastPresentedFrameIndex != null) {
@@ -1030,6 +1095,7 @@ export default class AkariSub extends EventTarget {
     return presentedFrameIndex(this._frameTimeline, this._video.currentTime)
   }
 
+  /** @internal */
   private _currentExactFrameMediaTime(): number {
     const index = this._currentExactFrameIndex()
     if (index != null && this._frameTimeline) return this._frameTimeline[index]
@@ -1081,6 +1147,7 @@ export default class AkariSub extends EventTarget {
     this._scheduleNextPreparedFrame()
   }
 
+  /** @internal */
   private _activateBaseCanvasAfterGPUWork(renderEpoch: number = this._renderEpoch, presentedIndex?: number): void {
     if (this._rendererType !== 'webgpu' || !(this._gpuRenderer instanceof WebGPURenderer)) {
       this._activateBaseCanvas(presentedIndex)
@@ -1099,6 +1166,7 @@ export default class AkariSub extends EventTarget {
     )
   }
 
+  /** @internal */
   private _disposePreparedFrame(frame: PreparedFrame): void {
     if (this._scheduledPreparedFrame === frame) this._scheduledPreparedFrame = null
     for (const animation of frame.animations ?? []) animation.cancel()
@@ -1113,6 +1181,7 @@ export default class AkariSub extends EventTarget {
     }
   }
 
+  /** @internal */
   private _stagePreparedFrame(index: number, frame: PreparedFrame, allowWebGPU: boolean = true): void {
     if (!this._canvasParent || !frame.bitmap || this._destroyed) return
 
@@ -1191,6 +1260,7 @@ export default class AkariSub extends EventTarget {
     this._scheduleNextPreparedFrame()
   }
 
+  /** @internal */
   private _scheduleNextPreparedFrame(): void {
     if (this._scheduledPreparedFrame || this._destroyed) return
 
@@ -1216,6 +1286,7 @@ export default class AkariSub extends EventTarget {
     if (next?.ready) this._schedulePreparedFrame(next, nextTime)
   }
 
+  /** @internal */
   private _commitPreparedStage(frame: PreparedFrame): void {
     const stage = frame.stage
     if (!stage || !this._stagedCanvases.has(stage) || this._destroyed) return
@@ -1248,6 +1319,7 @@ export default class AkariSub extends EventTarget {
     this._scheduleNextPreparedFrame()
   }
 
+  /** @internal */
   private _schedulePreparedFrame(frame: PreparedFrame, targetDisplayTime: number): void {
     const stage = frame.stage
     frame.targetDisplayTime = targetDisplayTime
@@ -1338,6 +1410,7 @@ export default class AkariSub extends EventTarget {
     )
   }
 
+  /** @internal */
   private _recordPresentationClock(frameIndex: number, mediaTime: number, expectedDisplayTime?: number): void {
     const timeline = this._frameTimeline
     const playbackRate = this._videoPlaybackRateForWorker()
@@ -1387,6 +1460,7 @@ export default class AkariSub extends EventTarget {
     this._scheduleNextPreparedFrame()
   }
 
+  /** @internal */
   private _clearPreparedFrames(preservePresentation: boolean = true): void {
     let preservedStage = preservePresentation ? this._committedStage : null
     if (preservePresentation) {
@@ -1446,6 +1520,7 @@ export default class AkariSub extends EventTarget {
     this._prepareRequests.clear()
   }
 
+  /** @internal */
   private _primePreparedFrames(mediaTime: number): void {
     const timeline = this._frameTimeline
     if (
@@ -1488,6 +1563,7 @@ export default class AkariSub extends EventTarget {
     }
   }
 
+  /** @internal */
   private _dispatchNextPreparation(): void {
     if (this.busy || !this._workerReady || !this._frameTimeline || this.framePrefetch <= 0) return
 
@@ -1513,6 +1589,7 @@ export default class AkariSub extends EventTarget {
     })
   }
 
+  /** @internal */
   private _preparedFrame(data: {
     prepareId: number
     renderEpoch: number
@@ -1583,6 +1660,7 @@ export default class AkariSub extends EventTarget {
     this._finishWorkerSlot()
   }
 
+  /** @internal */
   private _presentPreparedFrame(frame: PreparedFrame, presentationId: number, expectedDisplayTime?: number): void {
     if (!this._activatePresentation(presentationId)) {
       // Scheduling happens on the display clock before RVFC validation. If a
@@ -1657,6 +1735,7 @@ export default class AkariSub extends EventTarget {
     }
   }
 
+  /** @internal */
   private _presentedFrame(data: { presentationId: number; renderEpoch?: number; frameIndex?: number }): void {
     if (
       (data.renderEpoch != null && data.renderEpoch !== this._renderEpoch) ||
@@ -1669,6 +1748,7 @@ export default class AkariSub extends EventTarget {
 
   // Advance the presentation watermark only when a frame enters the pipeline,
   // not when an RVFC is merely queued (avoids starving the in-flight render).
+  /** @internal */
   private _activatePresentation(presentationId: number): boolean {
     if (isStalePresentation(presentationId, this._latestPresentationId)) return false
     this._latestPresentationId = presentationId
@@ -1676,6 +1756,7 @@ export default class AkariSub extends EventTarget {
     return true
   }
 
+  /** @internal */
   private _bumpRenderEpoch(): void {
     this._renderEpoch++
     this._pendingDemandTimes.length = 0
@@ -1684,6 +1765,7 @@ export default class AkariSub extends EventTarget {
     this._prepareForce = true
   }
 
+  /** @internal */
   private _sendMutatingMessage(target: string, data: Record<string, any> = {}, transferable?: Transferable[]): void {
     this._bumpRenderEpoch()
     void this.sendMessage(target, data, transferable).then(() => {
@@ -1691,6 +1773,7 @@ export default class AkariSub extends EventTarget {
     })
   }
 
+  /** @internal */
   private _cancelRVFC(): void {
     this._rvfcGeneration++
 
@@ -1709,6 +1792,7 @@ export default class AkariSub extends EventTarget {
     this._rvfcHandle = null
   }
 
+  /** @internal */
   private _scheduleRVFC(video: HTMLVideoElement | undefined = this._video): void {
     if (!this._onDemandRender || !video || this._destroyed) return
 
@@ -1730,6 +1814,7 @@ export default class AkariSub extends EventTarget {
     )
   }
 
+  /** @internal */
   private _closeRenderImages(images: RenderImage[]): void {
     for (const image of images) {
       if (image.image instanceof ImageBitmap) {
@@ -1738,17 +1823,20 @@ export default class AkariSub extends EventTarget {
     }
   }
 
+  /** @internal */
   private _isVideoPausedForWorker(): boolean {
     if (!this._video) return true
 
     return this._video.paused || this._video.ended || this._playstate
   }
 
+  /** @internal */
   private _videoPlaybackRateForWorker(): number {
     const playbackRate = this._video?.playbackRate ?? 1
     return Number.isFinite(playbackRate) ? playbackRate : 1
   }
 
+  /** @internal */
   private _setVideoClockStateFromEvent(event?: Event): void {
     if (!event || !this._video) return
 
@@ -1771,11 +1859,13 @@ export default class AkariSub extends EventTarget {
     }
   }
 
+  /** @internal */
   private _currentVideoTimeWithOffset(): number {
     const currentTime = this._video?.currentTime ?? 0
     return (Number.isFinite(currentTime) ? currentTime : 0) + this.timeOffset
   }
 
+  /** @internal */
   private _syncVideoClock(event?: Event): void {
     if (!this._video || this._destroyed) return
 
@@ -1816,6 +1906,7 @@ export default class AkariSub extends EventTarget {
     }
   }
 
+  /** @internal */
   private _requestDemandRender(metadata: DemandMetadata): void {
     if (!this._workerReady) {
       this._enqueueDemand(metadata)
@@ -1830,6 +1921,7 @@ export default class AkariSub extends EventTarget {
     }
   }
 
+  /** @internal */
   private _enqueueDemand(metadata: DemandMetadata): void {
     const queue = this._pendingDemandTimes
 
@@ -1849,6 +1941,7 @@ export default class AkariSub extends EventTarget {
     queue.push(metadata)
   }
 
+  /** @internal */
   private _handleRVFC(now: number, metadata: VideoFrameCallbackMetadata): void {
     if (this._destroyed) return
 
@@ -1901,6 +1994,7 @@ export default class AkariSub extends EventTarget {
     this._scheduleRVFC(this._video)
   }
 
+  /** @internal */
   private _observeDemandCompletion(requestId?: number, renderEpoch?: number, painted: boolean = false): void {
     if (requestId == null) return
 
@@ -1919,6 +2013,7 @@ export default class AkariSub extends EventTarget {
     )
   }
 
+  /** @internal */
   private _demandRender(metadata: DemandMetadata): void {
     if (metadata.width !== this._videoWidth || metadata.height !== this._videoHeight) {
       this._videoWidth = metadata.width
@@ -1985,6 +2080,7 @@ export default class AkariSub extends EventTarget {
     })
   }
 
+  /** @internal */
   private _detachOffscreen(): void {
     if (!this._offscreenRender || this._ctx) return
 
@@ -1998,6 +2094,7 @@ export default class AkariSub extends EventTarget {
     this.resize(0, 0, 0, 0, true)
   }
 
+  /** @internal */
   private _reAttachOffscreen(): void {
     if (!this._offscreenRender || !this._ctx) return
 
@@ -2009,6 +2106,7 @@ export default class AkariSub extends EventTarget {
     this.resize(0, 0, 0, 0, true)
   }
 
+  /** @internal */
   private _updateColorSpace(): void {
     ;(this._video as any).requestVideoFrameCallback(() => {
       try {
@@ -2022,6 +2120,7 @@ export default class AkariSub extends EventTarget {
     })
   }
 
+  /** @internal */
   private _verifyColorSpace(data: {
     subtitleColorSpace: SubtitleColorSpace
     videoColorSpace?: WebYCbCrColorSpace | null
@@ -2039,6 +2138,7 @@ export default class AkariSub extends EventTarget {
     }
   }
 
+  /** @internal */
   private _render(data: {
     images: RenderImage[]
     asyncRender: boolean
@@ -2149,6 +2249,7 @@ export default class AkariSub extends EventTarget {
     }
   }
 
+  /** @internal */
   private _renderGPU(data: {
     images: RenderImage[]
     asyncRender: boolean
@@ -2233,6 +2334,7 @@ export default class AkariSub extends EventTarget {
     }
   }
 
+  /** @internal */
   private _ready(): void {
     this._workerReady = true
     this._init()
@@ -2270,10 +2372,12 @@ export default class AkariSub extends EventTarget {
     this.dispatchEvent(new CustomEvent('ready'))
   }
 
+  /** @internal */
   private _partial_ready(): void {
     this.dispatchEvent(new CustomEvent('partial_ready'))
   }
 
+  /** @internal */
   private _trackReady(): void {
     const bufferExactFrames =
       this._workerReady &&
@@ -2291,6 +2395,7 @@ export default class AkariSub extends EventTarget {
     this.dispatchEvent(new CustomEvent('trackReady'))
   }
 
+  /** Send a raw message to the worker. Prefer the typed methods above. */
   async sendMessage(target: string, data: Record<string, any> = {}, transferable?: Transferable[]): Promise<void> {
     if (this._workerReady) {
       this._postWorkerMessage(target, data, transferable)
@@ -2305,6 +2410,7 @@ export default class AkariSub extends EventTarget {
     this._postWorkerMessage(target, data, transferable)
   }
 
+  /** @internal */
   private _postWorkerMessage(target: string, data: Record<string, any> = {}, transferable?: Transferable[]): void {
     if (transferable) {
       this._worker.postMessage({ target, transferable, ...data }, [...transferable])
@@ -2313,6 +2419,7 @@ export default class AkariSub extends EventTarget {
     }
   }
 
+  /** @internal */
   private _fetchFromWorker<T = any>(workerOptions: {
     target: string
     requestId?: number
@@ -2372,10 +2479,12 @@ export default class AkariSub extends EventTarget {
     })
   }
 
+  /** @internal */
   private _console(data: { content: string; command: string }): void {
     ;(console as any)[data.command].apply(console, JSON.parse(data.content))
   }
 
+  /** @internal */
   private _onmessage(event: MessageEvent): void {
     const target = event.data.target
     if (target === 'error') {
@@ -2388,6 +2497,7 @@ export default class AkariSub extends EventTarget {
     }
   }
 
+  /** @internal */
   private _error(err: Error | ErrorEvent | string): Error {
     const error =
       err instanceof Error
@@ -2404,6 +2514,7 @@ export default class AkariSub extends EventTarget {
     return error
   }
 
+  /** @internal */
   private _removeListeners(): void {
     this._cancelRVFC()
 
@@ -2427,6 +2538,12 @@ export default class AkariSub extends EventTarget {
     }
   }
 
+  /**
+   * Tear down the overlay, GPU renderer, and worker.
+   *
+   * @param err Optional error to report through the `error` event.
+   * @returns The same error object when `err` was passed, otherwise `undefined`.
+   */
   destroy(err?: Error | string): Error | undefined {
     const error = err ? this._error(err) : undefined
 
