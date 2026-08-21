@@ -2,14 +2,14 @@
   "name": "akarisub",
   "version": "0.2.2",
   "description": "libass Subtitle Renderer and Parser library for browsers",
-  "main": "precision.js",
-  "module": "precision.js",
+  "main": "dist/index.js",
+  "module": "dist/index.js",
   "types": "dist/ts/index.d.ts",
   "type": "module",
   "exports": {
     ".": {
-      "import": "./precision.js",
-      "require": "./precision.js",
+      "import": "./dist/index.js",
+      "require": "./dist/index.js",
       "types": "./dist/ts/index.d.ts"
     },
     "./worker": {
@@ -24,7 +24,6 @@
     "dist/akarisub*",
     "dist/ts",
     "dist/index.js",
-    "precision.js",
     "src/ts"
   ],
   "scripts": {
@@ -44,8 +43,7 @@
   "keywords": [
     "libass",
     "subtitle",
-    "wasm",
-    "emscripten"
+    "wasm"
   ],
   "author": "altqx",
   "contributors": [
