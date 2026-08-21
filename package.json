@@ -43,7 +43,8 @@
   "keywords": [
     "libass",
     "subtitle",
-    "wasm"
+    "wasm",
+    "emscripten"
   ],
   "author": "altqx",
   "contributors": [
