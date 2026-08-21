@@ -1,8 +1,8 @@
-
 export type {
   ASSEvent,
   ASSStyle,
   AkariSubOptions,
+  FrameTimeline,
   PerformanceStats,
   ASSEventCallback,
   ASSStyleCallback,
@@ -36,4 +36,11 @@ export {
   getColorSpaceFilterUrl
 } from './ts/utils'
 
+export { getWasmUrl, getWasmGlueUrl, getDefaultFontUrl } from './ts/wasm'
+
+export { WebGPURenderer, isWebGPUSupported } from './ts/webgpu-renderer'
+
+export { WebGL2Renderer, isWebGL2Supported } from './ts/webgl2-renderer'
+
+export { default } from './ts/akarisub'
 export { default as AkariSub } from './ts/akarisub'

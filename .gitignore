@@ -14,11 +14,10 @@ lib/expat/xmlwf/xmlwf
 *.tgz
 venv/
 node_modules/
+/pkg
+/dist
 build/lib/*
-dist/js
-dist/ts
-dist/libraries
-dist/license
+build/prefix
 test
 tests/akarisub-test/
 .pnpm-store

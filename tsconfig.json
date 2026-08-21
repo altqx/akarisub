@@ -11,13 +11,13 @@
     "declaration": true,
     "declarationMap": true,
     "sourceMap": true,
-    "outDir": "./dist/ts",
+    "outDir": "./dist",
     "rootDir": "./src",
     "resolveJsonModule": true,
     "allowSyntheticDefaultImports": true,
     "noEmit": false,
     "types": ["emscripten"]
   },
-  "include": ["src/**/*.ts"],
-  "exclude": ["node_modules", "dist", "lib"]
+  "include": ["src/wrapper.ts", "src/index.ts", "src/ts/worker.ts"],
+  "exclude": ["node_modules", "pkg", "dist", "src/**/*.test.ts"]
 }

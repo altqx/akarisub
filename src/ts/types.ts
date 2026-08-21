@@ -127,8 +127,12 @@ export interface AkariSubOptions {
   dropAllBlur?: boolean
   /** Clamp \\pos values to script resolution (default: false) */
   clampPos?: boolean
+  /** Optional worker script URL. Defaults to the package worker module URL. */
   workerUrl?: string
+  /** Optional WASM binary URL. Defaults to the package WASM URL resolved from import.meta.url. */
   wasmUrl?: string
+  /** Optional WASM glue script URL. Defaults to the package glue URL resolved from import.meta.url. */
+  glueUrl?: string
   subUrl?: string
   subContent?: string | Uint8Array | ArrayBuffer
   /** Encrypted subtitle content decrypted inside the worker before loading into libass */
@@ -239,6 +243,7 @@ export type WorkerOutboundMessage =
 export interface WorkerInitMessage {
   target: 'init'
   wasmUrl: string
+  glueUrl?: string
   asyncRender: boolean
   fullTrackWarmup: boolean
   blockingFullTrackWarmup: boolean

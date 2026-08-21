@@ -1,38 +1,37 @@
 {
   "name": "akarisub",
-  "version": "0.2.2",
+  "version": "1.0.0",
   "description": "libass Subtitle Renderer and Parser library for browsers",
   "main": "dist/index.js",
   "module": "dist/index.js",
-  "types": "dist/ts/index.d.ts",
+  "types": "dist/index.d.ts",
   "type": "module",
   "exports": {
     ".": {
+      "types": "./dist/index.d.ts",
       "import": "./dist/index.js",
       "require": "./dist/index.js",
-      "types": "./dist/ts/index.d.ts"
+      "default": "./dist/index.js"
     },
-    "./worker": {
-      "import": "./dist/akarisub-worker.js"
-    },
-    "./worker.wasm": "./dist/akarisub-worker.wasm"
+    "./pkg": {
+      "import": "./pkg/akarisub.js",
+      "default": "./pkg/akarisub.js"
+    }
   },
   "files": [
-    "THIRD_PARTY_NOTICES.md",
-    "dist/COPYRIGHT",
-    "dist/default.woff2",
-    "dist/akarisub*",
-    "dist/ts",
-    "dist/index.js",
-    "src/ts"
+    "dist",
+    "pkg",
+    "src/wrapper.ts",
+    "assets",
+    "THIRD_PARTY_NOTICES.md"
   ],
   "scripts": {
     "build:wasm": "make worker",
     "build:ts": "tsc",
-    "build:bundle": "bun build.ts",
-    "build": "bun run license:third-party && bun run build:wasm && bun run build:ts && bun run build:bundle",
+    "build": "bun run license:third-party && bun run build:wasm && bun run build:ts",
     "license:third-party": "bun build/generate-third-party-notices.mjs",
-    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf pkg dist",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "bun test ./tests",
     "format": "bun run prettier . --write"
   },
@@ -62,5 +61,8 @@
     "@webgpu/types": "^0.1.71",
     "prettier": "^3.9.6",
     "typescript": "^7.0.2"
+  },
+  "engines": {
+    "node": ">=18"
   }
 }

@@ -1,8 +1,5 @@
 /// <reference lib="webworker" />
 
-// @ts-ignore - WASM module is aliased during build
-import WASM from 'wasm'
-
 import type {
   ASSEvent,
   ASSStyle,
@@ -13,6 +10,7 @@ import type {
   WorkerInboundMessage
 } from './types'
 import { parseAss, dropBlur, fixPlayRes, libassYCbCrMap } from './utils'
+import { glueUrlFromWasmUrl } from './wasm'
 import { compensatedMediaTime, isStalePresentation, updateTimingCompensation } from './timing'
 
 interface WorkerMetrics {
@@ -2152,11 +2150,21 @@ self.init = async (data: any): Promise<void> => {
     self.fetch = _fetch
   }
 
-  const loadWasm = (wasmUrl: string): Promise<AkariSubModule> => {
+  const loadWasm = async (wasmUrl: string, glueUrl?: string): Promise<AkariSubModule> => {
+    const jsGlueUrl = glueUrl || glueUrlFromWasmUrl(wasmUrl)
+    const glue = (await import(/* @vite-ignore */ jsGlueUrl)) as {
+      default: (opts?: Record<string, unknown>) => Promise<AkariSubModule>
+    }
+    const WASM = glue.default
     setWasmUrl(wasmUrl)
-    return WASM({
-      wasm: !(WebAssembly as any).instantiateStreaming ? (read_(wasmUrl, true) as ArrayBuffer) : undefined
-    }).finally(restoreFetch)
+    try {
+      return await WASM({
+        locateFile: (path: string) => (path.endsWith('.wasm') ? wasmUrl : path),
+        wasm: !(WebAssembly as any).instantiateStreaming ? (read_(wasmUrl, true) as ArrayBuffer) : undefined
+      })
+    } finally {
+      restoreFetch()
+    }
   }
 
   const onWasmLoaded = async (Module: AkariSubModule): Promise<void> => {
@@ -2504,7 +2512,7 @@ self.init = async (data: any): Promise<void> => {
     postMessage({ target: 'verifyColorSpace', subtitleColorSpace })
   }
 
-  loadWasm(data.wasmUrl)
+  loadWasm(data.wasmUrl, data.glueUrl)
     .then(onWasmLoaded)
     .catch((e) => {
       console.error('[AkariSub] WASM loading failed:', e)

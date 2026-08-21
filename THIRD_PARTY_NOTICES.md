@@ -17,8 +17,8 @@ Regenerate it with `bun run license:third-party` after dependency, submodule, fo
 | fontconfig | 2.18.3 (lib/fontconfig) | HPND-style license with additional notices | Compiled into the WebAssembly worker for font fallback and matching. |
 | HarfBuzz | 14.3.0 (lib/harfbuzz) | Old MIT | Compiled into the WebAssembly worker for text shaping. |
 | libass | d3941ab (lib/libass) | ISC | Compiled into the WebAssembly worker for ASS/SSA subtitle rendering. |
-| Liberation Sans | dist/default.woff2 (dist/default.woff2) | OFL-1.1 | Bundled fallback font asset used by default renderer options. |
-| Emscripten runtime | 6.0.6 (dist/js/akarisub-worker.js) | MIT OR NCSA | Generated JavaScript runtime wrapper used by the WebAssembly worker. |
+| Liberation Sans | assets/default.woff2 (assets/default.woff2) | OFL-1.1 | Bundled fallback font asset used by default renderer options. |
+| Emscripten runtime | 6.0.6 (pkg/akarisub.js) | MIT OR NCSA | Generated JavaScript runtime wrapper used by the WebAssembly worker. |
 
 ## Bun/npm Packages
 

@@ -36,6 +36,7 @@ import {
   subtitleTimeForFrame,
   updateTimingCompensation
 } from './timing'
+import { getDefaultFontUrl, getWasmGlueUrl, getWasmUrl } from './wasm'
 
 type AnyGPURenderer = WebGPURenderer | WebGL2Renderer
 
@@ -102,8 +103,7 @@ const isLikelyWebKit = (): boolean => {
  * ```typescript
  * const renderer = new AkariSub({
  *   video: document.querySelector('video'),
- *   subUrl: '/subtitles/example.ass',
- *   workerUrl: '/akarisub-worker.js'
+ *   subUrl: '/subtitles/example.ass'
  * });
  *
  * // Later, cleanup
@@ -308,7 +308,9 @@ export default class AkariSub extends EventTarget {
       this._pendingDemandTimes.length = 0
     }
 
-    this._worker = new Worker(options.workerUrl || 'akarisub-worker.js')
+    this._worker = options.workerUrl
+      ? new Worker(options.workerUrl, { type: 'module' })
+      : new Worker(new URL('./worker.js', import.meta.url), { type: 'module' })
     this._worker.onmessage = (e) => this._onmessage(e)
     this._worker.onerror = (e) => this._error(e)
 
@@ -317,7 +319,8 @@ export default class AkariSub extends EventTarget {
       const initialPlaybackRate = this._videoPlaybackRateForWorker()
       const initMessage = {
         target: 'init',
-        wasmUrl: options.wasmUrl ?? 'akarisub-worker.wasm',
+        wasmUrl: options.wasmUrl ?? getWasmUrl(),
+        glueUrl: options.glueUrl ?? getWasmGlueUrl(),
         asyncRender: shouldUseAsyncRender,
         fullTrackWarmup: options.fullTrackWarmup ?? false,
         blockingFullTrackWarmup: options.blockingFullTrackWarmup ?? false,
@@ -336,7 +339,7 @@ export default class AkariSub extends EventTarget {
         subContent: options.subContent || null,
         encryptedSubContent: options.encryptedSubContent || null,
         fonts: options.fonts || [],
-        availableFonts: options.availableFonts || { 'liberation sans': './default.woff2' },
+        availableFonts: options.availableFonts || { 'liberation sans': getDefaultFontUrl() },
         fallbackFonts: options.fallbackFonts || ['liberation sans'],
         debug: this.debug,
         targetFps: options.targetFps || 24,

@@ -66,7 +66,7 @@ const runtimeComponents = [
   },
   {
     name: 'Liberation Sans',
-    source: 'dist/default.woff2',
+    source: 'assets/default.woff2',
     license: 'OFL-1.1',
     use: 'Bundled fallback font asset used by default renderer options.',
     licenseFile: 'third_party/liberation-fonts/LICENSE',
@@ -74,7 +74,7 @@ const runtimeComponents = [
   },
   {
     name: 'Emscripten runtime',
-    source: 'dist/js/akarisub-worker.js',
+    source: 'pkg/akarisub.js',
     license: 'MIT OR NCSA',
     use: 'Generated JavaScript runtime wrapper used by the WebAssembly worker.',
     version: readMiseToolVersion('emsdk'),

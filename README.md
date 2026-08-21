@@ -49,10 +49,10 @@ deno add jsr:@altq/akarisub
 
 ## Usage
 
-By default all you need to do is copy the files from the `dist/` folder of the repository into the same folder as where your JS runs, then do:
+In most bundler-based projects, no manual worker setup is required. AkariSub resolves the WASM glue and binary relative to the package module URL, so bundlers such as Vite, webpack, and Rollup can emit the assets automatically.
 
 ```js
-import AkariSub from './index.js'
+import AkariSub from 'akarisub'
 
 const renderer = new AkariSub({
   video: document.querySelector('video'),
@@ -60,29 +60,21 @@ const renderer = new AkariSub({
 })
 ```
 
-`Note:` while the `dist/` folder includes a UMD dist it still uses modern syntax. If you want backwards compatibility with older browsers I recommend you run it tru babel.
+If your app serves package files in a way that does not expose those emitted assets to the browser, you can still provide the public fallback by copying the WASM file and its JS glue to `/akarisub/`:
 
-If you use a bundler like Vite, you can instead do:
-
-```js
-import AkariSub from 'akarisub'
-import workerUrl from 'akarisub/worker?url'
-import wasmUrl from 'akarisub/worker.wasm?url'
-
-const renderer = new AkariSub({
-  video: document.querySelector('video'),
-  subContent: subtitleString,
-  workerUrl,
-  wasmUrl
-})
+```bash
+mkdir -p public/akarisub
+cp node_modules/akarisub/pkg/akarisub.wasm node_modules/akarisub/pkg/akarisub.js public/akarisub/
 ```
+
+The worker is created from the package module URL. `workerUrl`, `wasmUrl`, and `glueUrl` remain in the option type for overrides and do not need to be set in bundler-based apps.
 
 ## Using only with canvas
 
 You're also able to use it without any video. However, that requires you to set the time the subtitles should render at yourself. Disable `onDemandRender` (it relies on video frame callbacks) and drive the clock manually:
 
 ```js
-import AkariSub from './index.js'
+import AkariSub from 'akarisub'
 
 const renderer = new AkariSub({
   canvas: document.querySelector('canvas'),
@@ -252,13 +244,14 @@ The default options are best, and automatically fallback to the next fastest opt
 | `dropAllBlur`         | boolean                              | `false`                                  | Drop all blur effects (~10x performance gain)                                                                                                              |
 | `clampPos`            | boolean                              | `false`                                  | Clamp `\pos` values to script resolution                                                                                                                   |
 | `renderAhead`         | number                               | `0`                                      | Optional extra seconds to render ahead, in addition to adaptive timing; also applies when `onDemandRender` is disabled                                     |
-| `workerUrl`           | string                               | `'akarisub-worker.js'`                   | URL to the worker script                                                                                                                                   |
-| `wasmUrl`             | string                               | `'akarisub-worker.wasm'`                 | URL to the WASM binary                                                                                                                                     |
+| `workerUrl`           | string                               | package worker URL                       | Optional worker script URL. Defaults to the package worker module URL                                                                                      |
+| `wasmUrl`             | string                               | package WASM URL                         | Optional WASM binary URL. Defaults to the URL resolved from `import.meta.url`                                                                              |
+| `glueUrl`             | string                               | package glue URL                         | Optional WASM glue script URL. Defaults to the URL resolved from `import.meta.url`                                                                         |
 | `subUrl`              | string                               | -                                        | URL of the subtitle file to play                                                                                                                           |
 | `subContent`          | string \| Uint8Array \| ArrayBuffer  | -                                        | Content of the subtitle file to play                                                                                                                       |
 | `encryptedSubContent` | EncryptedSubtitleContent             | -                                        | AES-GCM encrypted subtitle payload, decrypted inside the worker                                                                                            |
 | `fonts`               | (string \| Uint8Array)[]             | -                                        | Array of font URLs or Uint8Arrays to force load                                                                                                            |
-| `availableFonts`      | Record<string, string \| Uint8Array> | `{'liberation sans': './default.woff2'}` | Available fonts map (lowercase name → URL/data)                                                                                                            |
+| `availableFonts`      | Record<string, string \| Uint8Array> | liberation sans from package assets      | Available fonts map (lowercase name → URL/data)                                                                                                            |
 | `fallbackFonts`       | string[]                             | `['liberation sans']`                    | Fallback font families in order, used for the fontconfig cascade                                                                                           |
 | `useLocalFonts`       | boolean                              | `true`                                   | Use Local Font Access API if available                                                                                                                     |
 | `libassMemoryLimit`   | number                               | `128`                                    | libass bitmap cache memory limit in MiB                                                                                                                    |
@@ -433,10 +426,10 @@ git clone --recursive https://github.com/altqx/akarisub.git
 ```bash
 mise install      # installs emsdk, bun, cmake
 bun install       # JS dependencies
-make              # builds the static libs (fribidi, freetype, harfbuzz, fontconfig, libass, ...) and the WASM worker
-bun run build     # builds the WASM worker, TypeScript declarations and JS bundles
+make              # builds the static libs (fribidi, freetype, harfbuzz, fontconfig, libass, ...) and the WASM glue
+bun run build     # builds the WASM glue and TypeScript
 ```
 
 - If on macOS with libtool from brew, `LIBTOOLIZE=glibtoolize make`
-- Incremental rebuilds of the worker only: `bun run build:wasm` (or `make worker`)
-- Artifacts are in `dist/`
+- Incremental rebuilds of the WASM glue only: `bun run build:wasm` (or `make worker`)
+- Artifacts are in `pkg/` (WASM glue and binary) and `dist/` (TypeScript)

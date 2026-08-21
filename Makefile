@@ -1,5 +1,5 @@
 BASE_DIR:=$(dir $(realpath $(firstword $(MAKEFILE_LIST))))
-DIST_DIR:=$(BASE_DIR)dist/libraries
+DIST_DIR:=$(BASE_DIR)build/prefix
 
 # Keep generated archives and linker inputs stable across hosts.
 export LC_ALL := C
@@ -28,7 +28,7 @@ export CXXFLAGS = $(CFLAGS)
 export PKG_CONFIG_PATH = $(DIST_DIR)/lib/pkgconfig
 export EM_PKG_CONFIG_PATH = $(PKG_CONFIG_PATH)
 
-WORKER_NAME = akarisub-worker
+WORKER_NAME = akarisub
 WORKER_ARGS = \
 	$(WASM_FEATURES)
 
@@ -224,7 +224,7 @@ LIBASS_DEPS = \
 	$(DIST_DIR)/lib/libfontconfig.a \
 	$(DIST_DIR)/lib/libass.a
 
-dist: $(LIBASS_DEPS) dist/js/$(WORKER_NAME).js
+dist: $(LIBASS_DEPS) pkg/$(WORKER_NAME).js
 
 # Dist Files https://github.com/emscripten-core/emscripten/blob/main/src/settings.js
 
@@ -260,8 +260,8 @@ COMPAT_ARGS = \
 		-s MIN_CHROME_VERSION=114 \
 		-s MIN_SAFARI_VERSION=160400
 
-dist/js/$(WORKER_NAME).js: src/AkariSub.cpp src/ts/worker.ts src/pre-worker.js src/post-worker.js $(LIBASS_DEPS)
-	mkdir -p dist/js
+pkg/$(WORKER_NAME).js: src/AkariSub.cpp src/pre-worker.js src/post-worker.js $(LIBASS_DEPS)
+	mkdir -p pkg
 	em++ src/AkariSub.cpp $(LIBASS_DEPS) \
 		-O3 \
 		-I$(DIST_DIR)/include/freetype2 \
@@ -288,19 +288,15 @@ dist/js/$(WORKER_NAME).js: src/AkariSub.cpp src/ts/worker.ts src/pre-worker.js s
 
 .PHONY: worker
 
-worker: dist/js/akarisub-worker.js
-
-dist/js/akarisub.js: src/akarisub.js
-	mkdir -p dist/js
-	cp src/akarisub.js $@
+worker: pkg/akarisub.js
 
 clean: clean-dist clean-libs clean-akarisub
 
 clean-dist:
-	rm -frv dist/libraries/*
-	rm -frv dist/js/*
+	rm -frv build/prefix/*
+	rm -frv pkg
 clean-libs:
-	rm -frv dist/libraries build/lib
+	rm -frv build/prefix build/lib
 clean-akarisub:
 	cd src && git clean -fdX
 

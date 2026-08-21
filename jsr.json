@@ -1,20 +1,17 @@
 {
   "name": "@altq/akarisub",
-  "version": "0.2.2",
+  "version": "1.0.0",
   "license": "MIT",
   "exports": "./src/index.ts",
   "publish": {
-    "include": [
-      "src/",
-      "dist/COPYRIGHT",
-      "dist/akarisub-worker.js",
-      "dist/akarisub-worker.wasm",
-      "dist/akarisub.umd.js",
-      "dist/default.woff2",
-      "dist/index.js",
-      "LICENSE",
-      "README.md",
-      "THIRD_PARTY_NOTICES.md"
+    "exclude": [
+      "!./pkg",
+      "dist/",
+      "lib/",
+      "build/lib/",
+      "build/prefix/",
+      "tests/",
+      "node_modules/"
     ]
   }
 }

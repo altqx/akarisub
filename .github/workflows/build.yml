@@ -81,7 +81,7 @@ jobs:
       - name: Setup Emscripten
         uses: emscripten-core/setup-emsdk@v16
         with:
-          version: 6.0.0
+          version: 6.0.6
           actions-cache-folder: emsdk-cache
 
       - name: Cache Bun dependencies
@@ -101,18 +101,18 @@ jobs:
       - name: Test TypeScript
         run: bun test ./tests
 
-      - name: Build WASM and TypeScript bundles
+      - name: Build WASM and TypeScript
         run: bun run build
 
       - name: Verify reproducible clean WASM build
         run: |
-          cp dist/akarisub-worker.wasm /tmp/akarisub-worker.first.wasm
+          cp pkg/akarisub.wasm /tmp/akarisub.first.wasm
           cp -a . /tmp/akarisub-repro
           cd /tmp/akarisub-repro
           make clean
           bun run build
-          cmp /tmp/akarisub-worker.first.wasm dist/akarisub-worker.wasm
-          if strings dist/akarisub-worker.wasm | grep -F "$GITHUB_WORKSPACE"; then
+          cmp /tmp/akarisub.first.wasm pkg/akarisub.wasm
+          if strings pkg/akarisub.wasm | grep -F "$GITHUB_WORKSPACE"; then
             echo "WASM contains its checkout path" >&2
             exit 1
           fi
@@ -123,6 +123,7 @@ jobs:
           name: akarisub-dist
           path: |
             dist/
+            pkg/
 
   publish:
     needs: [check-version, build]
@@ -138,7 +139,6 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: akarisub-dist
-          path: dist
 
       - name: Setup Deno
         uses: denoland/setup-deno@v2
@@ -163,23 +163,7 @@ jobs:
           writeFileSync('jsr.json', `${JSON.stringify(jsr, null, 2)}\n`)
           EOF
 
-      - name: Prepare JSR publish directory
-        run: |
-          rm -rf jsr-publish
-          mkdir -p jsr-publish/dist
-          cp jsr.json README.md LICENSE jsr-publish/
-          cp -r src jsr-publish/
-          cp \
-            dist/COPYRIGHT \
-            dist/akarisub-worker.js \
-            dist/akarisub-worker.wasm \
-            dist/akarisub.umd.js \
-            dist/default.woff2 \
-            dist/index.js \
-            jsr-publish/dist/
-
       - name: Publish to JSR
-        working-directory: jsr-publish
         run: |
           jsr_name=$(node -p "require('./jsr.json').name")
           jsr_version=$(node -p "require('./jsr.json').version")

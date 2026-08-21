@@ -6,8 +6,8 @@
  * @packageDocumentation
  */
 
-export { default } from './ts/akarisub'
-export { default as AkariSub } from './ts/akarisub'
+export { default } from './wrapper'
+export { default as AkariSub } from './wrapper'
 
 export type {
   ASSEvent,
@@ -41,9 +41,12 @@ export {
   runFeatureTests,
   getAlphaBug,
   getBitmapBug,
-  getColorSpaceFilterUrl
-} from './ts/utils'
-
-export { WebGPURenderer, isWebGPUSupported } from './ts/webgpu-renderer'
-
-export { WebGL2Renderer, isWebGL2Supported } from './ts/webgl2-renderer'
+  getColorSpaceFilterUrl,
+  getWasmUrl,
+  getWasmGlueUrl,
+  getDefaultFontUrl,
+  WebGPURenderer,
+  isWebGPUSupported,
+  WebGL2Renderer,
+  isWebGL2Supported
+} from './wrapper'

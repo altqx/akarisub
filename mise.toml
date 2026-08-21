@@ -15,20 +15,16 @@ description = "Make dependencies"
 run = "make"
 
 [tasks.build]
-description = "Build everything (WASM + TypeScript + bundle)"
+description = "Build WASM and TypeScript"
 run = "bun run build"
 
 [tasks."build:wasm"]
-description = "Build WASM worker only"
+description = "Build WASM glue only"
 run = "make worker"
 
 [tasks."build:ts"]
 description = "Build TypeScript only"
 run = "bun run build:ts"
-
-[tasks."build:bundle"]
-description = "Bundle the library"
-run = "bun build.ts"
 
 [tasks.typecheck]
 description = "Run TypeScript type checking"
