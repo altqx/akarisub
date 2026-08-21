@@ -113,6 +113,7 @@ const isLikelyWebKit = (): boolean => {
 export default class AkariSub extends EventTarget {
   private static readonly MAX_PENDING_DEMANDS = 3
   private static readonly MAX_FONT_BYTES = 32 * 1024 * 1024
+  private static readonly AUTHORITATIVE_DEADLINE_TOLERANCE_MS = 0.25
 
   private static _hasAlphaBug: boolean | null = null
   private static _hasBitmapBug: boolean | null = null
@@ -1565,14 +1566,32 @@ export default class AkariSub extends EventTarget {
     const { bitmap, width, height, stage } = frame
     if (stage) {
       if (!frame.committed || this._committedStage !== stage) {
-        for (const animation of frame.animations ?? []) {
-          try {
-            animation.finish()
-          } catch {
-            animation.cancel()
-          }
+        // Prediction only gets the prepared layer onto the compositor ahead of
+        // time. Validate its swap against this frame's authoritative RVFC
+        // deadline: finishing the animation here turns it into a main-thread
+        // style commit, which can miss the video's refresh by one frame.
+        const authoritativeDisplayTime = Number.isFinite(expectedDisplayTime)
+          ? Math.max(expectedDisplayTime!, performance.now() + 0.001)
+          : undefined
+        const alreadyAuthoritative =
+          authoritativeDisplayTime != null &&
+          frame.scheduled &&
+          !!frame.animations?.length &&
+          Number.isFinite(frame.targetDisplayTime) &&
+          Math.abs(frame.targetDisplayTime! - authoritativeDisplayTime) <= AkariSub.AUTHORITATIVE_DEADLINE_TOLERANCE_MS
+        if (authoritativeDisplayTime != null && !alreadyAuthoritative) {
+          const previousAnimations = frame.animations
+          frame.animations = undefined
+          frame.scheduled = false
+          if (this._scheduledPreparedFrame === frame) this._scheduledPreparedFrame = null
+          for (const animation of previousAnimations ?? []) animation.cancel()
+          stage.style.opacity = '0'
+          this._schedulePreparedFrame(frame, authoritativeDisplayTime)
+          if (!frame.scheduled) this._commitPreparedStage(frame)
+        } else if (authoritativeDisplayTime == null) {
+          for (const animation of frame.animations ?? []) animation.cancel()
+          this._commitPreparedStage(frame)
         }
-        this._commitPreparedStage(frame)
       }
       this._stageDisplayTimes.set(
         stage,

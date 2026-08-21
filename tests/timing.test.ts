@@ -647,13 +647,10 @@ describe('subtitle timing compensation', () => {
     expect(calls).toEqual(['activate:14'])
   })
 
-  test('finalizes the prepared swap immediately when its matching RVFC arrives', () => {
+  test('retimes a speculative compositor swap to the authoritative RVFC deadline', () => {
     const renderer = Object.create(AkariSub.prototype) as any
     const calls: string[] = []
-    const speculativeAnimation = {
-      finish: () => calls.push('finish-speculative'),
-      cancel: () => calls.push('cancel-speculative')
-    }
+    const speculativeAnimation = { cancel: () => calls.push('cancel-speculative') }
     const stage = { style: { opacity: '0' } }
     const frame: any = {
       width: 1920,
@@ -664,22 +661,64 @@ describe('subtitle timing compensation', () => {
       animations: [speculativeAnimation]
     }
     const expectedDisplayTime = performance.now() + 100
+    let scheduledDisplayTime = Number.NaN
 
     Object.assign(renderer, {
       _activatePresentation: () => true,
       _scheduledPreparedFrame: frame,
       _committedStage: null,
       _stageDisplayTimes: new Map(),
-      _schedulePreparedFrame: () => calls.push('schedule'),
-      _commitPreparedStage: (committedFrame: unknown) => {
-        expect(committedFrame).toBe(frame)
-        calls.push('commit')
+      _schedulePreparedFrame: (scheduledFrame: unknown, targetDisplayTime: number) => {
+        expect(scheduledFrame).toBe(frame)
+        scheduledDisplayTime = targetDisplayTime
+        frame.scheduled = true
+        calls.push('schedule-authoritative')
       }
     })
 
     renderer._presentPreparedFrame(frame, 14, expectedDisplayTime)
 
-    expect(calls).toEqual(['finish-speculative', 'commit'])
+    expect(calls).toEqual(['cancel-speculative', 'schedule-authoritative'])
+    expect(scheduledDisplayTime).toBe(expectedDisplayTime)
+    expect(frame.animations).toBeUndefined()
+    expect(frame.scheduled).toBe(true)
+    expect(renderer._scheduledPreparedFrame).toBeNull()
+    expect(renderer._stageDisplayTimes.get(stage)).toBe(expectedDisplayTime)
+  })
+
+  test('keeps an already precise compositor swap armed through its RVFC', () => {
+    const renderer = Object.create(AkariSub.prototype) as any
+    const calls: string[] = []
+    const expectedDisplayTime = performance.now() + 100
+    const animation = { cancel: () => calls.push('cancel') }
+    const stage = { style: { opacity: '0' } }
+    const frame: any = {
+      width: 1920,
+      height: 1080,
+      stage,
+      ready: true,
+      scheduled: true,
+      targetDisplayTime: expectedDisplayTime + 0.1,
+      animations: [animation]
+    }
+
+    Object.assign(renderer, {
+      _activatePresentation: () => true,
+      _scheduledPreparedFrame: frame,
+      _committedStage: null,
+      _stageDisplayTimes: new Map([[stage, frame.targetDisplayTime]]),
+      _schedulePreparedFrame: () => {
+        calls.push('schedule')
+        frame.scheduled = true
+      }
+    })
+
+    renderer._presentPreparedFrame(frame, 14, expectedDisplayTime)
+
+    expect(calls).toEqual([])
+    expect(frame.animations).toEqual([animation])
+    expect(frame.scheduled).toBe(true)
+    expect(renderer._scheduledPreparedFrame).toBe(frame)
     expect(renderer._stageDisplayTimes.get(stage)).toBe(expectedDisplayTime)
   })
 
