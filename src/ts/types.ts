@@ -469,6 +469,8 @@ export interface WorkerInitMessage {
   target: 'init'
   wasmUrl: string
   glueUrl?: string
+  fallbackWasmUrl?: string
+  fallbackGlueUrl?: string
   canvasColorSpace?: 'srgb' | 'display-p3' | 'rec2020'
   hdr?: boolean
   wasmSimd?: boolean

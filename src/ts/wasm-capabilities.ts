@@ -26,7 +26,7 @@ export function supportsWasmSimd(): boolean {
 /** True when SharedArrayBuffer + Atomics are usable (COOP/COEP isolated pages). */
 export function supportsWasmThreads(): boolean {
   if (threadsSupported !== null) return threadsSupported
-  const isolated = typeof crossOriginIsolated === 'undefined' || crossOriginIsolated
+  const isolated = typeof crossOriginIsolated !== 'undefined' && crossOriginIsolated
   threadsSupported =
     isolated &&
     typeof SharedArrayBuffer !== 'undefined' &&

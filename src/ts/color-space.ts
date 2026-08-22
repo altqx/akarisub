@@ -33,6 +33,11 @@ export type ColorMatrix3 = readonly [
 
 export const IDENTITY_COLOR_MATRIX: ColorMatrix3 = [1, 0, 0, 0, 1, 0, 0, 0, 1]
 
+/** Column-major upload of a row-major {@linkcode ColorMatrix3} for WebGL (`transpose` must be false). */
+export function colorMatrix3ColumnMajor(matrix: ColorMatrix3): Float32Array {
+  return new Float32Array([matrix[0], matrix[3], matrix[6], matrix[1], matrix[4], matrix[7], matrix[2], matrix[5], matrix[8]])
+}
+
 /** Map from HTMLVideoElement / VideoFrame matrix names to {@linkcode WebYCbCrColorSpace}. */
 export const webYCbCrMap: Record<string, WebYCbCrColorSpace> = {
   bt709: 'BT709',
@@ -144,19 +149,25 @@ export function getColorSpaceFilterUrl(
   return `url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg'><filter id='f'><feColorMatrix type='matrix' values='${matrix} 0 0 0 0 0 1 0'/></filter></svg>#f")`
 }
 
+function createProbeCanvas(): HTMLCanvasElement | OffscreenCanvas | null {
+  if (typeof document !== 'undefined') return document.createElement('canvas')
+  if (typeof OffscreenCanvas !== 'undefined') return new OffscreenCanvas(1, 1)
+  return null
+}
+
 function probeCanvasColorSpaces(): void {
   if (supportedCanvasColorSpaces) return
   supportedCanvasColorSpaces = new Set<CanvasColorSpace>(['srgb'])
   supportedCanvasPixelFormats = new Set<string>(['uint8'])
   hdrCanvasSupported = false
 
-  if (typeof document === 'undefined') return
+  const probe = createProbeCanvas()
+  if (!probe) return
 
   const candidates: CanvasColorSpace[] = ['display-p3', 'rec2020']
   for (const colorSpace of candidates) {
     try {
-      const canvas = document.createElement('canvas')
-      const ctx = canvas.getContext('2d', { colorSpace, alpha: true } as CanvasRenderingContext2DSettings)
+      const ctx = probe.getContext('2d', { colorSpace, alpha: true } as CanvasRenderingContext2DSettings)
       const resolved =
         ctx && 'getContextAttributes' in ctx
           ? (ctx.getContextAttributes() as CanvasRenderingContext2DSettings & { colorSpace?: string }).colorSpace
@@ -170,7 +181,8 @@ function probeCanvasColorSpaces(): void {
   }
 
   try {
-    const canvas = document.createElement('canvas')
+    const canvas = createProbeCanvas()
+    if (!canvas) return
     const ctx = canvas.getContext('2d', {
       colorSpace: 'display-p3',
       pixelFormat: 'float16',
@@ -303,14 +315,20 @@ export function canvas2dContextSettings(options: {
   return settings
 }
 
+let subtitleImageDataSettingsCache: ImageDataSettings | false | undefined
+
 /** ImageData options that tag subtitle pixels as sRGB. */
 export function subtitleImageDataSettings(): ImageDataSettings | undefined {
+  if (subtitleImageDataSettingsCache !== undefined) {
+    return subtitleImageDataSettingsCache || undefined
+  }
   try {
     new ImageData(new Uint8ClampedArray(4), 1, 1, { colorSpace: 'srgb' })
-    return { colorSpace: 'srgb' }
+    subtitleImageDataSettingsCache = { colorSpace: 'srgb' }
   } catch {
-    return undefined
+    subtitleImageDataSettingsCache = false
   }
+  return subtitleImageDataSettingsCache || undefined
 }
 
 /** Create sRGB-tagged ImageData so WCG canvases convert from authored ASS RGB. */

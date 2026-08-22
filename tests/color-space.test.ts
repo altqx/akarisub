@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import {
   IDENTITY_COLOR_MATRIX,
+  colorMatrix3ColumnMajor,
   colorMatrixConversionMap,
   getColorMatrix3,
   getColorSpaceFilterUrl,
@@ -65,6 +66,12 @@ describe('YCbCr conversion matrices', () => {
     expect(getColorMatrix3('BT709', 'BT709')).toEqual(IDENTITY_COLOR_MATRIX)
     expect(getColorSpaceFilterUrl('BT709', 'BT2020')).toContain('feColorMatrix')
     expect(getColorSpaceFilterUrl('BT709', 'BT709')).toBeNull()
+  })
+
+  test('uploads row-major matrices as column-major WebGL data', () => {
+    const column = colorMatrix3ColumnMajor([1, 2, 3, 4, 5, 6, 7, 8, 9])
+    expect([...column]).toEqual([1, 4, 7, 2, 5, 8, 3, 6, 9])
+    expect([...colorMatrix3ColumnMajor(IDENTITY_COLOR_MATRIX)]).toEqual([1, 0, 0, 0, 1, 0, 0, 0, 1])
   })
 
   test('indexes libass YCbCr header values', () => {

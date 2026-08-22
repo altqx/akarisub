@@ -1,6 +1,7 @@
 import type { RenderImage } from './types'
 import {
   applyWebGL2ColorSpace,
+  colorMatrix3ColumnMajor,
   IDENTITY_COLOR_MATRIX,
   type CanvasColorSpace,
   type ColorMatrix3
@@ -207,7 +208,7 @@ export class WebGL2Renderer {
   private _uploadColorMatrix(): void {
     if (!this._gl || !this._colorMatrixLoc) return
     this._gl.useProgram(this._program)
-    this._gl.uniformMatrix3fv(this._colorMatrixLoc, true, new Float32Array(this._colorMatrix))
+    this._gl.uniformMatrix3fv(this._colorMatrixLoc, false, colorMatrix3ColumnMajor(this._colorMatrix))
   }
 
   // Round up to a multiple of 64: gives headroom against size jitter without

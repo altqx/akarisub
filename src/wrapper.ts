@@ -52,7 +52,8 @@ export {
   profileFromVideoFrameColorSpace,
   selectCanvasColorSpace,
   supportsHdrCanvas,
-  canvas2dContextSettings
+  canvas2dContextSettings,
+  colorMatrix3ColumnMajor
 } from './ts/color-space'
 
 export { getWasmUrl, getWasmGlueUrl, getMtWasmUrl, getMtWasmGlueUrl, getDefaultFontUrl } from './ts/wasm'

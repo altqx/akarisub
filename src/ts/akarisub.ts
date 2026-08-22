@@ -30,6 +30,7 @@ import {
   getColorSpaceFilterUrl,
   profileFromVideoFrameColorSpace,
   selectCanvasColorSpace,
+  supportsHdrCanvas,
   videoColorProfilesEqual,
   type CanvasColorSpace,
   type VideoColorProfile
@@ -386,16 +387,28 @@ export default class AkariSub extends EventTarget {
     this._worker.onerror = (e) => this._error(e)
 
     test.then(() => {
+      const wasmUrl = options.wasmUrl ?? getWasmUrl()
+      const glueUrl = options.glueUrl ?? getWasmGlueUrl()
+      const mtWasmUrl = options.mtWasmUrl ?? getMtWasmUrl()
+      const mtGlueUrl = options.mtGlueUrl ?? (options.mtWasmUrl ? undefined : getMtWasmGlueUrl())
       const wasmBinary = selectWasmBinary({
-        wasmUrl: options.wasmUrl ?? getWasmUrl(),
-        glueUrl: options.glueUrl ?? getWasmGlueUrl(),
+        wasmUrl,
+        glueUrl,
         modernWasmUrl: options.modernWasmUrl,
         modernGlueUrl: options.modernGlueUrl,
-        mtWasmUrl: options.mtWasmUrl ?? getMtWasmUrl(),
-        mtGlueUrl: options.mtGlueUrl ?? getMtWasmGlueUrl()
+        mtWasmUrl,
+        mtGlueUrl
       })
       this._wasmSimd = wasmBinary.simd
       this._wasmThreads = wasmBinary.threads
+      const fallbackBinary = wasmBinary.threads
+        ? selectWasmBinary({
+            wasmUrl,
+            glueUrl,
+            modernWasmUrl: options.modernWasmUrl,
+            modernGlueUrl: options.modernGlueUrl
+          })
+        : null
 
       const initialTime = (this._video?.currentTime ?? 0) + this.timeOffset
       const initialPlaybackRate = this._videoPlaybackRateForWorker()
@@ -403,6 +416,8 @@ export default class AkariSub extends EventTarget {
         target: 'init',
         wasmUrl: wasmBinary.wasmUrl,
         glueUrl: wasmBinary.glueUrl,
+        fallbackWasmUrl: fallbackBinary && fallbackBinary.wasmUrl !== wasmBinary.wasmUrl ? fallbackBinary.wasmUrl : undefined,
+        fallbackGlueUrl: fallbackBinary && fallbackBinary.wasmUrl !== wasmBinary.wasmUrl ? fallbackBinary.glueUrl : undefined,
         canvasColorSpace: this._videoColorProfile.canvasColorSpace,
         hdr: this._shouldUseHdr(),
         wasmSimd: wasmBinary.simd,
@@ -659,7 +674,18 @@ export default class AkariSub extends EventTarget {
   /** @internal */
   private _ensureMainThreadCanvas2d(): void {
     if (this._gpuRenderer || this._offscreenRender || this._ctx || !this._canvas) return
-    this._ctx = this._canvas.getContext('2d', this._canvas2dSettings())
+    // Caller-owned canvases cannot replace a 2D context later. Open the widest
+    // supported surface when color space is still auto so a later HDR frame
+    // does not stay locked to sRGB/uint8.
+    const settings =
+      this._canvasColorSpaceOverride === 'auto' && !this._canvasParent
+        ? canvas2dContextSettings({
+            colorSpace: selectCanvasColorSpace('bt2020', true),
+            hdr: supportsHdrCanvas() || this._shouldUseHdr(),
+            alpha: true
+          })
+        : this._canvas2dSettings()
+    this._ctx = this._canvas.getContext('2d', settings)
     this._canvasctrl = this._canvas
   }
 
@@ -2534,8 +2560,7 @@ export default class AkariSub extends EventTarget {
     this._lastSubtitleColorSpace = subtitleColorSpace
     this._applyGpuColorManagement()
 
-    if (!subtitleColorSpace || !videoColorSpace) return
-    if (subtitleColorSpace === videoColorSpace) {
+    if (!subtitleColorSpace || !videoColorSpace || subtitleColorSpace === videoColorSpace) {
       if (this._ctx) this._ctx.filter = 'none'
       return
     }
@@ -2545,9 +2570,7 @@ export default class AkariSub extends EventTarget {
     this._detachOffscreen()
 
     const filter = getColorSpaceFilterUrl(subtitleColorSpace, videoColorSpace)
-    if (filter && this._ctx) {
-      this._ctx.filter = filter
-    }
+    if (this._ctx) this._ctx.filter = filter ?? 'none'
   }
 
   /** @internal */

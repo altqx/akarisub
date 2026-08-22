@@ -367,8 +367,6 @@ private:
     RenderResult *result;
   };
 
-  RenderResult *renderBlendPart(const BoundingBox &rect, ASS_Image *img, int storageIndex);
-
   static void *blendJobEntry(void *arg) {
     BlendJob *job = static_cast<BlendJob *>(arg);
     job->result = job->self->renderBlendPart(job->rect, job->img, job->storageIndex);

@@ -2983,16 +2983,8 @@ self.init = async (data: any): Promise<void> => {
     postMessage({ target: 'verifyColorSpace', subtitleColorSpace })
   }
 
-  const fallbackWasmUrl =
-    typeof data.wasmUrl === 'string' && data.wasmUrl.includes('-mt')
-      ? data.wasmUrl.replace('-mt', '')
-      : null
-  const fallbackGlueUrl =
-    typeof data.glueUrl === 'string' && data.glueUrl.includes('-mt')
-      ? data.glueUrl.replace('-mt', '')
-      : fallbackWasmUrl
-        ? glueUrlFromWasmUrl(fallbackWasmUrl)
-        : undefined
+  const fallbackWasmUrl = typeof data.fallbackWasmUrl === 'string' ? data.fallbackWasmUrl : null
+  const fallbackGlueUrl = typeof data.fallbackGlueUrl === 'string' ? data.fallbackGlueUrl : undefined
 
   loadWasm(data.wasmUrl, data.glueUrl)
     .catch((e) => {

@@ -68,6 +68,7 @@ export {
   getBitmapBug,
   getColorSpaceFilterUrl,
   getColorMatrix3,
+  colorMatrix3ColumnMajor,
   getWasmUrl,
   getWasmGlueUrl,
   getMtWasmUrl,

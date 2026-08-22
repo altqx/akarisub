@@ -25,6 +25,14 @@ describe('WASM binary selection', () => {
     }
   })
 
+  test('pthread support requires an explicit crossOriginIsolated page', () => {
+    if (supportsWasmThreads()) {
+      expect(crossOriginIsolated).toBe(true)
+    } else {
+      expect(typeof crossOriginIsolated === 'undefined' || !crossOriginIsolated).toBe(true)
+    }
+  })
+
   test('falls back to the default binary when no optional URLs are set', () => {
     const selected = selectWasmBinary({
       wasmUrl: '/akarisub.wasm',
