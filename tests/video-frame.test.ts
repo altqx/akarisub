@@ -41,7 +41,7 @@ describe('WebCodecs VideoFrame helpers', () => {
     expect(videoFrameColorSpace(frame())).toBe('BT709')
     expect(videoFrameColorSpace(frame({ colorSpace: { matrix: 'bt601' } }))).toBe('BT601')
     expect(videoFrameColorSpace(frame({ colorSpace: { matrix: 'smpte170m' } }))).toBe('BT601')
-    expect(videoFrameColorSpace(frame({ colorSpace: { matrix: 'bt2020-ncl' } }))).toBeNull()
+    expect(videoFrameColorSpace(frame({ colorSpace: { matrix: 'bt2020-ncl' } }))).toBe('BT2020')
     expect(videoFrameColorSpace(frame({ colorSpace: null }))).toBeNull()
   })
 

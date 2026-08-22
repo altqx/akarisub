@@ -14,10 +14,10 @@ AkariSub is a JS wrapper for <a href="https://github.com/libass/libass">libass</
 - Supports most SSA/ASS features (everything libass supports)
 - Supports all OpenType, TrueType and WOFF fonts, as well as embedded fonts
 - Supports anamorphic videos [(on browsers which support it)](https://caniuse.com/mdn-api_htmlvideoelement_requestvideoframecallback)
-- Supports different video color spaces [(on browsers which support it)](https://caniuse.com/mdn-api_videocolorspace)
+- Supports different video color spaces, including HDR / wide-gamut overlay [(on browsers which support it)](https://caniuse.com/mdn-api_videocolorspace)
 - Capable of using local fonts [(on browsers which support it)](https://caniuse.com/mdn-api_window_querylocalfonts)
 - Works fast (all the heavy lifting is done by WebAssembly)
-- Is fully threaded (on browsers which support it, it's capable of working fully on a separate thread)
+- Is fully threaded (worker plus optional WASM pthreads on isolated pages)
 - Is asynchronous (renders when available, not in order of execution)
 - Benefits from hardware acceleration (uses hardware accelerated canvas API's)
 - Doesn't manipulate the DOM to render subtitles
@@ -34,6 +34,8 @@ AkariSub is a JS wrapper for <a href="https://github.com/libass/libass">libass</
 - **Atomic Track Switching** - `preloadTrack()` / `activatePreloadedTrack()` load a second language track and its fonts before swapping, so the last frame stays visible
 - **Cue Callbacks** - `onCueEnter`, `onCueExit`, `onRender`, `onRendererChange`, and `onPerformanceWarning` for overlays and analytics without polling `getEvents()`
 - **TypeScript Support** - Full TypeScript definitions and type safety
+- **HDR / Wide Color Gamut** - Matches Display P3 / Rec.2020 canvases and PQ/HLG video, and converts BT.2020 YCbCr matrices
+- **WASM SIMD + pthreads** - SIMD libass kernels in the default binary; optional `akarisub-mt.wasm` blends independent regions on isolated pages
 - **Updated Dependencies** - All dependencies updated to their latest versions, including libass
 
 ## Installation
@@ -121,7 +123,7 @@ If the browser timeline is normalized from decode time rather than the first dis
 
 ## Using with WebCodecs
 
-Apps that decode with `VideoDecoder` instead of `HTMLVideoElement` can drive the same on-demand and frame-timeline path with each output `VideoFrame`. Pass a canvas, keep `onDemandRender` enabled, and present frames as they leave the decoder. AkariSub reads `timestamp` (microseconds), `displayWidth` / `displayHeight`, and `colorSpace.matrix`. It does not take ownership of the frame.
+Apps that decode with `VideoDecoder` instead of `HTMLVideoElement` can drive the same on-demand and frame-timeline path with each output `VideoFrame`. Pass a canvas, keep `onDemandRender` enabled, and present frames as they leave the decoder. AkariSub reads `timestamp` (microseconds), `displayWidth` / `displayHeight`, and `colorSpace` (`matrix`, `primaries`, `transfer`). HDR frames pick a Display P3 or Rec.2020 canvas when the browser can create one. It does not take ownership of the frame.
 
 ```js
 import AkariSub, { frameTimelineFromTimestamps } from 'akarisub'
@@ -292,6 +294,10 @@ The default options are best, and automatically fallback to the next fastest opt
 | `workerUrl`            | string                               | package worker URL                  | Optional worker script URL. Defaults to the package worker module URL                                                                                      |
 | `wasmUrl`              | string                               | package WASM URL                    | Optional WASM binary URL. Defaults to the URL resolved from `import.meta.url`                                                                              |
 | `glueUrl`              | string                               | package glue URL                    | Optional WASM glue script URL. Defaults to the URL resolved from `import.meta.url`                                                                         |
+| `modernWasmUrl`        | string                               | -                                   | Optional SIMD WASM URL used when the engine validates `v128`                                                                                               |
+| `mtWasmUrl`            | string                               | package `akarisub-mt.wasm`          | Optional pthread SIMD WASM URL. Requires COOP/COEP (`crossOriginIsolated`)                                                                                 |
+| `canvasColorSpace`     | `'srgb'` \| `'display-p3'` \| `'rec2020'` \| `'auto'` | `'auto'`               | Overlay canvas color space. `auto` follows the video primaries                                                                                             |
+| `hdr`                  | boolean \| `'auto'`                  | `'auto'`                            | Request an HDR canvas when the video transfer is PQ or HLG                                                                                                 |
 | `subUrl`               | string                               | -                                   | URL of the subtitle file to play                                                                                                                           |
 | `subContent`           | string \| Uint8Array \| ArrayBuffer  | -                                   | Content of the subtitle file to play                                                                                                                       |
 | `encryptedSubContent`  | EncryptedSubtitleContent             | -                                   | AES-GCM encrypted subtitle payload, decrypted inside the worker                                                                                            |
@@ -331,7 +337,7 @@ The default options are best, and automatically fallback to the next fastest opt
 | `setCurrentTime(isPaused?, currentTime?, rate?)` | `isPaused?: boolean, currentTime?: number, rate?: number`   | Set current time, playback state and rate     |
 | `setFrameTimeline(frameTimes)`                   | `ArrayLike<number> \| null`                                 | Replace or disable the encoded-frame timeline |
 | `presentVideoFrame(frame, options?)`             | `frame: VideoFrame, options?: PresentVideoFrameOptions`     | Present a WebCodecs frame as the video clock  |
-| `setVideoColorSpace(colorSpace)`                 | `BT709` \| `BT601` \| matrix name \| `colorSpace` \| `null` | Set the video YCbCr matrix from WebCodecs     |
+| `setVideoColorSpace(colorSpace)`                 | `BT709` \| `BT601` \| `BT2020` \| matrix name \| `colorSpace` \| `null` | Set the video YCbCr matrix and optional HDR primaries/transfer |
 
 ### Video & Canvas
 

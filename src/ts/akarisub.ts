@@ -21,15 +21,19 @@ import type {
 } from './types'
 import type { EncryptedSubtitleContent } from './types'
 import { classifyPerformanceWarnings, parsePreloadTrackSource } from './cue-events'
+import { computeCanvasSize, getVideoPosition, fixAlpha, getAlphaBug, getBitmapBug } from './utils'
 import {
-  webYCbCrMap,
-  colorMatrixConversionMap,
-  computeCanvasSize,
-  getVideoPosition,
-  fixAlpha,
-  getAlphaBug,
-  getBitmapBug
-} from './utils'
+  canvas2dContextSettings,
+  createSubtitleImageData,
+  defaultVideoColorProfile,
+  getColorMatrix3,
+  getColorSpaceFilterUrl,
+  profileFromVideoFrameColorSpace,
+  videoColorProfilesEqual,
+  type CanvasColorSpace,
+  type VideoColorProfile
+} from './color-space'
+import { selectWasmBinary } from './wasm-capabilities'
 import { WebGPURenderer, isWebGPUSupported } from './webgpu-renderer'
 import { WebGL2Renderer, isWebGL2Supported } from './webgl2-renderer'
 import {
@@ -46,8 +50,9 @@ import {
   subtitleTimeForFrame,
   updateTimingCompensation
 } from './timing'
-import { isVideoFrameLike, videoFrameCallbackMetadata, videoFrameColorSpace } from './video-frame'
-import { getDefaultFontUrl, getWasmGlueUrl, getWasmUrl } from './wasm'
+import { isVideoFrameLike, videoFrameCallbackMetadata } from './video-frame'
+import { getDefaultFontUrl, getMtWasmGlueUrl, getMtWasmUrl, getWasmGlueUrl, getWasmUrl } from './wasm'
+import { webYCbCrMap } from './utils'
 
 interface VideoFrameClock {
   currentTime: number
@@ -149,6 +154,12 @@ export default class AkariSub extends EventTarget {
   private _videoWidth: number = 0
   private _videoHeight: number = 0
   private _videoColorSpace: WebYCbCrColorSpace | null = null
+  private _videoColorProfile: VideoColorProfile = defaultVideoColorProfile()
+  private _lastSubtitleColorSpace: SubtitleColorSpace = null
+  private _canvasColorSpaceOverride: CanvasColorSpace | 'auto'
+  private _hdrOverride: boolean | 'auto'
+  private _wasmSimd = false
+  private _wasmThreads = false
   private _canvas!: HTMLCanvasElement
   private _canvasParent?: HTMLDivElement
   private _bufferCanvas: HTMLCanvasElement
@@ -268,6 +279,8 @@ export default class AkariSub extends EventTarget {
     })
 
     this._isLikelyWebKit = isLikelyWebKit()
+    this._canvasColorSpaceOverride = options.canvasColorSpace ?? 'auto'
+    this._hdrOverride = options.hdr ?? 'auto'
 
     const test = AkariSub._test()
 
@@ -317,14 +330,14 @@ export default class AkariSub extends EventTarget {
     this._startRefreshSampling()
 
     this._bufferCanvas = document.createElement('canvas')
-    const bufferCtx = this._bufferCanvas.getContext('2d')
+    const bufferCtx = this._bufferCanvas.getContext('2d', this._canvas2dSettings(false))
     if (!bufferCtx) throw this.destroy(new Error('Canvas rendering not supported'))
     this._bufferCtx = bufferCtx
 
     if (canUseGPURenderer) {
       this._initGPURenderer()
     } else if (!this._offscreenRender) {
-      this._ctx = this._canvas.getContext('2d', { alpha: true })
+      this._ctx = this._canvas.getContext('2d', this._canvas2dSettings())
     }
 
     this._canvasctrl = this._offscreenRender
@@ -363,12 +376,27 @@ export default class AkariSub extends EventTarget {
     this._worker.onerror = (e) => this._error(e)
 
     test.then(() => {
+      const wasmBinary = selectWasmBinary({
+        wasmUrl: options.wasmUrl ?? getWasmUrl(),
+        glueUrl: options.glueUrl ?? getWasmGlueUrl(),
+        modernWasmUrl: options.modernWasmUrl,
+        modernGlueUrl: options.modernGlueUrl,
+        mtWasmUrl: options.mtWasmUrl ?? getMtWasmUrl(),
+        mtGlueUrl: options.mtGlueUrl ?? getMtWasmGlueUrl()
+      })
+      this._wasmSimd = wasmBinary.simd
+      this._wasmThreads = wasmBinary.threads
+
       const initialTime = (this._video?.currentTime ?? 0) + this.timeOffset
       const initialPlaybackRate = this._videoPlaybackRateForWorker()
       const initMessage = {
         target: 'init',
-        wasmUrl: options.wasmUrl ?? getWasmUrl(),
-        glueUrl: options.glueUrl ?? getWasmGlueUrl(),
+        wasmUrl: wasmBinary.wasmUrl,
+        glueUrl: wasmBinary.glueUrl,
+        canvasColorSpace: this._videoColorProfile.canvasColorSpace,
+        hdr: this._shouldUseHdr(),
+        wasmSimd: wasmBinary.simd,
+        wasmThreads: wasmBinary.threads,
         asyncRender: shouldUseAsyncRender,
         fullTrackWarmup: options.fullTrackWarmup ?? false,
         blockingFullTrackWarmup: options.blockingFullTrackWarmup ?? false,
@@ -418,6 +446,8 @@ export default class AkariSub extends EventTarget {
           {
             target: 'offscreenCanvas',
             rawAssImageGpu,
+            canvasColorSpace: this._videoColorProfile.canvasColorSpace,
+            hdr: this._shouldUseHdr(),
             transferable: [offscreenCanvas]
           },
           [offscreenCanvas]
@@ -532,6 +562,7 @@ export default class AkariSub extends EventTarget {
         }
         this._gpuRenderer = renderer
         this._setRendererType('webgpu')
+        this._applyGpuColorManagement()
         console.log('[AkariSub] Using WebGPU renderer')
         return
       } catch (error) {
@@ -558,6 +589,7 @@ export default class AkariSub extends EventTarget {
         }
         this._gpuRenderer = renderer
         this._setRendererType('webgl2')
+        this._applyGpuColorManagement()
         console.log('[AkariSub] Using WebGL2 renderer')
         return
       } catch (error) {
@@ -567,7 +599,7 @@ export default class AkariSub extends EventTarget {
 
     this._setRendererType('canvas2d')
     if (!this._offscreenRender && !this._ctx) {
-      this._ctx = this._canvas.getContext('2d', { alpha: true })
+      this._ctx = this._canvas.getContext('2d', this._canvas2dSettings())
     }
     this.sendMessage('setAsyncRender', { value: false })
     this._onCanvasFallback?.()
@@ -596,6 +628,32 @@ export default class AkariSub extends EventTarget {
     const event: RendererChangeEvent = { rendererType: next, previous }
     this._onRendererChange?.(event)
     this.dispatchEvent(new CustomEvent('rendererChange', { detail: event }))
+  }
+
+  /** @internal */
+  private _shouldUseHdr(): boolean {
+    if (this._hdrOverride === false) return false
+    if (this._hdrOverride === true) return true
+    return this._videoColorProfile.hdr
+  }
+
+  /** @internal */
+  private _canvas2dSettings(hdr: boolean = this._shouldUseHdr()): CanvasRenderingContext2DSettings {
+    return canvas2dContextSettings({
+      colorSpace: this._videoColorProfile.canvasColorSpace,
+      hdr,
+      alpha: true
+    })
+  }
+
+  /** @internal */
+  private _applyGpuColorManagement(): void {
+    const matrix = getColorMatrix3(this._lastSubtitleColorSpace, this._videoColorProfile.matrix)
+    if (this._gpuRenderer instanceof WebGPURenderer) {
+      this._gpuRenderer.setColorManagement(matrix, this._videoColorProfile.canvasColorSpace, this._shouldUseHdr())
+    } else if (this._gpuRenderer instanceof WebGL2Renderer) {
+      this._gpuRenderer.setColorManagement(matrix, this._videoColorProfile.canvasColorSpace)
+    }
   }
 
   /** @internal */
@@ -770,7 +828,7 @@ export default class AkariSub extends EventTarget {
       height: metadata.height
     }
     this._playstate = isPaused
-    this._setVideoColorSpace(videoFrameColorSpace(frame))
+    this._setVideoColorProfile(profileFromVideoFrameColorSpace(frame.colorSpace, this._canvasColorSpaceOverride))
     this.setCurrentTime(isPaused, metadata.mediaTime + this.timeOffset, rate)
 
     if (this._onDemandRender) {
@@ -785,7 +843,7 @@ export default class AkariSub extends EventTarget {
    * or a `VideoFrame.colorSpace` object. Pass `null` to clear the override.
    */
   setVideoColorSpace(colorSpace: WebYCbCrColorSpace | VideoFrameLike['colorSpace'] | string | null): void {
-    if (colorSpace === 'BT709' || colorSpace === 'BT601') {
+    if (colorSpace === 'BT709' || colorSpace === 'BT601' || colorSpace === 'BT2020') {
       this._setVideoColorSpace(colorSpace)
       return
     }
@@ -793,7 +851,7 @@ export default class AkariSub extends EventTarget {
       this._setVideoColorSpace(typeof colorSpace === 'string' ? (webYCbCrMap[colorSpace] ?? null) : null)
       return
     }
-    this._setVideoColorSpace(webYCbCrMap[colorSpace.matrix ?? ''] ?? null)
+    this._setVideoColorProfile(profileFromVideoFrameColorSpace(colorSpace, this._canvasColorSpaceOverride))
   }
 
   /** Fetch and load an ASS/SSA track from `url`. */
@@ -1048,7 +1106,12 @@ export default class AkariSub extends EventTarget {
       rawAssImageGpu: stats.rawAssImageGpu,
       workerRenderer: stats.workerRenderer,
       offscreenRender: stats.offscreenRender ?? this._offscreenRender,
-      onDemandRender: stats.onDemandRender ?? this._onDemandRender
+      onDemandRender: stats.onDemandRender ?? this._onDemandRender,
+      wasmSimd: stats.wasmSimd ?? this._wasmSimd,
+      wasmThreads: stats.wasmThreads ?? this._wasmThreads,
+      canvasColorSpace: this._videoColorProfile.canvasColorSpace,
+      videoTransfer: this._videoColorProfile.transfer,
+      videoPrimaries: this._videoColorProfile.primaries
     }
   }
 
@@ -1415,7 +1478,7 @@ export default class AkariSub extends EventTarget {
       // A synchronized context guarantees drawImage has entered the canvas
       // presentation pipeline before this hidden stage is compositor-scheduled.
       // desynchronized:true can expose a newly appended but not-yet-painted layer.
-      const context = stage.getContext('2d', { alpha: true })
+      const context = stage.getContext('2d', this._canvas2dSettings())
       if (!context) {
         this._removeStagedCanvas(stage)
         stage = document.createElement('canvas')
@@ -1426,7 +1489,7 @@ export default class AkariSub extends EventTarget {
         frame.stage = stage
         this._stagedCanvases.add(stage)
         this._stageFrameIndices.set(stage, index)
-        const fallbackContext = stage.getContext('2d', { alpha: true })
+        const fallbackContext = stage.getContext('2d', this._canvas2dSettings())
         if (!fallbackContext) {
           this._removeStagedCanvas(stage)
           frame.stage = undefined
@@ -2301,7 +2364,7 @@ export default class AkariSub extends EventTarget {
     this._canvas.remove()
     this._createCanvas()
     this._canvasctrl = this._canvas
-    this._ctx = this._canvasctrl.getContext('2d', { alpha: true })
+    this._ctx = this._canvasctrl.getContext('2d', this._canvas2dSettings())
     this.sendMessage('detachOffscreen')
     this.busy = false
     this._pendingDemandTimes.length = 0
@@ -2316,15 +2379,37 @@ export default class AkariSub extends EventTarget {
     this._createCanvas()
     this._canvasctrl = (this._canvas as any).transferControlToOffscreen()
     this._ctx = false
-    this.sendMessage('offscreenCanvas', {}, [this._canvasctrl as OffscreenCanvas])
+    this.sendMessage(
+      'offscreenCanvas',
+      {
+        canvasColorSpace: this._videoColorProfile.canvasColorSpace,
+        hdr: this._shouldUseHdr()
+      },
+      [this._canvasctrl as OffscreenCanvas]
+    )
     this.resize(0, 0, 0, 0, true)
   }
 
   /** @internal */
   private _setVideoColorSpace(next: WebYCbCrColorSpace | null, forceNotify: boolean = false): void {
-    if (!forceNotify && next === this._videoColorSpace) return
-    this._videoColorSpace = next
-    this.sendMessage('getColorSpace')
+    this._setVideoColorProfile(
+      {
+        ...this._videoColorProfile,
+        matrix: next
+      },
+      forceNotify
+    )
+  }
+
+  /** @internal */
+  private _setVideoColorProfile(profile: VideoColorProfile, forceNotify: boolean = false): void {
+    const current = this._videoColorProfile ?? defaultVideoColorProfile()
+    const matrixChanged = profile.matrix !== this._videoColorSpace
+    const profileChanged = !videoColorProfilesEqual(current, profile)
+    this._videoColorSpace = profile.matrix
+    this._videoColorProfile = profile
+    if (profileChanged) this._applyVideoColorProfile()
+    if (forceNotify || matrixChanged) this.sendMessage('getColorSpace')
   }
 
   /** @internal */
@@ -2332,11 +2417,22 @@ export default class AkariSub extends EventTarget {
     ;(this._video as any).requestVideoFrameCallback(() => {
       try {
         const frame = new (globalThis as any).VideoFrame(this._video)
-        this._setVideoColorSpace(videoFrameColorSpace(frame), true)
+        const profile = profileFromVideoFrameColorSpace(frame.colorSpace, this._canvasColorSpaceOverride)
         frame.close()
+        this._setVideoColorProfile(profile, true)
       } catch (e) {
         console.warn(e)
       }
+    })
+  }
+
+  /** @internal */
+  private _applyVideoColorProfile(): void {
+    this._applyGpuColorManagement()
+    if (!this._workerReady) return
+    this.sendMessage('video', {
+      canvasColorSpace: this._videoColorProfile.canvasColorSpace,
+      hdr: this._shouldUseHdr()
     })
   }
 
@@ -2345,16 +2441,23 @@ export default class AkariSub extends EventTarget {
     subtitleColorSpace: SubtitleColorSpace
     videoColorSpace?: WebYCbCrColorSpace | null
   }): void {
-    const { subtitleColorSpace, videoColorSpace = this._videoColorSpace } = data
+    const { subtitleColorSpace, videoColorSpace = this._videoColorProfile.matrix ?? this._videoColorSpace } = data
+    this._lastSubtitleColorSpace = subtitleColorSpace
+    this._applyGpuColorManagement()
 
     if (!subtitleColorSpace || !videoColorSpace) return
-    if (subtitleColorSpace === videoColorSpace) return
+    if (subtitleColorSpace === videoColorSpace) {
+      if (this._ctx) this._ctx.filter = 'none'
+      return
+    }
+
+    if (this._gpuRenderer) return
 
     this._detachOffscreen()
 
-    const matrix = colorMatrixConversionMap[subtitleColorSpace]?.[videoColorSpace]
-    if (matrix && this._ctx) {
-      this._ctx.filter = `url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg'><filter id='f'><feColorMatrix type='matrix' values='${matrix} 0 0 0 0 0 1 0'/></filter></svg>#f")`
+    const filter = getColorSpaceFilterUrl(subtitleColorSpace, videoColorSpace)
+    if (filter && this._ctx) {
+      this._ctx.filter = filter
     }
   }
 
@@ -2445,7 +2548,7 @@ export default class AkariSub extends EventTarget {
               bufferCanvas.width = imgW
               bufferCanvas.height = imgH
             }
-            bufferCtx.putImageData(new ImageData(fixedData as Uint8ClampedArray<ArrayBuffer>, imgW, imgH), 0, 0)
+            bufferCtx.putImageData(createSubtitleImageData(fixedData as Uint8ClampedArray, imgW, imgH), 0, 0)
             ctx.drawImage(bufferCanvas, image.x, image.y)
           }
         }

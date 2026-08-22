@@ -48,6 +48,7 @@ export type {
   WebYCbCrColorSpace,
   EncryptedSubtitleContent
 } from './ts/types'
+export type { CanvasColorSpace, VideoColorProfile, VideoPrimaries, VideoTransfer } from './ts/color-space'
 
 export type { ASSSection, ASSBodyEntry } from './ts/utils'
 
@@ -66,9 +67,14 @@ export {
   getAlphaBug,
   getBitmapBug,
   getColorSpaceFilterUrl,
+  getColorMatrix3,
   getWasmUrl,
   getWasmGlueUrl,
+  getMtWasmUrl,
+  getMtWasmGlueUrl,
   getDefaultFontUrl,
+  supportsWasmSimd,
+  supportsWasmThreads,
   WebGPURenderer,
   isWebGPUSupported,
   WebGL2Renderer,

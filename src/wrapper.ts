@@ -42,10 +42,21 @@ export {
   runFeatureTests,
   getAlphaBug,
   getBitmapBug,
-  getColorSpaceFilterUrl
+  getColorSpaceFilterUrl,
+  getColorMatrix3,
+  IDENTITY_COLOR_MATRIX
 } from './ts/utils'
+export type { CanvasColorSpace, VideoColorProfile, VideoPrimaries, VideoTransfer, ColorMatrix3 } from './ts/utils'
 
-export { getWasmUrl, getWasmGlueUrl, getDefaultFontUrl } from './ts/wasm'
+export {
+  profileFromVideoFrameColorSpace,
+  selectCanvasColorSpace,
+  supportsHdrCanvas,
+  canvas2dContextSettings
+} from './ts/color-space'
+
+export { getWasmUrl, getWasmGlueUrl, getMtWasmUrl, getMtWasmGlueUrl, getDefaultFontUrl } from './ts/wasm'
+export { supportsWasmSimd, supportsWasmThreads, selectWasmBinary } from './ts/wasm-capabilities'
 
 export { WebGPURenderer, isWebGPUSupported } from './ts/webgpu-renderer'
 

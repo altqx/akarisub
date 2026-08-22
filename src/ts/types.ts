@@ -114,6 +114,16 @@ export interface PerformanceStats {
   offscreenRender: boolean
   /** Whether `requestVideoFrameCallback` drives presentation. */
   onDemandRender: boolean
+  /** Whether the loaded WASM binary includes SIMD kernels. */
+  wasmSimd?: boolean
+  /** Whether the loaded WASM binary is using pthreads. */
+  wasmThreads?: boolean
+  /** Canvas color space used for compositing. */
+  canvasColorSpace?: 'srgb' | 'display-p3' | 'rec2020'
+  /** Video transfer function used for HDR overlay. */
+  videoTransfer?: 'sdr' | 'pq' | 'hlg'
+  /** Video primaries used to pick the canvas color space. */
+  videoPrimaries?: 'bt709' | 'bt2020' | 'smpte432' | 'unknown'
   /** Demand renders still in flight. */
   pendingRenders: number
   /** Dialogue events currently in the track. */
@@ -212,6 +222,8 @@ export interface VideoFrameLike {
   /** Optional WebCodecs color description. */
   readonly colorSpace?: {
     readonly matrix?: string | null
+    readonly primaries?: string | null
+    readonly transfer?: string | null
   } | null
 }
 
@@ -287,6 +299,18 @@ export interface AkariSubOptions {
   wasmUrl?: string
   /** Optional WASM glue script URL. Defaults to the package glue URL resolved from import.meta.url. */
   glueUrl?: string
+  /** Optional SIMD WASM URL. Used when the engine validates `v128` and this URL is set. */
+  modernWasmUrl?: string
+  /** Optional SIMD WASM glue URL. Derived from `modernWasmUrl` when omitted. */
+  modernGlueUrl?: string
+  /** Optional pthread SIMD WASM URL. Used on cross-origin isolated pages. */
+  mtWasmUrl?: string
+  /** Optional pthread SIMD WASM glue URL. Derived from `mtWasmUrl` when omitted. */
+  mtGlueUrl?: string
+  /** Overlay canvas color space. `auto` follows the video primaries. */
+  canvasColorSpace?: 'srgb' | 'display-p3' | 'rec2020' | 'auto'
+  /** Request an HDR canvas when the video transfer is PQ or HLG. Default `auto`. */
+  hdr?: boolean | 'auto'
   /** HTTP(S) URL of an ASS/SSA file to load after init. */
   subUrl?: string
   /** Inline ASS/SSA text or bytes to load after init. */
@@ -402,6 +426,8 @@ export interface RenderMessage {
   width: number
   height: number
   colorSpace: string | null
+  canvasColorSpace?: 'srgb' | 'display-p3' | 'rec2020'
+  hdr?: boolean
   requestId?: number
   renderEpoch?: number
   presentationId?: number
@@ -413,7 +439,12 @@ export type WorkerOutboundMessage =
   | { target: 'unbusy'; requestId?: number; renderEpoch?: number; presentationId?: number; painted?: boolean }
   | { target: 'console'; command: string; content: string }
   | { target: 'getLocalFont'; font: string }
-  | { target: 'verifyColorSpace'; subtitleColorSpace: string | null }
+  | {
+      target: 'verifyColorSpace'
+      subtitleColorSpace: string | null
+      canvasColorSpace?: 'srgb' | 'display-p3' | 'rec2020'
+      hdr?: boolean
+    }
   | { target: 'getEvents'; events: ASSEvent[] }
   | { target: 'getStyles'; styles: ASSStyle[]; time: number }
   | { target: 'getStats'; stats: Partial<PerformanceStats> }
@@ -438,6 +469,10 @@ export interface WorkerInitMessage {
   target: 'init'
   wasmUrl: string
   glueUrl?: string
+  canvasColorSpace?: 'srgb' | 'display-p3' | 'rec2020'
+  hdr?: boolean
+  wasmSimd?: boolean
+  wasmThreads?: boolean
   asyncRender: boolean
   fullTrackWarmup: boolean
   blockingFullTrackWarmup: boolean
@@ -475,7 +510,13 @@ export interface WorkerInitMessage {
 
 export type WorkerInboundMessage =
   | WorkerInitMessage
-  | { target: 'offscreenCanvas'; rawAssImageGpu?: boolean; transferable: [OffscreenCanvas] }
+  | {
+      target: 'offscreenCanvas'
+      rawAssImageGpu?: boolean
+      canvasColorSpace?: 'srgb' | 'display-p3' | 'rec2020'
+      hdr?: boolean
+      transferable: [OffscreenCanvas]
+    }
   | { target: 'detachOffscreen' }
   | { target: 'canvas'; width: number; height: number; videoWidth: number; videoHeight: number; force?: boolean }
   | {
@@ -485,6 +526,8 @@ export type WorkerInboundMessage =
       rate?: number
       renderAhead?: number
       colorSpace?: string | null
+      canvasColorSpace?: 'srgb' | 'display-p3' | 'rec2020'
+      hdr?: boolean
     }
   | { target: 'setTrack'; content: string | Uint8Array | ArrayBuffer }
   | { target: 'setEncryptedTrack'; content: EncryptedSubtitleContent }
@@ -542,9 +585,9 @@ export interface VideoFrameCallbackMetadata {
 }
 
 /** Video YCbCr matrix used for subtitle color-space conversion. */
-export type WebYCbCrColorSpace = 'BT709' | 'BT601'
+export type WebYCbCrColorSpace = 'BT709' | 'BT601' | 'BT2020'
 /** libass YCbCr matrix, or `null` when the track does not declare one. */
-export type SubtitleColorSpace = 'BT601' | 'BT709' | 'SMPTE240M' | 'FCC' | null
+export type SubtitleColorSpace = 'BT601' | 'BT709' | 'SMPTE240M' | 'FCC' | 'BT2020' | null
 
 export interface AkariSubModule extends EmscriptenModule {
   _malloc: (size: number) => number
@@ -577,6 +620,8 @@ export interface AkariSubModule extends EmscriptenModule {
   _akarisub_style_override_index: (handle: number, index: number) => void
   _akarisub_disable_style_override: (handle: number) => void
   _akarisub_get_track_color_space: (handle: number) => number
+  _akarisub_set_blend_threads?: (handle: number, threads: number) => void
+  _akarisub_get_blend_threads?: (handle: number) => number
   _akarisub_event_get_int: (handle: number, index: number, field: number) => number
   _akarisub_event_set_int: (handle: number, index: number, field: number, value: number) => void
   _akarisub_event_get_str: (handle: number, index: number, field: number) => number

@@ -59,6 +59,8 @@ const __akarisub_expose = () => {
   Module['_akarisub_destroy'] = _akarisub_destroy
   Module['_akarisub_set_drop_animations'] = _akarisub_set_drop_animations
   Module['_akarisub_set_adaptive_blend_layouts'] = _akarisub_set_adaptive_blend_layouts
+  Module['_akarisub_set_blend_threads'] = _akarisub_set_blend_threads
+  Module['_akarisub_get_blend_threads'] = _akarisub_get_blend_threads
   Module['_akarisub_create_track_mem'] = _akarisub_create_track_mem
   Module['_akarisub_remove_track'] = _akarisub_remove_track
   Module['_akarisub_resize_canvas'] = _akarisub_resize_canvas
