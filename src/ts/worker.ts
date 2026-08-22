@@ -4,7 +4,9 @@ import type {
   ASSEvent,
   ASSStyle,
   AkariSubModule,
+  CueEvent,
   EncryptedSubtitleContent,
+  PreloadTrackSource,
   RawASSImage,
   SubtitleColorSpace,
   WorkerInboundMessage
@@ -22,6 +24,7 @@ import {
   hasRenderableAssPrefix,
   isAbortError
 } from './asset-loader'
+import { diffActiveCues, isCueActiveAt, toLibassTimestampMs } from './cue-events'
 
 interface WorkerMetrics {
   framesRendered: number
@@ -76,6 +79,22 @@ const MAX_FONT_BYTES = 32 * 1024 * 1024
 const FONT_FETCH_TIMEOUT_MS = 30_000
 const pendingFontFamilies = new Set<string>()
 let subtitleFetchAbort: AbortController | null = null
+let preloadFetchAbort: AbortController | null = null
+const LOCAL_FONT_WAIT_MS = 5_000
+const FONT_WAIT_TIMEOUT_MS = 30_000
+let fontWaiters: Array<() => void> = []
+let preloadGeneration = 0
+let nextPreloadId = 1
+let preloadedTrack: {
+  id: number
+  content: string | Uint8Array
+  encrypted: boolean
+} | null = null
+let cueTimes = new Int32Array(0)
+let lastActiveCues = new Map<number, CueEvent>()
+let lastReportedDroppedFrames = 0
+let demandRenderTime: number | undefined
+let demandRenderCached = false
 let debug = false
 let clampPos = false
 let renderInFlight = false
@@ -123,6 +142,7 @@ const resetMetrics = (): void => {
   metrics.lastImagePixels = 0
   metrics.cacheHits = 0
   metrics.cacheMisses = 0
+  lastReportedDroppedFrames = 0
 }
 
 let asyncRender = false
@@ -1121,8 +1141,35 @@ self.addFont = async ({ font, requestId }: { font: string | Uint8Array; requestI
   }
 }
 
+const notifyFontsSettled = (): void => {
+  if (pendingFontFamilies.size > 0) return
+  const waiters = fontWaiters
+  fontWaiters = []
+  for (const resolve of waiters) resolve()
+}
+
+const markFontFamilySettled = (font: string): void => {
+  if (!pendingFontFamilies.delete(font)) return
+  notifyFontsSettled()
+}
+
+const waitForPendingFonts = (timeoutMs: number = FONT_WAIT_TIMEOUT_MS): Promise<void> => {
+  if (pendingFontFamilies.size === 0) return Promise.resolve()
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      pendingFontFamilies.clear()
+      notifyFontsSettled()
+      resolve()
+    }, timeoutMs)
+    fontWaiters.push(() => {
+      clearTimeout(timer)
+      resolve()
+    })
+  })
+}
+
 self.localFontResult = ({ font, success }: { font: string; success: boolean }): void => {
-  pendingFontFamilies.delete(font)
+  markFontFamilySettled(font)
   if (success) fontMap_[font] = true
 }
 
@@ -1135,12 +1182,13 @@ const findAvailableFonts = (font: string): void => {
     if (useLocalFonts && !pendingFontFamilies.has(font)) {
       pendingFontFamilies.add(font)
       postMessage({ target: 'getLocalFont', font })
+      setTimeout(() => markFontFamilySettled(font), LOCAL_FONT_WAIT_MS)
     }
   } else {
     if (pendingFontFamilies.has(font)) return
     pendingFontFamilies.add(font)
     asyncWrite(availableFonts[font], true, (success) => {
-      pendingFontFamilies.delete(font)
+      markFontFamilySettled(font)
       if (success) fontMap_[font] = true
     })
   }
@@ -1178,6 +1226,17 @@ const scheduleReloadFonts = (): void => {
       markNextRenderForced()
     }
   }, 16)
+}
+
+const flushFontReload = (): void => {
+  if (pendingFontReload) {
+    clearTimeout(pendingFontReload)
+    pendingFontReload = null
+  }
+  if (akariSubHandle) {
+    requireApi().reloadFonts(akariSubHandle)
+    markNextRenderForced()
+  }
 }
 
 /**
@@ -1324,6 +1383,7 @@ const read_ = (url: string, ab?: boolean): string | ArrayBuffer => {
 
 const applyPlainTrack = (content: string | Uint8Array | ArrayBuffer): void => {
   protectedTrackContent = false
+  resetCueState(lastCurrentTime)
 
   if (isBinaryContent(content)) {
     createTrackFromBytes(toUint8Array(content))
@@ -1347,6 +1407,7 @@ const publishPartialTrack = (text: string): boolean => {
   if (dropAllBlur) content = dropBlur(content)
   createTrackFromString(content)
   syncTotalEventsMetric()
+  rebuildCueTimes()
   firstTrackEventStartTime = getFirstEventStartTime()
   subtitleColorSpace = libassYCbCrMap[requireApi().getTrackColorSpace(requireHandle())]
   markNextRenderForced()
@@ -1359,11 +1420,81 @@ const scanAssFonts = (fragment: string): void => {
   for (const font of collectAssFontNames(fragment)) findAvailableFonts(font)
 }
 
+const rebuildCueTimes = (): void => {
+  if (!akariSubHandle) {
+    cueTimes = new Int32Array(0)
+    return
+  }
+
+  const api = requireApi()
+  const handle = requireHandle()
+  const count = api.getEventCount(handle)
+  const next = new Int32Array(count * 2)
+  for (let i = 0; i < count; i++) {
+    next[i * 2] = api.eventGetInt(handle, i, EVENT_INT_FIELDS.Start)
+    next[i * 2 + 1] = api.eventGetInt(handle, i, EVENT_INT_FIELDS.Duration)
+  }
+  cueTimes = next
+}
+
+const readCueEvent = (index: number): CueEvent => {
+  const api = requireApi()
+  const handle = requireHandle()
+  const startMs = api.eventGetInt(handle, index, EVENT_INT_FIELDS.Start)
+  const durationMs = api.eventGetInt(handle, index, EVENT_INT_FIELDS.Duration)
+  const styleIndex = api.eventGetInt(handle, index, EVENT_INT_FIELDS.Style)
+  const styleCount = api.getStyleCount(handle)
+  const styleName =
+    styleIndex >= 0 && styleIndex < styleCount
+      ? readCString(api.styleGetStr(handle, styleIndex, STYLE_STR_FIELDS.Name))
+      : String(styleIndex)
+
+  return {
+    index,
+    start: startMs / ASS_TIME_SCALE,
+    duration: durationMs / ASS_TIME_SCALE,
+    style: styleName,
+    name: protectedTrackContent ? '' : readCString(api.eventGetStr(handle, index, EVENT_STR_FIELDS.Name)),
+    text: protectedTrackContent ? '' : readCString(api.eventGetStr(handle, index, EVENT_STR_FIELDS.Text)),
+    layer: api.eventGetInt(handle, index, EVENT_INT_FIELDS.Layer)
+  }
+}
+
+const emitCueChanges = (time: number): void => {
+  const nowMs = toLibassTimestampMs(time)
+  const next = new Map<number, CueEvent>()
+  for (let i = 0; i < cueTimes.length; i += 2) {
+    if (!isCueActiveAt(cueTimes[i], cueTimes[i + 1], nowMs)) continue
+    const index = i / 2
+    next.set(index, lastActiveCues.get(index) ?? readCueEvent(index))
+  }
+
+  const { entered, exited } = diffActiveCues(lastActiveCues, next)
+  lastActiveCues = next
+  if (entered.length === 0 && exited.length === 0) return
+  postMessage({ target: 'cues', time, entered, exited })
+}
+
+const resetCueState = (time: number): void => {
+  if (lastActiveCues.size > 0) {
+    postMessage({
+      target: 'cues',
+      time,
+      entered: [],
+      exited: [...lastActiveCues.values()]
+    })
+  }
+  lastActiveCues = new Map()
+  cueTimes = new Int32Array(0)
+}
+
 const loadSubtitleUrl = async (
   url: string,
   generation: number,
   signal: AbortSignal,
-  onPartialTrack?: (text: string) => void
+  onPartialTrack?: (text: string) => void,
+  isCurrent: () => boolean = () => generation === trackGeneration,
+  announcePartial = true
 ): Promise<{ content: string; emittedPartialReady: boolean }> => {
   const decoder = new AssStreamDecoder()
   let emittedPartialReady = false
@@ -1382,12 +1513,13 @@ const loadSubtitleUrl = async (
     signal,
     label: 'Subtitle',
     onChunk: (chunk, info) => {
-      if (generation !== trackGeneration) return
+      if (!isCurrent()) return
       seenBytes = Math.max(seenBytes, info.offset + chunk.byteLength)
       const { completeText, newComplete } = decoder.push(chunk)
       scanAssFonts(newComplete)
       const moreComing = info.total != null && seenBytes < info.total
       if (!moreComing || emittedPartialReady) return
+      if (!announcePartial) return
       if (onPartialTrack && hasRenderableAssPrefix(completeText)) {
         onPartialTrack(completeText)
         emitPartialReady()
@@ -1397,7 +1529,7 @@ const loadSubtitleUrl = async (
     }
   })
 
-  if (generation !== trackGeneration) {
+  if (!isCurrent()) {
     throw new DOMException('The operation was aborted.', 'AbortError')
   }
 
@@ -1408,6 +1540,7 @@ const finishTrackLoad = (): void => {
   const api = requireApi()
   const handle = requireHandle()
   syncTotalEventsMetric()
+  rebuildCueTimes()
   firstTrackEventStartTime = getFirstEventStartTime()
   subtitleColorSpace = libassYCbCrMap[api.getTrackColorSpace(handle)]
   markNextRenderForced()
@@ -1425,6 +1558,7 @@ self.setEncryptedTrack = async ({ content }: { content: EncryptedSubtitleContent
   stopWarmup()
   advanceTrackGeneration()
   protectedTrackContent = true
+  resetCueState(lastCurrentTime)
 
   const decrypted = await decryptSubtitleContent(content)
   try {
@@ -1448,6 +1582,7 @@ self.freeTrack = (): void => {
   const handle = requireHandle()
   api.removeTrack(handle)
   syncTotalEventsMetric()
+  resetCueState(lastCurrentTime)
   markNextRenderForced()
 }
 
@@ -1476,6 +1611,148 @@ self.setTrackByUrl = async ({ url }: { url: string }): Promise<void> => {
   } finally {
     if (subtitleFetchAbort?.signal === signal) subtitleFetchAbort = null
   }
+}
+
+const abortPreloadFetch = (): void => {
+  preloadFetchAbort?.abort()
+  preloadFetchAbort = null
+}
+
+const clearPreloadedTrack = (): void => {
+  if (preloadedTrack && preloadedTrack.encrypted && preloadedTrack.content instanceof Uint8Array) {
+    preloadedTrack.content.fill(0)
+  }
+  preloadedTrack = null
+}
+
+const scanTrackFonts = (content: string | Uint8Array): void => {
+  if (typeof content === 'string') {
+    processAvailableFonts(content)
+    return
+  }
+
+  const text = new TextDecoder('utf-8').decode(content)
+  if (text.includes('[Script Info]') || text.includes('[Events]') || text.includes('[V4')) {
+    processAvailableFonts(text)
+  }
+}
+
+const prepareStoredTrackContent = (
+  content: string | Uint8Array | ArrayBuffer
+): string | Uint8Array => {
+  if (isBinaryContent(content)) return toUint8Array(content)
+
+  let text = content
+  if (clampPos) text = fixPlayRes(text)
+  if (dropAllBlur) text = dropBlur(text)
+  return text
+}
+
+const applyStoredTrack = (content: string | Uint8Array, encrypted: boolean): void => {
+  resetCueState(lastCurrentTime)
+  protectedTrackContent = encrypted
+  if (typeof content === 'string') createTrackFromString(content)
+  else createTrackFromBytes(content)
+  finishTrackLoad()
+}
+
+const runPreload = async (source: PreloadTrackSource, generation: number): Promise<number> => {
+  let content: string | Uint8Array
+  let encrypted = false
+
+  if (source.kind === 'url') {
+    const controller = new AbortController()
+    preloadFetchAbort = controller
+    const loaded = await loadSubtitleUrl(
+      source.url,
+      generation,
+      controller.signal,
+      undefined,
+      () => generation === preloadGeneration,
+      false
+    )
+    if (generation !== preloadGeneration) {
+      throw new DOMException('The operation was aborted.', 'AbortError')
+    }
+    content = prepareStoredTrackContent(loaded.content)
+  } else if (source.kind === 'encrypted') {
+    encrypted = true
+    const decrypted = await decryptSubtitleContent(source.content)
+    if (generation !== preloadGeneration) {
+      decrypted.fill(0)
+      throw new DOMException('The operation was aborted.', 'AbortError')
+    }
+    content = decrypted
+  } else {
+    content = prepareStoredTrackContent(source.content)
+  }
+
+  scanTrackFonts(content)
+  await waitForPendingFonts()
+  if (generation !== preloadGeneration) {
+    throw new DOMException('The operation was aborted.', 'AbortError')
+  }
+  flushFontReload()
+
+  clearPreloadedTrack()
+  const id = nextPreloadId++
+  preloadedTrack = { id, content, encrypted }
+  return id
+}
+
+self.preloadTrack = async ({
+  requestId,
+  source
+}: {
+  requestId: number
+  source: PreloadTrackSource
+}): Promise<void> => {
+  abortPreloadFetch()
+  preloadGeneration++
+  const generation = preloadGeneration
+
+  try {
+    const id = await runPreload(source, generation)
+    postMessage({ target: 'preloadTrack', requestId, success: true, id })
+  } catch (error) {
+    if (generation === preloadGeneration) clearPreloadedTrack()
+    if (generation !== preloadGeneration || isAbortError(error)) {
+      postMessage({
+        target: 'preloadTrack',
+        requestId,
+        success: false,
+        error: 'The preload was cancelled'
+      })
+      return
+    }
+    postMessage({
+      target: 'preloadTrack',
+      requestId,
+      success: false,
+      error: error instanceof Error ? error.message : String(error)
+    })
+  } finally {
+    if (preloadGeneration === generation) preloadFetchAbort = null
+  }
+}
+
+self.activatePreloadedTrack = ({ requestId, id }: { requestId: number; id?: number }): void => {
+  const pending = preloadedTrack
+  if (!pending || (id != null && pending.id !== id)) {
+    postMessage({
+      target: 'activatePreloadedTrack',
+      requestId,
+      success: false,
+      error: pending ? 'That preloaded track is no longer available' : 'No preloaded track is ready'
+    })
+    return
+  }
+
+  stopWarmup()
+  advanceTrackGeneration()
+  preloadedTrack = null
+  applyStoredTrack(pending.content, pending.encrypted)
+  postMessage({ target: 'activatePreloadedTrack', requestId, success: true, id: pending.id })
 }
 
 let _isPaused = true
@@ -1603,6 +1880,21 @@ const flushQueuedRender = (): void => {
   render(next.time, next.force, next.requestId, next.renderEpoch, next.prepareId, next.presentationId)
 }
 
+const postRenderInfo = (time: number, cached: boolean): void => {
+  emitCueChanges(time)
+  const droppedDelta = metrics.framesDropped - lastReportedDroppedFrames
+  lastReportedDroppedFrames = metrics.framesDropped
+  postMessage({
+    target: 'renderInfo',
+    time,
+    cached,
+    renderTimeMs: metrics.lastRenderTime,
+    imageCount: metrics.lastImageCount,
+    framesDropped: droppedDelta,
+    pendingRenders: Math.max(0, metrics.pendingRenders)
+  })
+}
+
 const completeRenderCycle = (painted: boolean = false): void => {
   if (painted && !onDemandRenderMode && !_isPaused && metrics.renderStartTime > 0 && adaptiveTiming) {
     fallbackTimingCompensationSeconds = updateTimingCompensation(
@@ -1613,6 +1905,11 @@ const completeRenderCycle = (painted: boolean = false): void => {
   }
   metrics.renderStartTime = 0
   renderInFlight = false
+  if (demandRenderTime != null) {
+    postRenderInfo(demandRenderTime, demandRenderCached)
+    demandRenderTime = undefined
+    demandRenderCached = false
+  }
   const hadQueuedRender = queuedRenders.length > 0
   flushQueuedRender()
   if (!hadQueuedRender && !renderInFlight) scheduleFullTrackWarmup()
@@ -1648,6 +1945,11 @@ const render = (
     return
   }
 
+  if (prepareId == null) {
+    demandRenderTime = time
+    demandRenderCached = false
+  }
+
   // Repeated manual renders at the exact same media time and canvas size are
   // deterministic. Skip the WASM call and reuse the existing canvas contents;
   // this matches players/benchmark harnesses that repaint paused frames.
@@ -1658,8 +1960,14 @@ const render = (
     self.height === lastRenderedRequestHeight
   ) {
     metrics.cacheHits++
-    if (prepareId == null) postMessage({ target: 'unbusy', requestId, renderEpoch })
-    else postPreparedSnapshot(prepareId, renderEpoch, time)
+    if (prepareId == null) {
+      demandRenderCached = true
+      postRenderInfo(time, true)
+      demandRenderTime = undefined
+      postMessage({ target: 'unbusy', requestId, renderEpoch })
+    } else {
+      postPreparedSnapshot(prepareId, renderEpoch, time)
+    }
     return
   }
 
@@ -1670,8 +1978,14 @@ const render = (
   // Inside a known-empty window the output cannot change: skip the WASM call
   if (!force && emptyWindowFrom >= 0 && time >= emptyWindowFrom && time < emptyWindowUntil) {
     metrics.cacheHits++
-    if (prepareId == null) postMessage({ target: 'unbusy', requestId, renderEpoch })
-    else postPreparedSnapshot(prepareId, renderEpoch, time)
+    if (prepareId == null) {
+      demandRenderCached = true
+      postRenderInfo(time, true)
+      demandRenderTime = undefined
+      postMessage({ target: 'unbusy', requestId, renderEpoch })
+    } else {
+      postPreparedSnapshot(prepareId, renderEpoch, time)
+    }
     return
   }
 
@@ -2548,6 +2862,7 @@ self.init = async (data: any): Promise<void> => {
       }
     }
     syncTotalEventsMetric()
+    rebuildCueTimes()
     firstTrackEventStartTime = getFirstEventStartTime()
     subtitleColorSpace = libassYCbCrMap[requireApi().getTrackColorSpace(requireHandle())]
     requireApi().setDropAnimations(requireHandle(), data.dropAllAnimations || 0)
@@ -2719,6 +3034,10 @@ self.video = ({
 
 self.destroy = (): void => {
   stopWarmup()
+  abortPreloadFetch()
+  preloadGeneration++
+  clearPreloadedTrack()
+  resetCueState(lastCurrentTime)
   advanceTrackGeneration()
   firstTrackEventStartTime = null
 
@@ -2847,6 +3166,7 @@ self.createEvent = ({ event }: { event: Partial<ASSEvent> }): void => {
   const index = requireApi().allocEvent(requireHandle())
   if (index >= 0) applyEventFields(index, event)
   syncTotalEventsMetric()
+  rebuildCueTimes()
   markNextRenderForced()
 }
 
@@ -2868,12 +3188,14 @@ self.getEvents = (): void => {
 
 self.setEvent = ({ event, index }: { event: Partial<ASSEvent>; index: number }): void => {
   applyEventFields(index, event)
+  rebuildCueTimes()
   markNextRenderForced()
 }
 
 self.removeEvent = ({ index }: { index: number }): void => {
   requireApi().removeEvent(requireHandle(), index)
   syncTotalEventsMetric()
+  rebuildCueTimes()
   markNextRenderForced()
 }
 
@@ -2986,7 +3308,8 @@ const RENDER_SAFE_TARGETS = new Set([
   'resetStats',
   'getEventCount',
   'getStyleCount',
-  'getColorSpace'
+  'getColorSpace',
+  'preloadTrack'
 ])
 
 onmessage = ({ data }: MessageEvent): void => {

@@ -2,8 +2,15 @@ import type {
   AkariSubOptions,
   ASSEvent,
   ASSStyle,
+  CueEvent,
   PerformanceStats,
+  PerformanceWarning,
+  PreloadedTrack,
+  PreloadTrackSource,
+  RenderEvent,
   RenderImage,
+  RendererChangeEvent,
+  RendererType,
   RenderTimes,
   VideoFrameCallbackMetadata,
   SubtitleColorSpace,
@@ -11,6 +18,7 @@ import type {
   FrameTimeline
 } from './types'
 import type { EncryptedSubtitleContent } from './types'
+import { classifyPerformanceWarnings, parsePreloadTrackSource } from './cue-events'
 import {
   webYCbCrMap,
   colorMatrixConversionMap,
@@ -181,8 +189,15 @@ export default class AkariSub extends EventTarget {
   private _boundHandleRVFC: (now: number, metadata: VideoFrameCallbackMetadata) => void
 
   private _gpuRenderer: AnyGPURenderer | null = null
-  private _rendererType: 'webgpu' | 'webgl2' | 'canvas2d' = 'canvas2d'
+  private _rendererType: RendererType = 'canvas2d'
   private _onCanvasFallback?: () => void
+  private _onCueEnter?: (cue: CueEvent) => void
+  private _onCueExit?: (cue: CueEvent) => void
+  private _onRender?: (event: RenderEvent) => void
+  private _onRendererChange?: (event: RendererChangeEvent) => void
+  private _onPerformanceWarning?: (warning: PerformanceWarning) => void
+  private _preloadedTrackId: number | null = null
+  private _nextTrackRequestId = 1
 
   private _lastRenderWidth: number = 0
   private _lastRenderHeight: number = 0
@@ -248,6 +263,11 @@ export default class AkariSub extends EventTarget {
     this._frameTimeline = options.frameTimeline ? normalizeFrameTimeline(options.frameTimeline) : null
 
     this._onCanvasFallback = options.onCanvasFallback
+    this._onCueEnter = options.onCueEnter
+    this._onCueExit = options.onCueExit
+    this._onRender = options.onRender
+    this._onRendererChange = options.onRendererChange
+    this._onPerformanceWarning = options.onPerformanceWarning
 
     const isCustomCanvas = !!options.canvas
     const rawAssImageGpu = options.rawAssImageGpu ?? false
@@ -496,7 +516,7 @@ export default class AkariSub extends EventTarget {
           return
         }
         this._gpuRenderer = renderer
-        this._rendererType = 'webgpu'
+        this._setRendererType('webgpu')
         console.log('[AkariSub] Using WebGPU renderer')
         return
       } catch (error) {
@@ -522,7 +542,7 @@ export default class AkariSub extends EventTarget {
           return
         }
         this._gpuRenderer = renderer
-        this._rendererType = 'webgl2'
+        this._setRendererType('webgl2')
         console.log('[AkariSub] Using WebGL2 renderer')
         return
       } catch (error) {
@@ -530,7 +550,7 @@ export default class AkariSub extends EventTarget {
       }
     }
 
-    this._rendererType = 'canvas2d'
+    this._setRendererType('canvas2d')
     if (!this._offscreenRender && !this._ctx) {
       this._ctx = this._canvas.getContext('2d', { alpha: true })
     }
@@ -539,7 +559,7 @@ export default class AkariSub extends EventTarget {
   }
 
   /** Active compositor: WebGPU, WebGL2, or Canvas2D. */
-  get rendererType(): 'webgpu' | 'webgl2' | 'canvas2d' {
+  get rendererType(): RendererType {
     return this._rendererType
   }
 
@@ -551,6 +571,16 @@ export default class AkariSub extends EventTarget {
   /** True when WebGPU or WebGL2 is compositing bitmaps. */
   get isUsingGPURenderer(): boolean {
     return this._gpuRenderer !== null
+  }
+
+  /** @internal */
+  private _setRendererType(next: RendererType): void {
+    const previous = this._rendererType
+    if (previous === next || this._destroyed) return
+    this._rendererType = next
+    const event: RendererChangeEvent = { rendererType: next, previous }
+    this._onRendererChange?.(event)
+    this.dispatchEvent(new CustomEvent('rendererChange', { detail: event }))
   }
 
   /** @internal */
@@ -726,6 +756,68 @@ export default class AkariSub extends EventTarget {
   /** Unload the current track without destroying the renderer. */
   freeTrack(): void {
     this._sendMutatingMessage('freeTrack')
+  }
+
+  /**
+   * Fetch, parse, and load fonts for a track without replacing the visible
+   * one. Call {@linkcode activatePreloadedTrack} to swap atomically.
+   */
+  async preloadTrack(source: PreloadTrackSource | string | Uint8Array | ArrayBuffer): Promise<PreloadedTrack> {
+    const parsed = parsePreloadTrackSource(source)
+    const ready =
+      this._workerReady ||
+      (await Promise.race([this._loaded.then(() => true), this._destroyedSignal.then(() => false)]))
+    if (!ready || this._destroyed) throw new Error('Renderer was destroyed before the track could be preloaded')
+
+    const requestId = this._nextTrackRequestId++
+    const transfers =
+      parsed.kind === 'content'
+        ? AkariSub._getSubtitleTransfers(parsed.content)
+        : parsed.kind === 'encrypted'
+          ? AkariSub._getSubtitleTransfers(undefined, parsed.content)
+          : []
+
+    const result = await this._fetchFromWorker<{ success: boolean; id?: number; error?: string }>({
+      target: 'preloadTrack',
+      requestId,
+      source: parsed,
+      timeoutMs: null,
+      transferable: transfers
+    })
+    if (!result.success || result.id == null) {
+      throw new Error(result.error || 'The renderer rejected the preloaded track')
+    }
+    this._preloadedTrackId = result.id
+    return { id: result.id }
+  }
+
+  /**
+   * Replace the visible track with a previously preloaded one. The last
+   * painted frame stays on screen until the new track's first frame is ready.
+   */
+  async activatePreloadedTrack(id: number = this._preloadedTrackId ?? -1): Promise<PreloadedTrack> {
+    const ready =
+      this._workerReady ||
+      (await Promise.race([this._loaded.then(() => true), this._destroyedSignal.then(() => false)]))
+    if (!ready || this._destroyed) throw new Error('Renderer was destroyed before the track could be activated')
+    if (id < 0) throw new Error('No preloaded track is ready')
+
+    this._bumpRenderEpoch()
+    const requestId = this._nextTrackRequestId++
+    const result = await this._fetchFromWorker<{ success: boolean; id?: number; error?: string }>({
+      target: 'activatePreloadedTrack',
+      requestId,
+      id,
+      timeoutMs: null
+    })
+    if (!result.success || result.id == null) {
+      throw new Error(result.error || 'The preloaded track could not be activated')
+    }
+    if (this._preloadedTrackId === result.id) this._preloadedTrackId = null
+    this._reAttachOffscreen()
+    if (this._ctx) this._ctx.filter = 'none'
+    this._syncVideoClock()
+    return { id: result.id }
   }
 
   /** Tell the worker whether playback is paused. Ignored when a video element is attached. */
@@ -1964,6 +2056,7 @@ export default class AkariSub extends EventTarget {
     }
 
     queue.push(metadata)
+    this._emitPerformanceWarnings({ pendingRenders: queue.length })
   }
 
   /** @internal */
@@ -2465,13 +2558,14 @@ export default class AkariSub extends EventTarget {
     target: string
     requestId?: number
     timeoutMs?: number | null
+    transferable?: Transferable[]
     [key: string]: any
   }): Promise<T> {
     return new Promise((resolve, reject) => {
       let cleanup = (): void => {}
       try {
         if (this._destroyed) throw new Error('Renderer was destroyed before the worker request started')
-        const { timeoutMs = 5000, ...workerMessage } = workerOptions
+        const { timeoutMs = 5000, transferable, ...workerMessage } = workerOptions
         const target = workerMessage.target
 
         const timeout =
@@ -2512,12 +2606,69 @@ export default class AkariSub extends EventTarget {
         this._worker.addEventListener('message', handleMessage)
         this._worker.addEventListener('error', handleError as any)
         this._pendingWorkerRejectors.add(handleDestroyed)
-        this._worker.postMessage(workerMessage)
+        if (transferable?.length) {
+          this._worker.postMessage({ ...workerMessage, transferable }, transferable)
+        } else {
+          this._worker.postMessage(workerMessage)
+        }
       } catch (error) {
         cleanup()
         reject(error)
       }
     })
+  }
+
+  /** @internal */
+  private _cues(data: { time: number; entered: CueEvent[]; exited: CueEvent[] }): void {
+    for (const cue of data.exited) {
+      this._onCueExit?.(cue)
+      this.dispatchEvent(new CustomEvent('cueExit', { detail: cue }))
+    }
+    for (const cue of data.entered) {
+      this._onCueEnter?.(cue)
+      this.dispatchEvent(new CustomEvent('cueEnter', { detail: cue }))
+    }
+  }
+
+  /** @internal */
+  private _renderInfo(data: {
+    time: number
+    cached: boolean
+    renderTimeMs: number
+    imageCount: number
+    framesDropped: number
+    pendingRenders: number
+  }): void {
+    const event: RenderEvent = {
+      time: data.time,
+      imageCount: data.imageCount,
+      renderTimeMs: data.renderTimeMs,
+      rendererType: this._rendererType,
+      cached: data.cached
+    }
+    this._onRender?.(event)
+    this.dispatchEvent(new CustomEvent('render', { detail: event }))
+    this._emitPerformanceWarnings({
+      renderTimeMs: data.renderTimeMs,
+      droppedDelta: data.framesDropped,
+      pendingRenders: Math.max(data.pendingRenders, this._pendingDemandTimes.length)
+    })
+  }
+
+  /** @internal */
+  private _emitPerformanceWarnings(sample: {
+    renderTimeMs?: number
+    droppedDelta?: number
+    pendingRenders?: number
+  }): void {
+    const warnings = classifyPerformanceWarnings({
+      ...sample,
+      maxPendingRenders: AkariSub.MAX_PENDING_DEMANDS
+    })
+    for (const warning of warnings) {
+      this._onPerformanceWarning?.(warning)
+      this.dispatchEvent(new CustomEvent('performanceWarning', { detail: warning }))
+    }
   }
 
   /** @internal */
