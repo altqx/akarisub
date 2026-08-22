@@ -329,10 +329,11 @@ pkg/$(WORKER_NAME)-mt.js: src/AkariSub.cpp src/pre-worker.js src/post-worker.js 
 		-s EXPORT_ES6=1 \
 		-o $@
 
-.PHONY: worker worker-mt
+.PHONY: worker worker-mt workers
 
 worker: pkg/akarisub.js
 worker-mt: pkg/akarisub-mt.js
+workers: worker worker-mt
 
 clean: clean-dist clean-libs clean-akarisub
 

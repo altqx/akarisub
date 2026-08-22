@@ -29,6 +29,7 @@ import {
   getColorMatrix3,
   getColorSpaceFilterUrl,
   profileFromVideoFrameColorSpace,
+  selectCanvasColorSpace,
   videoColorProfilesEqual,
   type CanvasColorSpace,
   type VideoColorProfile
@@ -158,6 +159,8 @@ export default class AkariSub extends EventTarget {
   private _lastSubtitleColorSpace: SubtitleColorSpace = null
   private _canvasColorSpaceOverride: CanvasColorSpace | 'auto'
   private _hdrOverride: boolean | 'auto'
+  private _appliedCanvasColorSpace: CanvasColorSpace = 'srgb'
+  private _appliedHdr = false
   private _wasmSimd = false
   private _wasmThreads = false
   private _canvas!: HTMLCanvasElement
@@ -281,6 +284,13 @@ export default class AkariSub extends EventTarget {
     this._isLikelyWebKit = isLikelyWebKit()
     this._canvasColorSpaceOverride = options.canvasColorSpace ?? 'auto'
     this._hdrOverride = options.hdr ?? 'auto'
+    this._videoColorProfile = {
+      ...defaultVideoColorProfile(),
+      canvasColorSpace: selectCanvasColorSpace('unknown', this._hdrOverride === true, this._canvasColorSpaceOverride),
+      hdr: this._hdrOverride === true
+    }
+    this._appliedCanvasColorSpace = this._videoColorProfile.canvasColorSpace
+    this._appliedHdr = this._shouldUseHdr()
 
     const test = AkariSub._test()
 
@@ -336,8 +346,8 @@ export default class AkariSub extends EventTarget {
 
     if (canUseGPURenderer) {
       this._initGPURenderer()
-    } else if (!this._offscreenRender) {
-      this._ctx = this._canvas.getContext('2d', this._canvas2dSettings())
+    } else if (!this._offscreenRender && (this._video || this._canvasColorSpaceOverride !== 'auto')) {
+      this._ensureMainThreadCanvas2d()
     }
 
     this._canvasctrl = this._offscreenRender
@@ -644,6 +654,78 @@ export default class AkariSub extends EventTarget {
       hdr,
       alpha: true
     })
+  }
+
+  /** @internal */
+  private _ensureMainThreadCanvas2d(): void {
+    if (this._gpuRenderer || this._offscreenRender || this._ctx || !this._canvas) return
+    this._ctx = this._canvas.getContext('2d', this._canvas2dSettings())
+    this._canvasctrl = this._canvas
+  }
+
+  /** @internal */
+  private _replaceCanvas2dContexts(): void {
+    if (this._bufferCanvas && this._bufferCtx) {
+      const next = document.createElement('canvas')
+      next.width = this._bufferCanvas.width
+      next.height = this._bufferCanvas.height
+      const bufferCtx = next.getContext('2d', this._canvas2dSettings(false))
+      if (bufferCtx) {
+        this._bufferCanvas = next
+        this._bufferCtx = bufferCtx
+      }
+    }
+
+    if (this._gpuRenderer) return
+
+    if (this._canvasParent) {
+      this._replaceOwnedOverlayCanvas(this._offscreenRender && !this._ctx ? 'offscreen' : '2d')
+      return
+    }
+
+    this._ensureMainThreadCanvas2d()
+  }
+
+  /** @internal */
+  private _replaceOwnedOverlayCanvas(mode: '2d' | 'offscreen'): void {
+    if (!this._canvasParent || !this._canvas) return
+    const previous = this._canvas
+    const width = previous.width
+    const height = previous.height
+    const top = previous.style.top
+    const left = previous.style.left
+    const cssWidth = previous.style.width
+    const cssHeight = previous.style.height
+    const filter = this._ctx ? this._ctx.filter : 'none'
+    previous.remove()
+    this._createCanvas()
+    this._canvas.width = width
+    this._canvas.height = height
+    this._canvas.style.top = top
+    this._canvas.style.left = left
+    this._canvas.style.width = cssWidth
+    this._canvas.style.height = cssHeight
+
+    if (mode === 'offscreen') {
+      this._canvasctrl = (
+        this._canvas as HTMLCanvasElement & { transferControlToOffscreen(): OffscreenCanvas }
+      ).transferControlToOffscreen()
+      this._ctx = false
+      this.sendMessage(
+        'offscreenCanvas',
+        {
+          canvasColorSpace: this._videoColorProfile.canvasColorSpace,
+          hdr: this._shouldUseHdr()
+        },
+        [this._canvasctrl as OffscreenCanvas]
+      )
+    } else {
+      this._canvasctrl = this._canvas
+      this._ctx = this._canvas.getContext('2d', this._canvas2dSettings())
+      if (this._ctx && filter && filter !== 'none') this._ctx.filter = filter
+    }
+
+    if (this._video) this.resize(0, 0, 0, 0, true)
   }
 
   /** @internal */
@@ -960,6 +1042,8 @@ export default class AkariSub extends EventTarget {
     if (this._videoFrameClock) {
       this._videoFrameClock.paused = isPaused
       this._playstate = isPaused
+      this._syncVideoClock()
+      return
     }
 
     this.sendMessage('video', { isPaused })
@@ -2429,11 +2513,16 @@ export default class AkariSub extends EventTarget {
   /** @internal */
   private _applyVideoColorProfile(): void {
     this._applyGpuColorManagement()
+    const hdr = this._shouldUseHdr()
+    const canvasColorSpace = this._videoColorProfile.canvasColorSpace
+    const canvasChanged = this._appliedCanvasColorSpace !== canvasColorSpace || this._appliedHdr !== hdr
+    this._appliedCanvasColorSpace = canvasColorSpace
+    this._appliedHdr = hdr
+    if (canvasChanged) this._replaceCanvas2dContexts()
     if (!this._workerReady) return
-    this.sendMessage('video', {
-      canvasColorSpace: this._videoColorProfile.canvasColorSpace,
-      hdr: this._shouldUseHdr()
-    })
+    if (canvasChanged) {
+      this.sendMessage('video', { canvasColorSpace, hdr })
+    }
   }
 
   /** @internal */
@@ -2509,6 +2598,7 @@ export default class AkariSub extends EventTarget {
         return
       }
 
+      this._ensureMainThreadCanvas2d()
       if (!this._ctx) return
 
       const ctx = this._ctx

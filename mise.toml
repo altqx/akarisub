@@ -20,7 +20,7 @@ run = "bun run build"
 
 [tasks."build:wasm"]
 description = "Build WASM glue only"
-run = "make worker"
+run = "make workers"
 
 [tasks."build:ts"]
 description = "Build TypeScript only"

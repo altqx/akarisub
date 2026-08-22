@@ -514,5 +514,5 @@ bun run build     # builds the WASM glue and TypeScript
 ```
 
 - If on macOS with libtool from brew, `LIBTOOLIZE=glibtoolize make`
-- Incremental rebuilds of the WASM glue only: `bun run build:wasm` (or `make worker`)
+- Incremental rebuilds of the WASM glue only: `bun run build:wasm` (or `make workers`)
 - Artifacts are in `pkg/` (WASM glue and binary) and `dist/` (TypeScript)

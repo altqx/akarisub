@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test'
+import { defaultVideoColorProfile, profileFromVideoFrameColorSpace } from '../src/ts/color-space'
 import AkariSub from '../src/ts/akarisub'
 import {
   VIDEO_FRAME_TIMESTAMP_SECONDS,
@@ -278,5 +279,94 @@ describe('presentVideoFrame', () => {
     expect(renderer._clockCurrentTime()).toBe(8.5)
     expect(renderer._videoPlaybackRateForWorker()).toBe(2)
     expect(renderer._isVideoPausedForWorker()).toBe(false)
+  })
+
+  test('setIsPaused on a VideoFrame clock forces an exact demand render', () => {
+    const renderer = Object.create(AkariSub.prototype) as any
+    const demands: Array<{ mediaTime: number; force?: boolean; width: number; height: number }> = []
+    const clock: Array<{ isPaused?: boolean; currentTime?: number }> = []
+
+    Object.assign(renderer, {
+      _destroyed: false,
+      _onDemandRender: true,
+      _video: undefined,
+      _videoFrameClock: {
+        currentTime: 1.5,
+        paused: false,
+        rate: 1,
+        width: 1920,
+        height: 1080
+      },
+      _playstate: false,
+      timeOffset: 0,
+      _workerReady: false,
+      _nextPresentationId: 1,
+      _latestPresentationId: 0,
+      _renderEpoch: 0,
+      _pendingDemandTimes: [],
+      _demandTimings: new Map(),
+      _preparedFrames: new Map(),
+      _prepareForce: false,
+      _videoColorSpace: 'BT709',
+      renderAhead: 0,
+      _requestDemandRender: (demand: { mediaTime: number; force?: boolean; width: number; height: number }) =>
+        demands.push(demand),
+      _clearPreparedFrames: () => {},
+      _postWorkerMessage: () => {},
+      sendMessage: (target: string, data: { isPaused?: boolean; currentTime?: number }) => {
+        if (target === 'video') clock.push(data)
+      }
+    })
+
+    renderer.setIsPaused(true)
+
+    expect(renderer._videoFrameClock.paused).toBe(true)
+    expect(renderer._playstate).toBe(true)
+    expect(clock[0]).toMatchObject({ isPaused: true })
+    expect(clock[0].currentTime).toBe(1.5)
+    expect(demands).toHaveLength(1)
+    expect(demands[0].mediaTime).toBe(1.5)
+    expect(demands[0].force).toBe(true)
+    expect(demands[0].width).toBe(1920)
+    expect(demands[0].height).toBe(1080)
+  })
+
+  test('a later HDR VideoFrame recreates 2D compositor settings', () => {
+    const renderer = Object.create(AkariSub.prototype) as any
+    const messages: Array<[string, Record<string, unknown>]> = []
+    let replaced = 0
+
+    Object.assign(renderer, {
+      _videoColorProfile: defaultVideoColorProfile(),
+      _videoColorSpace: null,
+      _appliedCanvasColorSpace: 'srgb',
+      _appliedHdr: false,
+      _canvasColorSpaceOverride: 'auto',
+      _hdrOverride: 'auto',
+      _workerReady: true,
+      _gpuRenderer: null,
+      _replaceCanvas2dContexts: () => {
+        replaced++
+      },
+      _applyGpuColorManagement: () => {},
+      sendMessage: (target: string, data: Record<string, unknown> = {}) => {
+        messages.push([target, data])
+      }
+    })
+
+    renderer._setVideoColorSpace('BT709')
+    expect(replaced).toBe(0)
+    expect(messages.every(([target]) => target === 'getColorSpace')).toBe(true)
+
+    renderer._setVideoColorProfile(
+      profileFromVideoFrameColorSpace({
+        matrix: 'bt2020-ncl',
+        primaries: 'bt2020',
+        transfer: 'pq'
+      })
+    )
+
+    expect(replaced).toBe(1)
+    expect(messages.some(([target, data]) => target === 'video' && data.hdr === true)).toBe(true)
   })
 })

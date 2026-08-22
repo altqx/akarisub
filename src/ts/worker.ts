@@ -187,9 +187,35 @@ const workerCanvas2dSettings = (): CanvasRenderingContext2DSettings =>
     alpha: true
   })
 
+const resetSoftwareCanvasContexts = (): void => {
+  preparedCanvas = null
+  preparedCtx = null
+  preparedBufferCanvas = null
+  preparedBufferCtx = null
+  rawAssWebGL2Renderer?.setCanvasColorSpace(canvasColorSpace)
+  if (bufferCanvas) {
+    const width = Math.max(1, bufferCanvas.width || self.width || 1)
+    const height = Math.max(1, bufferCanvas.height || self.height || 1)
+    bufferCanvas = new OffscreenCanvas(width, height)
+    bufferCtx = bufferCanvas.getContext('2d', workerCanvas2dSettings())
+  }
+  if (offscreenRender === 'hybrid' && offCanvas) {
+    offCanvas = new OffscreenCanvas(Math.max(1, offCanvas.width || self.width || 1), Math.max(1, offCanvas.height || self.height || 1))
+    offCanvasCtx = offCanvas.getContext('2d', workerCanvas2dSettings())
+  }
+}
+
 const applyCanvasColorSpace = (space?: CanvasColorSpace, hdr?: boolean): void => {
-  if (space) canvasColorSpace = space
-  if (hdr != null) hdrCanvas = hdr
+  let changed = false
+  if (space && space !== canvasColorSpace) {
+    canvasColorSpace = space
+    changed = true
+  }
+  if (hdr != null && hdr !== hdrCanvas) {
+    hdrCanvas = hdr
+    changed = true
+  }
+  if (changed) resetSoftwareCanvasContexts()
 }
 
 interface AkariSubApi {
@@ -634,6 +660,10 @@ class RawASSImageWebGL2Renderer {
     }
 
     return pixels
+  }
+
+  setCanvasColorSpace(colorSpace: CanvasColorSpace): void {
+    if (this._gl) applyWebGL2ColorSpace(this._gl, colorSpace)
   }
 
   destroy(): void {
