@@ -946,9 +946,12 @@ export default class AkariSub extends EventTarget {
 
   /** @internal */
   private _unbusy(
-    data: { requestId?: number; renderEpoch?: number; painted?: boolean; images?: RenderImage[] } = {}
+    data: { requestId?: number; renderEpoch?: number; painted?: boolean; images?: RenderImage[] } = {},
+    observeDemandCompletion: boolean = true
   ): void {
-    this._observeDemandCompletion(data.requestId, data.renderEpoch, data.painted === true || data.images != null)
+    if (observeDemandCompletion) {
+      this._observeDemandCompletion(data.requestId, data.renderEpoch, data.painted === true || data.images != null)
+    }
     this._prepareForce = true
 
     this._finishWorkerSlot()
@@ -1148,20 +1151,32 @@ export default class AkariSub extends EventTarget {
   }
 
   /** @internal */
-  private _activateBaseCanvasAfterGPUWork(renderEpoch: number = this._renderEpoch, presentedIndex?: number): void {
+  private _activateBaseCanvasAfterGPUWork(
+    renderEpoch: number = this._renderEpoch,
+    presentedIndex?: number
+  ): Promise<boolean> | null {
     if (this._rendererType !== 'webgpu' || !(this._gpuRenderer instanceof WebGPURenderer)) {
       this._activateBaseCanvas(presentedIndex)
-      return
+      return null
     }
 
     const renderer = this._gpuRenderer
-    void renderer.submittedWorkDone().then(
+    let submittedWork: Promise<void>
+    try {
+      submittedWork = renderer.submittedWorkDone()
+    } catch {
+      return Promise.resolve(false)
+    }
+
+    return submittedWork.then(
       () => {
-        if (this._destroyed || renderEpoch !== this._renderEpoch) return
+        if (this._destroyed || renderEpoch !== this._renderEpoch) return false
         this._activateBaseCanvas(presentedIndex)
+        return true
       },
       () => {
         // Keep the last committed stage visible when the GPU device/queue is lost.
+        return false
       }
     )
   }
@@ -1603,7 +1618,11 @@ export default class AkariSub extends EventTarget {
 
     if (request?.presentation) {
       const presentation = request.presentation
-      if (data.bitmap && request.renderEpoch === this._renderEpoch && data.renderEpoch === this._renderEpoch) {
+      const validEpoch = request.renderEpoch === this._renderEpoch && data.renderEpoch === this._renderEpoch
+      const currentIndex = this._currentExactFrameIndex()
+      const obsolete = currentIndex != null && request.index < currentIndex
+
+      if (data.bitmap && validEpoch && !obsolete) {
         this._presentPreparedFrame(
           {
             width: data.width ?? this._canvasctrl.width,
@@ -1620,7 +1639,13 @@ export default class AkariSub extends EventTarget {
       }
 
       data.bitmap?.close()
-      if (request.renderEpoch === this._renderEpoch && data.renderEpoch === this._renderEpoch) {
+      if (validEpoch && obsolete) {
+        this._prepareForce = true
+        this._finishWorkerSlot()
+        return
+      }
+
+      if (validEpoch) {
         this._demandRender({ ...presentation, preparedPresentationAttempted: true })
         return
       }
@@ -2150,6 +2175,7 @@ export default class AkariSub extends EventTarget {
     renderEpoch?: number
     presentationId?: number
   }): void {
+    let gpuCompletion: boolean | Promise<boolean> | undefined
     try {
       if (
         (data.renderEpoch != null && data.renderEpoch !== this._renderEpoch) ||
@@ -2181,7 +2207,7 @@ export default class AkariSub extends EventTarget {
       }
 
       if (this._gpuRenderer) {
-        this._renderGPU(data)
+        gpuCompletion = this._renderGPU(data)
         return
       }
 
@@ -2245,7 +2271,21 @@ export default class AkariSub extends EventTarget {
         console.log('Bitmaps: ' + count + ' Total: ' + (total | 0) + 'ms', data.times)
       }
     } finally {
-      this._unbusy(data)
+      if (gpuCompletion === undefined) {
+        this._unbusy(data)
+      } else {
+        if (typeof gpuCompletion === 'boolean') {
+          this._observeDemandCompletion(data.requestId, data.renderEpoch, gpuCompletion)
+        } else {
+          void gpuCompletion.then(
+            (painted) => this._observeDemandCompletion(data.requestId, data.renderEpoch, painted),
+            () => this._observeDemandCompletion(data.requestId, data.renderEpoch, false)
+          )
+        }
+        // GPU submission frees the worker immediately; only the latency sample
+        // waits for the queue fence so queued RVFCs can continue to coalesce.
+        this._unbusy(data, false)
+      }
     }
   }
 
@@ -2256,9 +2296,9 @@ export default class AkariSub extends EventTarget {
     times: RenderTimes
     presentationId?: number
     renderEpoch?: number
-  }): void {
+  }): boolean | Promise<boolean> {
     const renderer = this._gpuRenderer
-    if (!renderer) return
+    if (!renderer) return false
     const presentedIndex = this._currentExactFrameIndex()
 
     if (data.images.length === 0) {
@@ -2269,9 +2309,9 @@ export default class AkariSub extends EventTarget {
         console.warn('[AkariSub] GPU clear failed; preserving the last subtitle frame.', error)
       }
       if (painted !== false) {
-        this._activateBaseCanvasAfterGPUWork(data.renderEpoch, presentedIndex)
+        return this._activateBaseCanvasAfterGPUWork(data.renderEpoch, presentedIndex) ?? true
       }
-      return
+      return false
     }
 
     let painted: boolean | void
@@ -2313,9 +2353,8 @@ export default class AkariSub extends EventTarget {
       }
     }
 
-    if (painted !== false) {
-      this._activateBaseCanvasAfterGPUWork(data.renderEpoch, presentedIndex)
-    }
+    const completion =
+      painted !== false ? (this._activateBaseCanvasAfterGPUWork(data.renderEpoch, presentedIndex) ?? true) : false
 
     if (this.debug) {
       data.times.JSRenderTime = Date.now() - (data.times.JSRenderTime || 0) - (data.times.IPCTime || 0)
@@ -2332,6 +2371,8 @@ export default class AkariSub extends EventTarget {
         data.times
       )
     }
+
+    return completion
   }
 
   /** @internal */

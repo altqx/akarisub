@@ -405,6 +405,73 @@ describe('subtitle timing compensation', () => {
     expect(finished).toBe(1)
   })
 
+  test('discards a completed fallback frame when newer RVFCs are already queued', () => {
+    const renderer = Object.create(AkariSub.prototype) as any
+    const timeline = new Float64Array([4.796, 4.838, 4.88, 4.922, 4.963])
+    let closed = 0
+    const presentations: number[] = []
+    const demands: Array<{ mediaTime: number; presentationId: number }> = []
+
+    Object.assign(renderer, {
+      _prepareRequests: new Map([
+        [
+          2,
+          {
+            index: 1,
+            renderEpoch: 7,
+            presentation: {
+              mediaTime: timeline[1],
+              width: 1920,
+              height: 1080,
+              presentationId: 8,
+              expectedDisplayTime: 140
+            }
+          }
+        ]
+      ]),
+      _pendingDemandTimes: [
+        { mediaTime: timeline[2], width: 1920, height: 1080, presentationId: 9 },
+        { mediaTime: timeline[3], width: 1920, height: 1080, presentationId: 10 }
+      ],
+      _frameTimeline: timeline,
+      _lastPresentedFrameIndex: 3,
+      _latestPresentationId: 7,
+      _renderEpoch: 7,
+      _prepareForce: false,
+      _preparedFrames: new Map(),
+      _prepareQueue: [],
+      _video: { paused: false, ended: false, currentTime: timeline[3], playbackRate: 1 },
+      _playstate: false,
+      _videoWidth: 1920,
+      _videoHeight: 1080,
+      _canvasctrl: { width: 1920, height: 1080 },
+      framePrefetch: 2,
+      busy: true,
+      _presentPreparedFrame: (_frame: unknown, presentationId: number) => presentations.push(presentationId),
+      _demandRender: (metadata: { mediaTime: number; presentationId: number }) => demands.push(metadata),
+      _primePreparedFrames: () => {},
+      _dispatchNextPreparation: () => {},
+      _dispatchReadyWhenFrameBufferFilled: () => {}
+    })
+
+    renderer._preparedFrame({
+      prepareId: 2,
+      renderEpoch: 7,
+      time: timeline[1],
+      width: 1920,
+      height: 1080,
+      bitmap: { close: () => closed++ }
+    })
+
+    expect(presentations).toEqual([])
+    expect(closed).toBe(1)
+    expect(demands).toHaveLength(1)
+    expect(demands[0].mediaTime).toBe(timeline[3])
+    expect(demands[0].presentationId).toBe(10)
+    expect(renderer._pendingDemandTimes).toEqual([])
+    expect(renderer._prepareForce).toBe(true)
+  })
+
   test('commits a cached exact snapshot during the RVFC rendering phase without a timer guard', () => {
     const renderer = Object.create(AkariSub.prototype) as any
     const calls: string[] = []
@@ -736,6 +803,115 @@ describe('subtitle timing compensation', () => {
     await Promise.resolve()
 
     expect(activations).toEqual([12])
+  })
+
+  test('learns WebGPU latency from queue completion without holding the worker slot', async () => {
+    const renderer = Object.create(AkariSub.prototype) as any
+    const gpu = new WebGPURenderer() as any
+    let completeGPUWork!: () => void
+    gpu.clear = () => true
+    gpu.submittedWorkDone = () =>
+      new Promise<void>((resolve) => {
+        completeGPUWork = resolve
+      })
+
+    let activations = 0
+    let releasedWorkerSlots = 0
+    Object.assign(renderer, {
+      _rendererType: 'webgpu',
+      _gpuRenderer: gpu,
+      _canvasctrl: { width: 1920, height: 1080 },
+      _frameTimeline: null,
+      _destroyed: false,
+      _renderEpoch: 4,
+      _latestPresentationId: 9,
+      _adaptiveTiming: true,
+      _timingCompensationSeconds: 0,
+      _demandTimings: new Map([[7, { dispatchedAt: performance.now() - 50, renderEpoch: 4 }]]),
+      _prepareForce: false,
+      _activateBaseCanvas: () => activations++,
+      _finishWorkerSlot: () => releasedWorkerSlots++
+    })
+
+    renderer._render({
+      images: [],
+      asyncRender: true,
+      times: {},
+      width: 1920,
+      height: 1080,
+      colorSpace: null,
+      requestId: 7,
+      renderEpoch: 4,
+      presentationId: 9
+    })
+
+    expect(releasedWorkerSlots).toBe(1)
+    expect(renderer._prepareForce).toBe(true)
+    expect(renderer._demandTimings.has(7)).toBe(true)
+    expect(renderer._timingCompensationSeconds).toBe(0)
+    expect(activations).toBe(0)
+
+    completeGPUWork()
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(activations).toBe(1)
+    expect(renderer._demandTimings.has(7)).toBe(false)
+    expect(renderer._timingCompensationSeconds).toBeGreaterThan(0)
+    expect(releasedWorkerSlots).toBe(1)
+  })
+
+  test('retires WebGPU timing without learning when queue completion fails', async () => {
+    const renderer = Object.create(AkariSub.prototype) as any
+    const gpu = new WebGPURenderer() as any
+    let failGPUWork!: (error: Error) => void
+    gpu.clear = () => true
+    gpu.submittedWorkDone = () =>
+      new Promise<void>((_resolve, reject) => {
+        failGPUWork = reject
+      })
+
+    let activations = 0
+    let releasedWorkerSlots = 0
+    Object.assign(renderer, {
+      _rendererType: 'webgpu',
+      _gpuRenderer: gpu,
+      _canvasctrl: { width: 1920, height: 1080 },
+      _frameTimeline: null,
+      _destroyed: false,
+      _renderEpoch: 4,
+      _latestPresentationId: 9,
+      _adaptiveTiming: true,
+      _timingCompensationSeconds: 0,
+      _demandTimings: new Map([[7, { dispatchedAt: performance.now() - 50, renderEpoch: 4 }]]),
+      _prepareForce: false,
+      _activateBaseCanvas: () => activations++,
+      _finishWorkerSlot: () => releasedWorkerSlots++
+    })
+
+    renderer._render({
+      images: [],
+      asyncRender: true,
+      times: {},
+      width: 1920,
+      height: 1080,
+      colorSpace: null,
+      requestId: 7,
+      renderEpoch: 4,
+      presentationId: 9
+    })
+
+    expect(renderer._demandTimings.has(7)).toBe(true)
+    expect(releasedWorkerSlots).toBe(1)
+
+    failGPUWork(new Error('device lost'))
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(activations).toBe(0)
+    expect(renderer._demandTimings.has(7)).toBe(false)
+    expect(renderer._timingCompensationSeconds).toBe(0)
+    expect(releasedWorkerSlots).toBe(1)
   })
 
   test('does not reveal WebGPU work from an obsolete render epoch', async () => {
