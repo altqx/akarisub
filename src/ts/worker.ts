@@ -12,6 +12,12 @@ import type {
   WorkerInboundMessage
 } from './types'
 import { parseAss, dropBlur, fixPlayRes, libassYCbCrMap } from './utils'
+import {
+  applyWebGL2ColorSpace,
+  canvas2dContextSettings,
+  createSubtitleImageData,
+  type CanvasColorSpace
+} from './color-space'
 import { glueUrlFromWasmUrl } from './wasm'
 import { compensatedMediaTime, isStalePresentation, updateTimingCompensation } from './timing'
 import {
@@ -159,6 +165,10 @@ let preparedBufferCanvas: OffscreenCanvas | null = null
 let preparedBufferCtx: OffscreenCanvasRenderingContext2D | null = null
 let akariSubHandle = 0
 let subtitleColorSpace: SubtitleColorSpace = null
+let canvasColorSpace: CanvasColorSpace = 'srgb'
+let hdrCanvas = false
+let wasmSimd = false
+let wasmThreads = false
 let dropAllBlur = false
 let fullTrackWarmupEnabled = false
 let hasBitmapBug = false
@@ -169,6 +179,44 @@ let fullTrackWarmupGeneration = 0
 
 const TEXT_ENCODER = new TextEncoder()
 const TEXT_DECODER = new TextDecoder()
+
+const workerCanvas2dSettings = (): CanvasRenderingContext2DSettings =>
+  canvas2dContextSettings({
+    colorSpace: canvasColorSpace,
+    hdr: hdrCanvas,
+    alpha: true
+  })
+
+const resetSoftwareCanvasContexts = (): void => {
+  preparedCanvas = null
+  preparedCtx = null
+  preparedBufferCanvas = null
+  preparedBufferCtx = null
+  rawAssWebGL2Renderer?.setCanvasColorSpace(canvasColorSpace)
+  if (bufferCanvas) {
+    const width = Math.max(1, bufferCanvas.width || self.width || 1)
+    const height = Math.max(1, bufferCanvas.height || self.height || 1)
+    bufferCanvas = new OffscreenCanvas(width, height)
+    bufferCtx = bufferCanvas.getContext('2d', workerCanvas2dSettings())
+  }
+  if (offscreenRender === 'hybrid' && offCanvas) {
+    offCanvas = new OffscreenCanvas(Math.max(1, offCanvas.width || self.width || 1), Math.max(1, offCanvas.height || self.height || 1))
+    offCanvasCtx = offCanvas.getContext('2d', workerCanvas2dSettings())
+  }
+}
+
+const applyCanvasColorSpace = (space?: CanvasColorSpace, hdr?: boolean): void => {
+  let changed = false
+  if (space && space !== canvasColorSpace) {
+    canvasColorSpace = space
+    changed = true
+  }
+  if (hdr != null && hdr !== hdrCanvas) {
+    hdrCanvas = hdr
+    changed = true
+  }
+  if (changed) resetSoftwareCanvasContexts()
+}
 
 interface AkariSubApi {
   create: (width: number, height: number, fallbackFontPtr: number, debug: number) => number
@@ -206,6 +254,8 @@ interface AkariSubApi {
   renderBlendCollect: (handle: number, time: number, force: number, outPtr: number, maxItems: number) => number
   renderImageCollect: (handle: number, time: number, force: number, outPtr: number, maxItems: number) => number
   renderRawCollect: (handle: number, time: number, force: number, outPtr: number, maxItems: number) => number
+  setBlendThreads?: (handle: number, threads: number) => void
+  getBlendThreads?: (handle: number) => number
 }
 
 let akariSubApi: AkariSubApi | null = null
@@ -371,6 +421,7 @@ class RawASSImageWebGL2Renderer {
     }) as WebGL2RenderingContext | null
     if (!gl) return false
     this._gl = gl
+    applyWebGL2ColorSpace(gl, canvasColorSpace)
 
     const vert = compileRawAssShader(gl, gl.VERTEX_SHADER, RAW_ASS_VERTEX_SHADER)
     const frag = compileRawAssShader(gl, gl.FRAGMENT_SHADER, RAW_ASS_FRAGMENT_SHADER)
@@ -609,6 +660,10 @@ class RawASSImageWebGL2Renderer {
     }
 
     return pixels
+  }
+
+  setCanvasColorSpace(colorSpace: CanvasColorSpace): void {
+    if (this._gl) applyWebGL2ColorSpace(this._gl, colorSpace)
   }
 
   destroy(): void {
@@ -2101,7 +2156,7 @@ const render = (
           rawData = rawData.slice()
         }
 
-        const imageData = new ImageData(rawData as Uint8ClampedArray<ArrayBuffer>, item.w, item.h)
+        const imageData = createSubtitleImageData(rawData, item.w, item.h)
 
         promises[i] = asyncRenderOptions
           ? createImageBitmap(imageData, { premultiplyAlpha: 'none', colorSpaceConversion: 'none' })
@@ -2277,7 +2332,7 @@ const ensurePreparedCanvas = (): OffscreenCanvasRenderingContext2D => {
     preparedCanvas.height = height
     preparedCtx = null
   }
-  preparedCtx ??= preparedCanvas.getContext('2d')
+  preparedCtx ??= preparedCanvas.getContext('2d', workerCanvas2dSettings())
   if (!preparedCtx) throw new Error('Prepared-frame canvas is unavailable')
   return preparedCtx
 }
@@ -2328,7 +2383,7 @@ const paintPreparedImages = (
         preparedBufferCanvas.height = image.h
         preparedBufferCtx = null
       }
-      preparedBufferCtx ??= preparedBufferCanvas.getContext('2d')
+      preparedBufferCtx ??= preparedBufferCanvas.getContext('2d', workerCanvas2dSettings())
       if (!preparedBufferCtx) throw new Error('Prepared-frame buffer canvas is unavailable')
 
       const byteLength = image.w * image.h * 4
@@ -2336,7 +2391,7 @@ const paintPreparedImages = (
         image.image instanceof Uint8ClampedArray
           ? image.image
           : self.HEAPU8C.subarray(image.image as number, (image.image as number) + byteLength)
-      preparedBufferCtx.putImageData(new ImageData(pixels as Uint8ClampedArray<ArrayBuffer>, image.w, image.h), 0, 0)
+      preparedBufferCtx.putImageData(createSubtitleImageData(pixels, image.w, image.h), 0, 0)
       preparedCtx.drawImage(preparedBufferCanvas, image.x, image.y)
     }
 
@@ -2440,7 +2495,7 @@ const paintImages = ({
           const byteLength = imgW * imgH * 4
           const rawData = self.HEAPU8C.subarray(pointer, pointer + byteLength)
 
-          bufferCtx!.putImageData(new ImageData(rawData as Uint8ClampedArray<ArrayBuffer>, imgW, imgH), 0, 0)
+          bufferCtx!.putImageData(createSubtitleImageData(rawData, imgW, imgH), 0, 0)
           offCanvasCtx!.drawImage(bufferCanvas!, img.x, img.y)
         }
       }
@@ -2504,6 +2559,9 @@ const cancelAnimationFrame = self.cancelAnimationFrame ? self.cancelAnimationFra
 
 self.init = async (data: any): Promise<void> => {
   hasBitmapBug = data.hasBitmapBug
+  applyCanvasColorSpace(data.canvasColorSpace, data.hdr)
+  wasmSimd = !!data.wasmSimd
+  wasmThreads = !!data.wasmThreads
   fullTrackWarmupEnabled = !!data.fullTrackWarmup
   frameTimelineMode = !!data.frameTimelineMode
   adaptiveTiming = data.adaptiveTiming ?? true
@@ -2546,7 +2604,15 @@ self.init = async (data: any): Promise<void> => {
     setWasmUrl(wasmUrl)
     try {
       return await WASM({
-        locateFile: (path: string) => (path.endsWith('.wasm') ? wasmUrl : path),
+        locateFile: (path: string) => {
+          if (path.endsWith('.wasm')) return wasmUrl
+          if (path.endsWith('.worker.js')) {
+            const workerUrl = new URL(jsGlueUrl, self.location.href)
+            workerUrl.pathname = workerUrl.pathname.replace(/\.js$/, '.worker.js')
+            return workerUrl.href
+          }
+          return path
+        },
         wasm: !(WebAssembly as any).instantiateStreaming ? (read_(wasmUrl, true) as ArrayBuffer) : undefined
       })
     } finally {
@@ -2592,7 +2658,9 @@ self.init = async (data: any): Promise<void> => {
       getEmptyWindow: Module._akarisub_get_empty_window,
       renderBlendCollect: Module._akarisub_render_blend_collect,
       renderImageCollect: Module._akarisub_render_image_collect,
-      renderRawCollect: Module._akarisub_render_raw_collect
+      renderRawCollect: Module._akarisub_render_raw_collect,
+      setBlendThreads: Module._akarisub_set_blend_threads,
+      getBlendThreads: Module._akarisub_get_blend_threads
     }
 
     const fallbackFonts: string[] = []
@@ -2754,6 +2822,9 @@ self.init = async (data: any): Promise<void> => {
     akariSubHandle = withCString(primaryFallback || '', (fontPtr) => {
       return requireApi().create(self.width, self.height, fontPtr, debug ? 1 : 0)
     })
+    if (wasmThreads) {
+      requireApi().setBlendThreads?.(akariSubHandle, 4)
+    }
 
     // Admission requires a live libass handle. Load fallback bytes only after
     // creation so rejected files are never retained in MEMFS or fontMap_.
@@ -2912,7 +2983,16 @@ self.init = async (data: any): Promise<void> => {
     postMessage({ target: 'verifyColorSpace', subtitleColorSpace })
   }
 
+  const fallbackWasmUrl = typeof data.fallbackWasmUrl === 'string' ? data.fallbackWasmUrl : null
+  const fallbackGlueUrl = typeof data.fallbackGlueUrl === 'string' ? data.fallbackGlueUrl : undefined
+
   loadWasm(data.wasmUrl, data.glueUrl)
+    .catch((e) => {
+      if (!fallbackWasmUrl) throw e
+      console.warn('[AkariSub] Threaded WASM failed, falling back to single-thread:', e)
+      wasmThreads = false
+      return loadWasm(fallbackWasmUrl, fallbackGlueUrl)
+    })
     .then(onWasmLoaded)
     .catch((e) => {
       console.error('[AkariSub] WASM loading failed:', e)
@@ -2922,11 +3002,16 @@ self.init = async (data: any): Promise<void> => {
 
 self.offscreenCanvas = ({
   transferable,
-  rawAssImageGpu
+  rawAssImageGpu,
+  canvasColorSpace: nextColorSpace,
+  hdr
 }: {
   transferable: [OffscreenCanvas]
   rawAssImageGpu?: boolean
+  canvasColorSpace?: CanvasColorSpace
+  hdr?: boolean
 }): void => {
+  applyCanvasColorSpace(nextColorSpace, hdr)
   offCanvas = transferable[0]
   rawAssWebGL2Renderer = null
 
@@ -2949,12 +3034,12 @@ self.offscreenCanvas = ({
     }
   }
 
-  offCanvasCtx = offCanvas.getContext('2d')
+  offCanvasCtx = offCanvas.getContext('2d', workerCanvas2dSettings())
   // Plain offscreen rendering draws raw WASM image pointers through a reusable
   // buffer canvas. Create it regardless of asyncRender because the render path
   // deliberately disables per-image ImageBitmap creation for offscreenRender=true.
   bufferCanvas = new OffscreenCanvas(self.width, self.height)
-  bufferCtx = bufferCanvas.getContext('2d')
+  bufferCtx = bufferCanvas.getContext('2d', workerCanvas2dSettings())
   offscreenRender = true
 }
 
@@ -2962,7 +3047,7 @@ self.detachOffscreen = (): void => {
   rawAssWebGL2Renderer?.destroy()
   rawAssWebGL2Renderer = null
   offCanvas = new OffscreenCanvas(self.width, self.height)
-  offCanvasCtx = offCanvas.getContext('2d')
+  offCanvasCtx = offCanvas.getContext('2d', workerCanvas2dSettings())
   offscreenRender = 'hybrid'
 }
 
@@ -3027,13 +3112,18 @@ self.video = ({
   currentTime,
   isPaused,
   rate: newRate,
-  renderAhead
+  renderAhead,
+  canvasColorSpace: nextColorSpace,
+  hdr
 }: {
   currentTime?: number
   isPaused?: boolean
   rate?: number
   renderAhead?: number
+  canvasColorSpace?: CanvasColorSpace
+  hdr?: boolean
 }): void => {
+  applyCanvasColorSpace(nextColorSpace, hdr)
   if (renderAhead != null && Number.isFinite(renderAhead)) configuredRenderAheadSeconds = renderAhead
   if (currentTime != null) setCurrentTime(currentTime)
   if (isPaused != null) setIsPaused(isPaused)
@@ -3285,7 +3375,10 @@ self.getStats = (): void => {
             : 'main-thread',
       onDemandRender: onDemandRenderMode,
       cacheHits: metrics.cacheHits,
-      cacheMisses: metrics.cacheMisses
+      cacheMisses: metrics.cacheMisses,
+      wasmSimd,
+      wasmThreads,
+      canvasColorSpace
     }
   })
 }

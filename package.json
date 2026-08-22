@@ -26,7 +26,7 @@
     "THIRD_PARTY_NOTICES.md"
   ],
   "scripts": {
-    "build:wasm": "make worker",
+    "build:wasm": "make workers",
     "build:ts": "tsc",
     "build": "bun run license:third-party && bun run build:wasm && bun run build:ts",
     "license:third-party": "bun build/generate-third-party-notices.mjs",

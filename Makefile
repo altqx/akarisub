@@ -224,7 +224,7 @@ LIBASS_DEPS = \
 	$(DIST_DIR)/lib/libfontconfig.a \
 	$(DIST_DIR)/lib/libass.a
 
-dist: $(LIBASS_DEPS) pkg/$(WORKER_NAME).js
+dist: $(LIBASS_DEPS) pkg/$(WORKER_NAME).js pkg/$(WORKER_NAME)-mt.js
 
 # Dist Files https://github.com/emscripten-core/emscripten/blob/main/src/settings.js
 
@@ -254,7 +254,7 @@ SIZE_ARGS = \
 
 # Modern browser targets: Chrome 114+, Safari 16.4+ (for all WASM features)
 COMPAT_ARGS = \
-		-s EXPORTED_FUNCTIONS="['_malloc','_free','_akarisub_create','_akarisub_destroy','_akarisub_set_drop_animations','_akarisub_set_adaptive_blend_layouts','_akarisub_create_track_mem','_akarisub_remove_track','_akarisub_resize_canvas','_akarisub_add_font','_akarisub_reload_fonts','_akarisub_set_default_font','_akarisub_set_fallback_fonts','_akarisub_set_use_fontconfig_provider','_akarisub_set_memory_limits','_akarisub_get_event_count','_akarisub_alloc_event','_akarisub_remove_event','_akarisub_get_style_count','_akarisub_alloc_style','_akarisub_remove_style','_akarisub_style_override_index','_akarisub_disable_style_override','_akarisub_get_track_color_space','_akarisub_event_get_int','_akarisub_event_set_int','_akarisub_event_get_str','_akarisub_event_set_str','_akarisub_style_get_num','_akarisub_style_set_num','_akarisub_style_get_str','_akarisub_style_set_str','_akarisub_get_event_time_range','_akarisub_get_empty_window','_akarisub_render_blend_collect','_akarisub_render_image_collect','_akarisub_render_raw_collect']" \
+		-s EXPORTED_FUNCTIONS="['_malloc','_free','_akarisub_create','_akarisub_destroy','_akarisub_set_drop_animations','_akarisub_set_adaptive_blend_layouts','_akarisub_set_blend_threads','_akarisub_get_blend_threads','_akarisub_create_track_mem','_akarisub_remove_track','_akarisub_resize_canvas','_akarisub_add_font','_akarisub_reload_fonts','_akarisub_set_default_font','_akarisub_set_fallback_fonts','_akarisub_set_use_fontconfig_provider','_akarisub_set_memory_limits','_akarisub_get_event_count','_akarisub_alloc_event','_akarisub_remove_event','_akarisub_get_style_count','_akarisub_alloc_style','_akarisub_remove_style','_akarisub_style_override_index','_akarisub_disable_style_override','_akarisub_get_track_color_space','_akarisub_event_get_int','_akarisub_event_set_int','_akarisub_event_get_str','_akarisub_event_set_str','_akarisub_style_get_num','_akarisub_style_set_num','_akarisub_style_get_str','_akarisub_style_set_str','_akarisub_get_event_time_range','_akarisub_get_empty_window','_akarisub_render_blend_collect','_akarisub_render_image_collect','_akarisub_render_raw_collect']" \
 		-s EXPORTED_RUNTIME_METHODS="['FS_createPath', 'FS_createDataFile']" \
 		-s IMPORTED_MEMORY=1 \
 		-s MIN_CHROME_VERSION=114 \
@@ -286,9 +286,54 @@ pkg/$(WORKER_NAME).js: src/AkariSub.cpp src/pre-worker.js src/post-worker.js $(L
 		-s EXPORT_ES6=1 \
 		-o $@
 
-.PHONY: worker
+# Pthread SIMD build. MINIMAL_RUNTIME and IMPORTED_MEMORY are incompatible with
+# emscripten pthreads, so this variant uses the default runtime and shared memory.
+pkg/$(WORKER_NAME)-mt.js: src/AkariSub.cpp src/pre-worker.js src/post-worker.js $(LIBASS_DEPS)
+	mkdir -p pkg
+	em++ src/AkariSub.cpp $(LIBASS_DEPS) \
+		-O3 \
+		-pthread \
+		-I$(DIST_DIR)/include/freetype2 \
+		-flto \
+		-std=c++17 \
+		-fno-rtti -fno-exceptions -DEMSCRIPTEN_HAS_UNBOUND_TYPE_NAMES=0 \
+		$(WORKER_ARGS) \
+		$(PERFORMANCE_ARGS) \
+		-s POLYFILL=0 \
+		-s NO_FILESYSTEM=0 \
+		-s HTML5_SUPPORT_DEFERRING_USER_SENSITIVE_REQUESTS=0 \
+		-s INCOMING_MODULE_JS_API="[]" \
+		-s USE_SDL=0 \
+		-s ASSERTIONS=0 \
+		-s STACK_OVERFLOW_CHECK=0 \
+		-s DYNAMIC_EXECUTION=0 \
+		-s EVAL_CTORS=0 \
+		-s IGNORE_MISSING_MAIN=1 \
+		-s STRICT=1 \
+		$(COMPAT_ARGS) \
+		-s IMPORTED_MEMORY=0 \
+		--closure=1 \
+		--pre-js src/pre-worker.js \
+		--post-js src/post-worker.js \
+		-s ENVIRONMENT=worker \
+		-s EXIT_RUNTIME=0 \
+		-s WASM_BIGINT=1 \
+		-s USE_PTHREADS=1 \
+		-s PTHREAD_POOL_SIZE=4 \
+		-s PTHREAD_POOL_SIZE_STRICT=0 \
+		-s ALLOW_MEMORY_GROWTH=1 \
+		-s MEMORY_GROWTH_GEOMETRIC_STEP=0.20 \
+		-s MEMORY_GROWTH_GEOMETRIC_CAP=96MB \
+		-s INITIAL_MEMORY=32MB \
+		-s MODULARIZE=1 \
+		-s EXPORT_ES6=1 \
+		-o $@
+
+.PHONY: worker worker-mt workers
 
 worker: pkg/akarisub.js
+worker-mt: pkg/akarisub-mt.js
+workers: worker worker-mt
 
 clean: clean-dist clean-libs clean-akarisub
 

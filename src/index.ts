@@ -32,6 +32,7 @@ export type {
   PerformanceWarning,
   PreloadedTrack,
   PreloadTrackSource,
+  PresentVideoFrameOptions,
   RenderEvent,
   RendererChangeEvent,
   RendererType,
@@ -42,10 +43,12 @@ export type {
   RenderImage,
   RenderTimes,
   VideoFrameCallbackMetadata,
+  VideoFrameLike,
   SubtitleColorSpace,
   WebYCbCrColorSpace,
   EncryptedSubtitleContent
 } from './ts/types'
+export type { CanvasColorSpace, VideoColorProfile, VideoPrimaries, VideoTransfer } from './ts/color-space'
 
 export type { ASSSection, ASSBodyEntry } from './ts/utils'
 
@@ -64,11 +67,25 @@ export {
   getAlphaBug,
   getBitmapBug,
   getColorSpaceFilterUrl,
+  getColorMatrix3,
+  colorMatrix3ColumnMajor,
   getWasmUrl,
   getWasmGlueUrl,
+  getMtWasmUrl,
+  getMtWasmGlueUrl,
   getDefaultFontUrl,
+  supportsWasmSimd,
+  supportsWasmThreads,
   WebGPURenderer,
   isWebGPUSupported,
   WebGL2Renderer,
-  isWebGL2Supported
+  isWebGL2Supported,
+  VIDEO_FRAME_TIMESTAMP_SECONDS,
+  frameTimelineFromTimestamps,
+  frameTimelineFromVideoFrames,
+  isVideoFrameLike,
+  isWebCodecsVideoFrameSupported,
+  videoFrameCallbackMetadata,
+  videoFrameColorSpace,
+  videoFrameMediaTime
 } from './wrapper'

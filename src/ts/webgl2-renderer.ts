@@ -1,4 +1,11 @@
 import type { RenderImage } from './types'
+import {
+  applyWebGL2ColorSpace,
+  colorMatrix3ColumnMajor,
+  IDENTITY_COLOR_MATRIX,
+  type CanvasColorSpace,
+  type ColorMatrix3
+} from './color-space'
 
 const MAX_IMAGES_PER_BATCH = 256
 const MAX_TEXTURE_ARRAY_LAYERS = 256
@@ -45,6 +52,7 @@ precision highp sampler2DArray;
 
 uniform sampler2DArray u_texArray;
 uniform ivec2 u_texArraySize;
+uniform mat3 u_colorMatrix;
 
 in vec2 v_uv;
 flat in int v_texIndex;
@@ -55,7 +63,8 @@ out vec4 fragColor;
 void main() {
   vec2 normalizedCoord = v_uv * v_texSize / vec2(u_texArraySize);
   vec4 color = texture(u_texArray, vec3(normalizedCoord, float(v_texIndex)));
-  fragColor = vec4(color.rgb * color.a, color.a);
+  vec3 rgb = u_colorMatrix * (color.rgb * color.a);
+  fragColor = vec4(rgb, color.a);
 }
 `
 
@@ -101,7 +110,10 @@ export class WebGL2Renderer {
 
   private _resolutionLoc: WebGLUniformLocation | null = null
   private _texArraySizeLoc: WebGLUniformLocation | null = null
+  private _colorMatrixLoc: WebGLUniformLocation | null = null
   private readonly _instanceData: Float32Array
+  private _colorMatrix: ColorMatrix3 = IDENTITY_COLOR_MATRIX
+  private _canvasColorSpace: CanvasColorSpace = 'srgb'
 
   private _lastCanvasWidth = 0
   private _lastCanvasHeight = 0
@@ -135,6 +147,7 @@ export class WebGL2Renderer {
     const gl = this._canvas.getContext('webgl2', { alpha: true, premultipliedAlpha: true, antialias: false })
     if (!gl) throw new Error('Failed to create WebGL2 context')
     this._gl = gl
+    applyWebGL2ColorSpace(gl, this._canvasColorSpace)
 
     const vert = compileShader(gl, gl.VERTEX_SHADER, VERTEX_SHADER)
     const frag = compileShader(gl, gl.FRAGMENT_SHADER, FRAGMENT_SHADER)
@@ -151,6 +164,7 @@ export class WebGL2Renderer {
 
     this._resolutionLoc = gl.getUniformLocation(program, 'u_resolution')
     this._texArraySizeLoc = gl.getUniformLocation(program, 'u_texArraySize')
+    this._colorMatrixLoc = gl.getUniformLocation(program, 'u_colorMatrix')
 
     this._vao = gl.createVertexArray()!
     gl.bindVertexArray(this._vao)
@@ -179,6 +193,22 @@ export class WebGL2Renderer {
     gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA)
 
     this._initialized = true
+    this._uploadColorMatrix()
+  }
+
+  /** Apply YCbCr mangling and the compositor canvas color space. */
+  setColorManagement(matrix: ColorMatrix3, colorSpace: CanvasColorSpace): void {
+    this._colorMatrix = matrix
+    this._canvasColorSpace = colorSpace
+    if (this._gl) applyWebGL2ColorSpace(this._gl, colorSpace)
+    this._uploadColorMatrix()
+  }
+
+  /** @internal */
+  private _uploadColorMatrix(): void {
+    if (!this._gl || !this._colorMatrixLoc) return
+    this._gl.useProgram(this._program)
+    this._gl.uniformMatrix3fv(this._colorMatrixLoc, false, colorMatrix3ColumnMajor(this._colorMatrix))
   }
 
   // Round up to a multiple of 64: gives headroom against size jitter without

@@ -1,6 +1,12 @@
 /// <reference types="@webgpu/types" />
 
 import type { RenderImage } from './types'
+import {
+  IDENTITY_COLOR_MATRIX,
+  webgpuCanvasConfiguration,
+  type CanvasColorSpace,
+  type ColorMatrix3
+} from './color-space'
 
 const MAX_IMAGES_PER_BATCH = 256
 
@@ -16,6 +22,8 @@ struct VertexOutput {
 
 struct Uniforms {
   resolution: vec2f,
+  _pad: vec2f,
+  colorMatrix: mat3x3<f32>,
 }
 
 struct ImageData {
@@ -61,6 +69,13 @@ fn vertexMain(
 `
 
 const FRAGMENT_SHADER = /* wgsl */ `
+struct Uniforms {
+  resolution: vec2f,
+  _pad: vec2f,
+  colorMatrix: mat3x3<f32>,
+}
+
+@group(0) @binding(0) var<uniform> uniforms: Uniforms;
 @group(0) @binding(2) var texArray: texture_2d_array<f32>;
 
 struct ImageData {
@@ -91,8 +106,9 @@ fn fragmentMain(input: FragmentInput) -> @location(0) vec4f {
   }
   
   let color = textureLoad(texArray, texCoord, texIndex, 0);
+  let rgb = uniforms.colorMatrix * (color.rgb * color.a);
   
-  return vec4f(color.rgb * color.a, color.a);
+  return vec4f(rgb, color.a);
 }
 `
 
@@ -132,7 +148,11 @@ export class WebGPURenderer {
   private warnedExternalUploadFallback = false
 
   private readonly imageDataArray: Float32Array
+  private readonly uniformArray = new Float32Array(16)
   private readonly resolutionArray = new Float32Array(2)
+  private _colorMatrix: ColorMatrix3 = IDENTITY_COLOR_MATRIX
+  private _canvasColorSpace: CanvasColorSpace = 'srgb'
+  private _hdr = false
 
   private bindGroup: GPUBindGroup | null = null
   private bindGroupDirty = true
@@ -180,9 +200,10 @@ export class WebGPURenderer {
     const fragmentModule = this.device.createShaderModule({ code: FRAGMENT_SHADER })
 
     this.uniformBuffer = this.device.createBuffer({
-      size: 16,
+      size: 64,
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
     })
+    this.writeUniforms()
 
     this.imageDataBuffer = this.device.createBuffer({
       size: MAX_IMAGES_PER_BATCH * 8 * 4,
@@ -193,7 +214,7 @@ export class WebGPURenderer {
 
     this.bindGroupLayout = this.device.createBindGroupLayout({
       entries: [
-        { binding: 0, visibility: GPUShaderStage.VERTEX, buffer: { type: 'uniform' } },
+        { binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: 'uniform' } },
         {
           binding: 1,
           visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
@@ -324,6 +345,69 @@ export class WebGPURenderer {
     this.bindGroupDirty = false
   }
 
+  /** Apply YCbCr mangling and the compositor canvas color space. */
+  setColorManagement(matrix: ColorMatrix3, colorSpace: CanvasColorSpace, hdr: boolean): void {
+    this._colorMatrix = matrix
+    const spaceChanged = this._canvasColorSpace !== colorSpace || this._hdr !== hdr
+    this._canvasColorSpace = colorSpace
+    this._hdr = hdr
+    this.writeUniforms()
+    if (spaceChanged) {
+      if (this.context && this.device) this.configureContext(this.context)
+      for (const context of this.stageContexts.values()) this.configureContext(context)
+    }
+  }
+
+  /** @internal */
+  private canvasConfig(): GPUCanvasConfiguration {
+    if (!this.device) throw new Error('WebGPU device not initialized')
+    const extras = webgpuCanvasConfiguration({
+      colorSpace: this._canvasColorSpace,
+      hdr: this._hdr
+    })
+    const config: GPUCanvasConfiguration = {
+      device: this.device,
+      format: this.format,
+      alphaMode: 'premultiplied',
+      toneMapping: extras.toneMapping
+    }
+    if (extras.colorSpace) {
+      const colorConfig: { colorSpace?: string } = config
+      colorConfig.colorSpace = extras.colorSpace
+    }
+    return config
+  }
+
+  /** @internal */
+  private configureContext(context: GPUCanvasContext): void {
+    context.configure(this.canvasConfig())
+  }
+
+  /** @internal */
+  private writeUniforms(): void {
+    if (!this.device || !this.uniformBuffer) return
+    const u = this.uniformArray
+    u[0] = this.resolutionArray[0]
+    u[1] = this.resolutionArray[1]
+    u[2] = 0
+    u[3] = 0
+    // WGSL mat3x3 is column-major with 16-byte column stride.
+    const m = this._colorMatrix
+    u[4] = m[0]
+    u[5] = m[3]
+    u[6] = m[6]
+    u[7] = 0
+    u[8] = m[1]
+    u[9] = m[4]
+    u[10] = m[7]
+    u[11] = 0
+    u[12] = m[2]
+    u[13] = m[5]
+    u[14] = m[8]
+    u[15] = 0
+    this.device.queue.writeBuffer(this.uniformBuffer, 0, u)
+  }
+
   /** Bind `canvas` as the primary output and size the swap chain. */
   async setCanvas(canvas: HTMLCanvasElement, width: number, height: number): Promise<void> {
     await this.init()
@@ -339,16 +423,12 @@ export class WebGPURenderer {
       this.context = canvas.getContext('webgpu')
       if (!this.context) throw new Error('Could not get WebGPU context')
 
-      this.context.configure({
-        device: this.device,
-        format: this.format,
-        alphaMode: 'premultiplied'
-      })
+      this.configureContext(this.context)
     }
 
     this.resolutionArray[0] = width
     this.resolutionArray[1] = height
-    this.device.queue.writeBuffer(this.uniformBuffer!, 0, this.resolutionArray)
+    this.writeUniforms()
 
     this.lastCanvasWidth = width
     this.lastCanvasHeight = height
@@ -368,11 +448,7 @@ export class WebGPURenderer {
     if (!context) {
       context = canvas.getContext('webgpu')
       if (!context) return false
-      context.configure({
-        device: this.device,
-        format: this.format,
-        alphaMode: 'premultiplied'
-      })
+      this.configureContext(context)
       this.stageContexts.set(canvas, context)
     }
 
@@ -400,7 +476,7 @@ export class WebGPURenderer {
     this._canvas.height = height
     this.resolutionArray[0] = width
     this.resolutionArray[1] = height
-    this.device.queue.writeBuffer(this.uniformBuffer!, 0, this.resolutionArray)
+    this.writeUniforms()
 
     this.lastCanvasWidth = width
     this.lastCanvasHeight = height
@@ -432,7 +508,7 @@ export class WebGPURenderer {
 
     this.resolutionArray[0] = canvasWidth
     this.resolutionArray[1] = canvasHeight
-    this.device.queue.writeBuffer(this.uniformBuffer!, 0, this.resolutionArray)
+    this.writeUniforms()
 
     const len = images.length
     if (len === 0) {
@@ -536,7 +612,7 @@ export class WebGPURenderer {
 
     this.resolutionArray[0] = _canvasWidth
     this.resolutionArray[1] = _canvasHeight
-    this.device.queue.writeBuffer(this.uniformBuffer!, 0, this.resolutionArray)
+    this.writeUniforms()
 
     const len = images.length
     if (len === 0) {

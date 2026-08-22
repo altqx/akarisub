@@ -13,6 +13,13 @@
 #include <emscripten.h>
 #include <wasm_simd128.h>
 
+#ifdef __EMSCRIPTEN_PTHREADS__
+#include <pthread.h>
+#define AKARISUB_HAS_PTHREADS 1
+#else
+#define AKARISUB_HAS_PTHREADS 0
+#endif
+
 int log_level = 3;
 
 class ReusableBuffer {
@@ -346,9 +353,25 @@ static std::string getPrimaryFallbackFamily(const std::string &fonts) {
 class AkariSub {
 private:
   ReusableBuffer m_buffer;
+  ReusableBuffer m_blendScratch[MAX_BLEND_STORAGES];
   RenderBlendStorage m_blendParts[MAX_BLEND_STORAGES];
   bool drop_animations;
   bool adaptive_blend_layouts;
+  int blend_threads;
+
+  struct BlendJob {
+    AkariSub *self;
+    BoundingBox rect;
+    ASS_Image *img;
+    int storageIndex;
+    RenderResult *result;
+  };
+
+  static void *blendJobEntry(void *arg) {
+    BlendJob *job = static_cast<BlendJob *>(arg);
+    job->result = job->self->renderBlendPart(job->rect, job->img, job->storageIndex);
+    return NULL;
+  }
   int scanned_events; // next unscanned event index
   ASS_Library *ass_library;
   ASS_Renderer *ass_renderer;
@@ -379,6 +402,7 @@ public:
     this->canvas_h = canvas_h;
     drop_animations = false;
     adaptive_blend_layouts = false;
+    blend_threads = AKARISUB_HAS_PTHREADS ? 4 : 1;
     scanned_events = 0;
     this->debug = debug;
     // Disabled until the worker writes fonts into MEMFS (avoids empty fontconfig scan).
@@ -414,6 +438,19 @@ public:
   }
 
   void setAdaptiveBlendLayouts(int value) { adaptive_blend_layouts = !!value; }
+
+  void setBlendThreads(int value) {
+    if (value < 1)
+      value = 1;
+    if (value > MAX_BLEND_STORAGES)
+      value = MAX_BLEND_STORAGES;
+#if !AKARISUB_HAS_PTHREADS
+    value = 1;
+#endif
+    blend_threads = value;
+  }
+
+  int getBlendThreads() const { return blend_threads; }
 
   /*
    * \brief Scan events starting at index i for animations
@@ -854,29 +891,72 @@ public:
         boxes[i] = layoutBoxes[bestLayout][i];
     }
 
-    RenderResult *renderResult = NULL;
+    int jobBoxes[MAX_BLEND_STORAGES];
+    int jobCount = 0;
     for (int box = 0; box < MAX_BLEND_STORAGES; box++) {
-      if (boxes[box].empty()) {
+      if (!boxes[box].empty())
+        jobBoxes[jobCount++] = box;
+    }
+
+    RenderResult *parts[MAX_BLEND_STORAGES];
+    for (int i = 0; i < jobCount; i++)
+      parts[i] = NULL;
+
+#if AKARISUB_HAS_PTHREADS
+    if (blend_threads > 1 && jobCount > 1) {
+      BlendJob jobs[MAX_BLEND_STORAGES];
+      pthread_t threads[MAX_BLEND_STORAGES];
+      bool started[MAX_BLEND_STORAGES];
+      const int workers = MIN(blend_threads, jobCount);
+      for (int i = 0; i < jobCount; i++) {
+        jobs[i].self = this;
+        jobs[i].rect = boxes[jobBoxes[i]];
+        jobs[i].img = img;
+        jobs[i].storageIndex = jobBoxes[i];
+        jobs[i].result = NULL;
+        started[i] = false;
+      }
+      for (int i = 1; i < workers; i++) {
+        if (pthread_create(&threads[i], NULL, blendJobEntry, &jobs[i]) == 0) {
+          started[i] = true;
+        } else {
+          jobs[i].result = renderBlendPart(jobs[i].rect, jobs[i].img, jobs[i].storageIndex);
+        }
+      }
+      jobs[0].result = renderBlendPart(jobs[0].rect, jobs[0].img, jobs[0].storageIndex);
+      for (int i = workers; i < jobCount; i++)
+        jobs[i].result = renderBlendPart(jobs[i].rect, jobs[i].img, jobs[i].storageIndex);
+      for (int i = 1; i < workers; i++) {
+        if (started[i])
+          pthread_join(threads[i], NULL);
+      }
+      for (int i = 0; i < jobCount; i++)
+        parts[i] = jobs[i].result;
+    } else
+#endif
+    {
+      for (int i = 0; i < jobCount; i++)
+        parts[i] = renderBlendPart(boxes[jobBoxes[i]], img, jobBoxes[i]);
+    }
+
+    RenderResult *renderResult = NULL;
+    for (int i = 0; i < jobCount; i++) {
+      RenderResult *part = parts[i];
+      if (part == NULL)
         continue;
-      }
-      RenderResult *part = renderBlendPart(boxes[box], img);
-      if (part == NULL) {
-        break; // memory allocation error
-      }
       if (renderResult) {
         part->next = renderResult->next;
         renderResult->next = part;
       } else {
         renderResult = part;
       }
-
       ++count;
     }
 
     return renderResult;
   }
 
-  RenderResult *renderBlendPart(const BoundingBox &rect, ASS_Image *img) {
+  RenderResult *renderBlendPart(const BoundingBox &rect, ASS_Image *img, int storageIndex) {
     int actual_min_x = MAX(rect.min_x, 0);
     int actual_min_y = MAX(rect.min_y, 0);
     int actual_max_x = MIN(rect.max_x, canvas_w - 1);
@@ -889,7 +969,10 @@ public:
       return NULL;
 
     const size_t buffer_size = width * height * 4 * sizeof(float);
-    float *buf = (float *)m_buffer.take(buffer_size);
+    ReusableBuffer &scratch =
+        storageIndex >= 0 && storageIndex < MAX_BLEND_STORAGES ? m_blendScratch[storageIndex]
+                                                               : m_buffer;
+    float *buf = (float *)scratch.take(buffer_size);
     if (buf == NULL) {
       fprintf(stderr, "AkariSub: cannot allocate buffer for blending\n");
       return NULL;
@@ -994,26 +1077,11 @@ public:
     }
 
     size_t needed = sizeof(unsigned int) * width * height;
-    RenderBlendStorage *storage = m_blendParts, *bigBuffer = NULL,
-                       *smallBuffer = NULL;
-    for (int buffer_index = 0; buffer_index < MAX_BLEND_STORAGES;
-         buffer_index++, storage++) {
-      if (storage->taken)
-        continue;
-      if (storage->buf.size >= needed) {
-        if (bigBuffer == NULL || bigBuffer->buf.size > storage->buf.size)
-          bigBuffer = storage;
-      } else {
-        if (smallBuffer == NULL || smallBuffer->buf.size > storage->buf.size)
-          smallBuffer = storage;
-      }
-    }
-
-    if (bigBuffer != NULL) {
-      storage = bigBuffer;
-    } else if (smallBuffer != NULL) {
-      storage = smallBuffer;
-    } else {
+    RenderBlendStorage *storage =
+        storageIndex >= 0 && storageIndex < MAX_BLEND_STORAGES
+            ? &m_blendParts[storageIndex]
+            : NULL;
+    if (storage == NULL || storage->taken) {
       printf("AkariSub: cannot get a buffer for rendering part!\n");
       return NULL;
     }
@@ -1167,6 +1235,15 @@ EMSCRIPTEN_KEEPALIVE void akarisub_set_drop_animations(AkariSub *instance, int v
 EMSCRIPTEN_KEEPALIVE void akarisub_set_adaptive_blend_layouts(AkariSub *instance, int value) {
   if (instance)
     instance->setAdaptiveBlendLayouts(value);
+}
+
+EMSCRIPTEN_KEEPALIVE void akarisub_set_blend_threads(AkariSub *instance, int value) {
+  if (instance)
+    instance->setBlendThreads(value);
+}
+
+EMSCRIPTEN_KEEPALIVE int akarisub_get_blend_threads(AkariSub *instance) {
+  return instance ? instance->getBlendThreads() : 1;
 }
 
 EMSCRIPTEN_KEEPALIVE void akarisub_create_track_mem(AkariSub *instance, const char *content) {

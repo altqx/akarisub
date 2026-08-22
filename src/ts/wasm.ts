@@ -41,6 +41,32 @@ export function getWasmGlueUrl(): string {
   }
 }
 
+/** Pthread SIMD WASM URL. Requires COOP/COEP (`crossOriginIsolated`). */
+export function getMtWasmUrl(): string {
+  try {
+    return new URL('../../pkg/akarisub-mt.wasm', import.meta.url).href
+  } catch {
+    if (typeof window !== 'undefined') {
+      return new URL('/akarisub/akarisub-mt.wasm', window.location.origin).href
+    }
+
+    return '/akarisub/akarisub-mt.wasm'
+  }
+}
+
+/** Pthread SIMD WASM glue URL. */
+export function getMtWasmGlueUrl(): string {
+  try {
+    return new URL('../../pkg/akarisub-mt.js', import.meta.url).href
+  } catch {
+    if (typeof window !== 'undefined') {
+      return new URL('/akarisub/akarisub-mt.js', window.location.origin).href
+    }
+
+    return '/akarisub/akarisub-mt.js'
+  }
+}
+
 /** Derive a glue URL from a WASM URL when the caller only provided wasmUrl. */
 export function glueUrlFromWasmUrl(wasmUrl: string): string {
   const derivedUrl = new URL(wasmUrl, typeof location !== 'undefined' ? location.href : 'http://localhost/')

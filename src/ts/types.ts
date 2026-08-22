@@ -114,6 +114,16 @@ export interface PerformanceStats {
   offscreenRender: boolean
   /** Whether `requestVideoFrameCallback` drives presentation. */
   onDemandRender: boolean
+  /** Whether the loaded WASM binary includes SIMD kernels. */
+  wasmSimd?: boolean
+  /** Whether the loaded WASM binary is using pthreads. */
+  wasmThreads?: boolean
+  /** Canvas color space used for compositing. */
+  canvasColorSpace?: 'srgb' | 'display-p3' | 'rec2020'
+  /** Video transfer function used for HDR overlay. */
+  videoTransfer?: 'sdr' | 'pq' | 'hlg'
+  /** Video primaries used to pick the canvas color space. */
+  videoPrimaries?: 'bt709' | 'bt2020' | 'smpte432' | 'unknown'
   /** Demand renders still in flight. */
   pendingRenders: number
   /** Dialogue events currently in the track. */
@@ -190,9 +200,58 @@ export interface FrameTimeline extends ArrayLike<number> {
   subtitleTimeOffset?: number
 }
 
+/**
+ * WebCodecs `VideoFrame` fields used as a subtitle clock.
+ *
+ * A real `VideoFrame` satisfies this type. Tests and custom decoders may pass a
+ * duck-typed object. AkariSub never takes ownership or calls `close()`.
+ */
+export interface VideoFrameLike {
+  /** Presentation timestamp in microseconds. */
+  readonly timestamp: number
+  /** Frame duration in microseconds, when the decoder provides one. */
+  readonly duration?: number | null
+  /** Display width in pixels. */
+  readonly displayWidth: number
+  /** Display height in pixels. */
+  readonly displayHeight: number
+  /** Coded width in pixels. */
+  readonly codedWidth?: number
+  /** Coded height in pixels. */
+  readonly codedHeight?: number
+  /** Optional WebCodecs color description. */
+  readonly colorSpace?: {
+    readonly matrix?: string | null
+    readonly primaries?: string | null
+    readonly transfer?: string | null
+  } | null
+}
+
+/** Options for {@linkcode AkariSub.presentVideoFrame}. */
+export interface PresentVideoFrameOptions {
+  /** `performance.now()` for this presentation. Defaults to `performance.now()`. */
+  now?: number
+  /** Predicted compositor display time, in milliseconds. */
+  expectedDisplayTime?: number
+  /** Capture timestamp, in milliseconds. */
+  presentationTime?: number
+  /**
+   * Decoder clock paused state. Defaults to the previous VideoFrame clock value,
+   * or `false` on the first presented frame.
+   */
+  isPaused?: boolean
+  /** Playback rate. Defaults to the previous VideoFrame clock value, or `1`. */
+  rate?: number
+  /** Media time in seconds. Defaults to `timestamp / 1e6`. */
+  mediaTime?: number
+}
+
 /** Construction options for {@linkcode AkariSub}. */
 export interface AkariSubOptions {
-  /** Video element to overlay. Either `video` or `canvas` is required. */
+  /**
+   * Video element to overlay. Either `video` or `canvas` is required.
+   * WebCodecs players pass `canvas` and drive time with {@linkcode AkariSub.presentVideoFrame}.
+   */
   video?: HTMLVideoElement
   /** Existing canvas to paint into instead of creating an overlay. */
   canvas?: HTMLCanvasElement
@@ -204,7 +263,11 @@ export interface AkariSubOptions {
   offscreenRender?: boolean
   /** Use worker-side raw ASS_Image WebGL2 composition (default: false) */
   rawAssImageGpu?: boolean
-  /** Use requestVideoFrameCallback for precise sync (default: true) */
+  /**
+   * Use requestVideoFrameCallback or {@linkcode AkariSub.presentVideoFrame} for
+   * precise sync (default: true when RVFC exists, or when `onDemandRender` is
+   * set true for a canvas-only WebCodecs clock)
+   */
   onDemandRender?: boolean
   /** Compensate measured render/presentation latency while playing (default: true) */
   adaptiveTiming?: boolean
@@ -236,6 +299,18 @@ export interface AkariSubOptions {
   wasmUrl?: string
   /** Optional WASM glue script URL. Defaults to the package glue URL resolved from import.meta.url. */
   glueUrl?: string
+  /** Optional SIMD WASM URL. Used when the engine validates `v128` and this URL is set. */
+  modernWasmUrl?: string
+  /** Optional SIMD WASM glue URL. Derived from `modernWasmUrl` when omitted. */
+  modernGlueUrl?: string
+  /** Optional pthread SIMD WASM URL. Used on cross-origin isolated pages. */
+  mtWasmUrl?: string
+  /** Optional pthread SIMD WASM glue URL. Derived from `mtWasmUrl` when omitted. */
+  mtGlueUrl?: string
+  /** Overlay canvas color space. `auto` follows the video primaries. */
+  canvasColorSpace?: 'srgb' | 'display-p3' | 'rec2020' | 'auto'
+  /** Request an HDR canvas when the video transfer is PQ or HLG. Default `auto`. */
+  hdr?: boolean | 'auto'
   /** HTTP(S) URL of an ASS/SSA file to load after init. */
   subUrl?: string
   /** Inline ASS/SSA text or bytes to load after init. */
@@ -351,6 +426,8 @@ export interface RenderMessage {
   width: number
   height: number
   colorSpace: string | null
+  canvasColorSpace?: 'srgb' | 'display-p3' | 'rec2020'
+  hdr?: boolean
   requestId?: number
   renderEpoch?: number
   presentationId?: number
@@ -362,7 +439,12 @@ export type WorkerOutboundMessage =
   | { target: 'unbusy'; requestId?: number; renderEpoch?: number; presentationId?: number; painted?: boolean }
   | { target: 'console'; command: string; content: string }
   | { target: 'getLocalFont'; font: string }
-  | { target: 'verifyColorSpace'; subtitleColorSpace: string | null }
+  | {
+      target: 'verifyColorSpace'
+      subtitleColorSpace: string | null
+      canvasColorSpace?: 'srgb' | 'display-p3' | 'rec2020'
+      hdr?: boolean
+    }
   | { target: 'getEvents'; events: ASSEvent[] }
   | { target: 'getStyles'; styles: ASSStyle[]; time: number }
   | { target: 'getStats'; stats: Partial<PerformanceStats> }
@@ -387,6 +469,12 @@ export interface WorkerInitMessage {
   target: 'init'
   wasmUrl: string
   glueUrl?: string
+  fallbackWasmUrl?: string
+  fallbackGlueUrl?: string
+  canvasColorSpace?: 'srgb' | 'display-p3' | 'rec2020'
+  hdr?: boolean
+  wasmSimd?: boolean
+  wasmThreads?: boolean
   asyncRender: boolean
   fullTrackWarmup: boolean
   blockingFullTrackWarmup: boolean
@@ -424,7 +512,13 @@ export interface WorkerInitMessage {
 
 export type WorkerInboundMessage =
   | WorkerInitMessage
-  | { target: 'offscreenCanvas'; rawAssImageGpu?: boolean; transferable: [OffscreenCanvas] }
+  | {
+      target: 'offscreenCanvas'
+      rawAssImageGpu?: boolean
+      canvasColorSpace?: 'srgb' | 'display-p3' | 'rec2020'
+      hdr?: boolean
+      transferable: [OffscreenCanvas]
+    }
   | { target: 'detachOffscreen' }
   | { target: 'canvas'; width: number; height: number; videoWidth: number; videoHeight: number; force?: boolean }
   | {
@@ -434,6 +528,8 @@ export type WorkerInboundMessage =
       rate?: number
       renderAhead?: number
       colorSpace?: string | null
+      canvasColorSpace?: 'srgb' | 'display-p3' | 'rec2020'
+      hdr?: boolean
     }
   | { target: 'setTrack'; content: string | Uint8Array | ArrayBuffer }
   | { target: 'setEncryptedTrack'; content: EncryptedSubtitleContent }
@@ -491,9 +587,9 @@ export interface VideoFrameCallbackMetadata {
 }
 
 /** Video YCbCr matrix used for subtitle color-space conversion. */
-export type WebYCbCrColorSpace = 'BT709' | 'BT601'
+export type WebYCbCrColorSpace = 'BT709' | 'BT601' | 'BT2020'
 /** libass YCbCr matrix, or `null` when the track does not declare one. */
-export type SubtitleColorSpace = 'BT601' | 'BT709' | 'SMPTE240M' | 'FCC' | null
+export type SubtitleColorSpace = 'BT601' | 'BT709' | 'SMPTE240M' | 'FCC' | 'BT2020' | null
 
 export interface AkariSubModule extends EmscriptenModule {
   _malloc: (size: number) => number
@@ -526,6 +622,8 @@ export interface AkariSubModule extends EmscriptenModule {
   _akarisub_style_override_index: (handle: number, index: number) => void
   _akarisub_disable_style_override: (handle: number) => void
   _akarisub_get_track_color_space: (handle: number) => number
+  _akarisub_set_blend_threads?: (handle: number, threads: number) => void
+  _akarisub_get_blend_threads?: (handle: number) => number
   _akarisub_event_get_int: (handle: number, index: number, field: number) => number
   _akarisub_event_set_int: (handle: number, index: number, field: number, value: number) => void
   _akarisub_event_get_str: (handle: number, index: number, field: number) => number

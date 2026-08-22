@@ -1,58 +1,12 @@
-import type { SubtitleColorSpace, WebYCbCrColorSpace } from './types'
-
-/** Map from HTMLVideoElement color-space names to {@linkcode WebYCbCrColorSpace}. */
-export const webYCbCrMap: Record<string, WebYCbCrColorSpace> = {
-  bt709: 'BT709',
-  bt470bg: 'BT601', // BT.601 PAL
-  smpte170m: 'BT601' // BT.601 NTSC
-}
-
-/** feColorMatrix values that convert a subtitle matrix into a video matrix. */
-export const colorMatrixConversionMap: Record<string, Record<string, string>> = {
-  BT601: {
-    BT709: '1.0863 -0.0723 -0.014 0 0 0.0965 0.8451 0.0584 0 0 -0.0141 -0.0277 1.0418'
-  },
-  BT709: {
-    BT601: '0.9137 0.0784 0.0079 0 0 -0.1049 1.1722 -0.0671 0 0 0.0096 0.0322 0.9582'
-  },
-  FCC: {
-    BT709: '1.0873 -0.0736 -0.0137 0 0 0.0974 0.8494 0.0531 0 0 -0.0127 -0.0251 1.0378',
-    BT601: '1.001 -0.0008 -0.0002 0 0 0.0009 1.005 -0.006 0 0 0.0013 0.0027 0.996'
-  },
-  SMPTE240M: {
-    BT709: '0.9993 0.0006 0.0001 0 0 -0.0004 0.9812 0.0192 0 0 -0.0034 -0.0114 1.0148',
-    BT601: '0.913 0.0774 0.0096 0 0 -0.1051 1.1508 -0.0456 0 0 0.0063 0.0207 0.973'
-  }
-}
-
-/** libass `YCbCr Matrix` header values indexed by the libass enum. */
-export const libassYCbCrMap: (SubtitleColorSpace | null)[] = [
-  null,
-  'BT601',
-  null,
-  'BT601',
-  'BT601',
-  'BT709',
-  'BT709',
-  'SMPTE240M',
-  'SMPTE240M',
-  'FCC',
-  'FCC'
-]
-
-/** SVG filter URL that converts `subtitleColorSpace` into `videoColorSpace`, or `null` when none is needed. */
-export function getColorSpaceFilterUrl(
-  subtitleColorSpace: SubtitleColorSpace,
-  videoColorSpace: WebYCbCrColorSpace
-): string | null {
-  if (!subtitleColorSpace || !videoColorSpace) return null
-  if (subtitleColorSpace === videoColorSpace) return null
-
-  const matrix = colorMatrixConversionMap[subtitleColorSpace]?.[videoColorSpace]
-  if (!matrix) return null
-
-  return `url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg'><filter id='f'><feColorMatrix type='matrix' values='${matrix} 0 0 0 0 0 1 0'/></filter></svg>#f")`
-}
+export {
+  webYCbCrMap,
+  colorMatrixConversionMap,
+  libassYCbCrMap,
+  getColorSpaceFilterUrl,
+  getColorMatrix3,
+  IDENTITY_COLOR_MATRIX
+} from './color-space'
+export type { CanvasColorSpace, VideoColorProfile, VideoPrimaries, VideoTransfer, ColorMatrix3 } from './color-space'
 
 /** Canvas pixel size after device-pixel-ratio and prescale limits. */
 export function computeCanvasSize(

@@ -15,19 +15,27 @@ import type {
   VideoFrameCallbackMetadata,
   SubtitleColorSpace,
   WebYCbCrColorSpace,
-  FrameTimeline
+  FrameTimeline,
+  PresentVideoFrameOptions,
+  VideoFrameLike
 } from './types'
 import type { EncryptedSubtitleContent } from './types'
 import { classifyPerformanceWarnings, parsePreloadTrackSource } from './cue-events'
+import { computeCanvasSize, getVideoPosition, fixAlpha, getAlphaBug, getBitmapBug } from './utils'
 import {
-  webYCbCrMap,
-  colorMatrixConversionMap,
-  computeCanvasSize,
-  getVideoPosition,
-  fixAlpha,
-  getAlphaBug,
-  getBitmapBug
-} from './utils'
+  canvas2dContextSettings,
+  createSubtitleImageData,
+  defaultVideoColorProfile,
+  getColorMatrix3,
+  getColorSpaceFilterUrl,
+  profileFromVideoFrameColorSpace,
+  selectCanvasColorSpace,
+  supportsHdrCanvas,
+  videoColorProfilesEqual,
+  type CanvasColorSpace,
+  type VideoColorProfile
+} from './color-space'
+import { selectWasmBinary } from './wasm-capabilities'
 import { WebGPURenderer, isWebGPUSupported } from './webgpu-renderer'
 import { WebGL2Renderer, isWebGL2Supported } from './webgl2-renderer'
 import {
@@ -44,7 +52,17 @@ import {
   subtitleTimeForFrame,
   updateTimingCompensation
 } from './timing'
-import { getDefaultFontUrl, getWasmGlueUrl, getWasmUrl } from './wasm'
+import { isVideoFrameLike, videoFrameCallbackMetadata } from './video-frame'
+import { getDefaultFontUrl, getMtWasmGlueUrl, getMtWasmUrl, getWasmGlueUrl, getWasmUrl } from './wasm'
+import { webYCbCrMap } from './utils'
+
+interface VideoFrameClock {
+  currentTime: number
+  paused: boolean
+  rate: number
+  width: number
+  height: number
+}
 
 type AnyGPURenderer = WebGPURenderer | WebGL2Renderer
 
@@ -134,9 +152,18 @@ export default class AkariSub extends EventTarget {
   private _onDemandRender: boolean
   private _offscreenRender: boolean
   private _video?: HTMLVideoElement
+  private _videoFrameClock: VideoFrameClock | null = null
   private _videoWidth: number = 0
   private _videoHeight: number = 0
   private _videoColorSpace: WebYCbCrColorSpace | null = null
+  private _videoColorProfile: VideoColorProfile = defaultVideoColorProfile()
+  private _lastSubtitleColorSpace: SubtitleColorSpace = null
+  private _canvasColorSpaceOverride: CanvasColorSpace | 'auto'
+  private _hdrOverride: boolean | 'auto'
+  private _appliedCanvasColorSpace: CanvasColorSpace = 'srgb'
+  private _appliedHdr = false
+  private _wasmSimd = false
+  private _wasmThreads = false
   private _canvas!: HTMLCanvasElement
   private _canvasParent?: HTMLDivElement
   private _bufferCanvas: HTMLCanvasElement
@@ -256,10 +283,21 @@ export default class AkariSub extends EventTarget {
     })
 
     this._isLikelyWebKit = isLikelyWebKit()
+    this._canvasColorSpaceOverride = options.canvasColorSpace ?? 'auto'
+    this._hdrOverride = options.hdr ?? 'auto'
+    this._videoColorProfile = {
+      ...defaultVideoColorProfile(),
+      canvasColorSpace: selectCanvasColorSpace('unknown', this._hdrOverride === true, this._canvasColorSpaceOverride),
+      hdr: this._hdrOverride === true
+    }
+    this._appliedCanvasColorSpace = this._videoColorProfile.canvasColorSpace
+    this._appliedHdr = this._shouldUseHdr()
 
     const test = AkariSub._test()
 
-    this._onDemandRender = 'requestVideoFrameCallback' in HTMLVideoElement.prototype && (options.onDemandRender ?? true)
+    const hasRVFC = typeof HTMLVideoElement !== 'undefined' && 'requestVideoFrameCallback' in HTMLVideoElement.prototype
+    const wantsOnDemand = options.onDemandRender ?? true
+    this._onDemandRender = wantsOnDemand && (hasRVFC || (options.video == null && options.onDemandRender === true))
     this._adaptiveTiming = options.adaptiveTiming ?? true
     this._frameTimeline = options.frameTimeline ? normalizeFrameTimeline(options.frameTimeline) : null
 
@@ -303,14 +341,14 @@ export default class AkariSub extends EventTarget {
     this._startRefreshSampling()
 
     this._bufferCanvas = document.createElement('canvas')
-    const bufferCtx = this._bufferCanvas.getContext('2d')
+    const bufferCtx = this._bufferCanvas.getContext('2d', this._canvas2dSettings(false))
     if (!bufferCtx) throw this.destroy(new Error('Canvas rendering not supported'))
     this._bufferCtx = bufferCtx
 
     if (canUseGPURenderer) {
       this._initGPURenderer()
-    } else if (!this._offscreenRender) {
-      this._ctx = this._canvas.getContext('2d', { alpha: true })
+    } else if (!this._offscreenRender && (this._video || this._canvasColorSpaceOverride !== 'auto')) {
+      this._ensureMainThreadCanvas2d()
     }
 
     this._canvasctrl = this._offscreenRender
@@ -349,12 +387,41 @@ export default class AkariSub extends EventTarget {
     this._worker.onerror = (e) => this._error(e)
 
     test.then(() => {
+      const wasmUrl = options.wasmUrl ?? getWasmUrl()
+      const glueUrl = options.glueUrl ?? getWasmGlueUrl()
+      const mtWasmUrl = options.mtWasmUrl ?? getMtWasmUrl()
+      const mtGlueUrl = options.mtGlueUrl ?? (options.mtWasmUrl ? undefined : getMtWasmGlueUrl())
+      const wasmBinary = selectWasmBinary({
+        wasmUrl,
+        glueUrl,
+        modernWasmUrl: options.modernWasmUrl,
+        modernGlueUrl: options.modernGlueUrl,
+        mtWasmUrl,
+        mtGlueUrl
+      })
+      this._wasmSimd = wasmBinary.simd
+      this._wasmThreads = wasmBinary.threads
+      const fallbackBinary = wasmBinary.threads
+        ? selectWasmBinary({
+            wasmUrl,
+            glueUrl,
+            modernWasmUrl: options.modernWasmUrl,
+            modernGlueUrl: options.modernGlueUrl
+          })
+        : null
+
       const initialTime = (this._video?.currentTime ?? 0) + this.timeOffset
       const initialPlaybackRate = this._videoPlaybackRateForWorker()
       const initMessage = {
         target: 'init',
-        wasmUrl: options.wasmUrl ?? getWasmUrl(),
-        glueUrl: options.glueUrl ?? getWasmGlueUrl(),
+        wasmUrl: wasmBinary.wasmUrl,
+        glueUrl: wasmBinary.glueUrl,
+        fallbackWasmUrl: fallbackBinary && fallbackBinary.wasmUrl !== wasmBinary.wasmUrl ? fallbackBinary.wasmUrl : undefined,
+        fallbackGlueUrl: fallbackBinary && fallbackBinary.wasmUrl !== wasmBinary.wasmUrl ? fallbackBinary.glueUrl : undefined,
+        canvasColorSpace: this._videoColorProfile.canvasColorSpace,
+        hdr: this._shouldUseHdr(),
+        wasmSimd: wasmBinary.simd,
+        wasmThreads: wasmBinary.threads,
         asyncRender: shouldUseAsyncRender,
         fullTrackWarmup: options.fullTrackWarmup ?? false,
         blockingFullTrackWarmup: options.blockingFullTrackWarmup ?? false,
@@ -404,6 +471,8 @@ export default class AkariSub extends EventTarget {
           {
             target: 'offscreenCanvas',
             rawAssImageGpu,
+            canvasColorSpace: this._videoColorProfile.canvasColorSpace,
+            hdr: this._shouldUseHdr(),
             transferable: [offscreenCanvas]
           },
           [offscreenCanvas]
@@ -518,6 +587,7 @@ export default class AkariSub extends EventTarget {
         }
         this._gpuRenderer = renderer
         this._setRendererType('webgpu')
+        this._applyGpuColorManagement()
         console.log('[AkariSub] Using WebGPU renderer')
         return
       } catch (error) {
@@ -544,6 +614,7 @@ export default class AkariSub extends EventTarget {
         }
         this._gpuRenderer = renderer
         this._setRendererType('webgl2')
+        this._applyGpuColorManagement()
         console.log('[AkariSub] Using WebGL2 renderer')
         return
       } catch (error) {
@@ -553,7 +624,7 @@ export default class AkariSub extends EventTarget {
 
     this._setRendererType('canvas2d')
     if (!this._offscreenRender && !this._ctx) {
-      this._ctx = this._canvas.getContext('2d', { alpha: true })
+      this._ctx = this._canvas.getContext('2d', this._canvas2dSettings())
     }
     this.sendMessage('setAsyncRender', { value: false })
     this._onCanvasFallback?.()
@@ -582,6 +653,115 @@ export default class AkariSub extends EventTarget {
     const event: RendererChangeEvent = { rendererType: next, previous }
     this._onRendererChange?.(event)
     this.dispatchEvent(new CustomEvent('rendererChange', { detail: event }))
+  }
+
+  /** @internal */
+  private _shouldUseHdr(): boolean {
+    if (this._hdrOverride === false) return false
+    if (this._hdrOverride === true) return true
+    return this._videoColorProfile.hdr
+  }
+
+  /** @internal */
+  private _canvas2dSettings(hdr: boolean = this._shouldUseHdr()): CanvasRenderingContext2DSettings {
+    return canvas2dContextSettings({
+      colorSpace: this._videoColorProfile.canvasColorSpace,
+      hdr,
+      alpha: true
+    })
+  }
+
+  /** @internal */
+  private _ensureMainThreadCanvas2d(): void {
+    if (this._gpuRenderer || this._offscreenRender || this._ctx || !this._canvas) return
+    // Caller-owned canvases cannot replace a 2D context later. Open the widest
+    // supported surface when color space is still auto so a later HDR frame
+    // does not stay locked to sRGB/uint8.
+    const settings =
+      this._canvasColorSpaceOverride === 'auto' && !this._canvasParent
+        ? canvas2dContextSettings({
+            colorSpace: selectCanvasColorSpace('bt2020', true),
+            hdr: supportsHdrCanvas() || this._shouldUseHdr(),
+            alpha: true
+          })
+        : this._canvas2dSettings()
+    this._ctx = this._canvas.getContext('2d', settings)
+    this._canvasctrl = this._canvas
+  }
+
+  /** @internal */
+  private _replaceCanvas2dContexts(): void {
+    if (this._bufferCanvas && this._bufferCtx) {
+      const next = document.createElement('canvas')
+      next.width = this._bufferCanvas.width
+      next.height = this._bufferCanvas.height
+      const bufferCtx = next.getContext('2d', this._canvas2dSettings(false))
+      if (bufferCtx) {
+        this._bufferCanvas = next
+        this._bufferCtx = bufferCtx
+      }
+    }
+
+    if (this._gpuRenderer) return
+
+    if (this._canvasParent) {
+      this._replaceOwnedOverlayCanvas(this._offscreenRender && !this._ctx ? 'offscreen' : '2d')
+      return
+    }
+
+    this._ensureMainThreadCanvas2d()
+  }
+
+  /** @internal */
+  private _replaceOwnedOverlayCanvas(mode: '2d' | 'offscreen'): void {
+    if (!this._canvasParent || !this._canvas) return
+    const previous = this._canvas
+    const width = previous.width
+    const height = previous.height
+    const top = previous.style.top
+    const left = previous.style.left
+    const cssWidth = previous.style.width
+    const cssHeight = previous.style.height
+    const filter = this._ctx ? this._ctx.filter : 'none'
+    previous.remove()
+    this._createCanvas()
+    this._canvas.width = width
+    this._canvas.height = height
+    this._canvas.style.top = top
+    this._canvas.style.left = left
+    this._canvas.style.width = cssWidth
+    this._canvas.style.height = cssHeight
+
+    if (mode === 'offscreen') {
+      this._canvasctrl = (
+        this._canvas as HTMLCanvasElement & { transferControlToOffscreen(): OffscreenCanvas }
+      ).transferControlToOffscreen()
+      this._ctx = false
+      this.sendMessage(
+        'offscreenCanvas',
+        {
+          canvasColorSpace: this._videoColorProfile.canvasColorSpace,
+          hdr: this._shouldUseHdr()
+        },
+        [this._canvasctrl as OffscreenCanvas]
+      )
+    } else {
+      this._canvasctrl = this._canvas
+      this._ctx = this._canvas.getContext('2d', this._canvas2dSettings())
+      if (this._ctx && filter && filter !== 'none') this._ctx.filter = filter
+    }
+
+    if (this._video) this.resize(0, 0, 0, 0, true)
+  }
+
+  /** @internal */
+  private _applyGpuColorManagement(): void {
+    const matrix = getColorMatrix3(this._lastSubtitleColorSpace, this._videoColorProfile.matrix)
+    if (this._gpuRenderer instanceof WebGPURenderer) {
+      this._gpuRenderer.setColorManagement(matrix, this._videoColorProfile.canvasColorSpace, this._shouldUseHdr())
+    } else if (this._gpuRenderer instanceof WebGL2Renderer) {
+      this._gpuRenderer.setColorManagement(matrix, this._videoColorProfile.canvasColorSpace)
+    }
   }
 
   /** @internal */
@@ -685,6 +865,7 @@ export default class AkariSub extends EventTarget {
   setVideo(video: HTMLVideoElement): void {
     if (video instanceof HTMLVideoElement) {
       this._removeListeners()
+      this._videoFrameClock = null
       this._video = video
       this._playstate = video.paused || video.ended
 
@@ -724,6 +905,61 @@ export default class AkariSub extends EventTarget {
     } else {
       this._error(new Error('Video element invalid!'))
     }
+  }
+
+  /**
+   * Present a decoded WebCodecs `VideoFrame` as the current video clock.
+   *
+   * Uses the same demand, prefetch, and frame-timeline path as
+   * `requestVideoFrameCallback`. Does not take ownership of `frame`; the caller
+   * must `close()` it. Canvas-only WebCodecs players should pass `canvas` at
+   * construction and leave `onDemandRender` enabled, or set it `true` when the
+   * browser has no `requestVideoFrameCallback`.
+   */
+  presentVideoFrame(frame: VideoFrameLike, options: PresentVideoFrameOptions = {}): void {
+    if (this._destroyed) return
+    if (!isVideoFrameLike(frame)) {
+      this._error(new Error('VideoFrame invalid!'))
+      return
+    }
+
+    const metadata = videoFrameCallbackMetadata(frame, options)
+    const previous = this._videoFrameClock
+    const isPaused = options.isPaused ?? previous?.paused ?? false
+    const rate = Number.isFinite(options.rate) ? options.rate! : (previous?.rate ?? 1)
+
+    this._videoFrameClock = {
+      currentTime: metadata.mediaTime,
+      paused: isPaused,
+      rate,
+      width: metadata.width,
+      height: metadata.height
+    }
+    this._playstate = isPaused
+    this._setVideoColorProfile(profileFromVideoFrameColorSpace(frame.colorSpace, this._canvasColorSpaceOverride))
+    this.setCurrentTime(isPaused, metadata.mediaTime + this.timeOffset, rate)
+
+    if (this._onDemandRender) {
+      this._handleRVFC(Number.isFinite(options.now) ? options.now! : (metadata.presentationTime ?? 0), metadata)
+    }
+  }
+
+  /**
+   * Set the video YCbCr matrix used for subtitle color conversion.
+   *
+   * Accepts `'BT709'` / `'BT601'`, a WebCodecs matrix name such as `'bt709'`,
+   * or a `VideoFrame.colorSpace` object. Pass `null` to clear the override.
+   */
+  setVideoColorSpace(colorSpace: WebYCbCrColorSpace | VideoFrameLike['colorSpace'] | string | null): void {
+    if (colorSpace === 'BT709' || colorSpace === 'BT601' || colorSpace === 'BT2020') {
+      this._setVideoColorSpace(colorSpace)
+      return
+    }
+    if (colorSpace == null || typeof colorSpace === 'string') {
+      this._setVideoColorSpace(typeof colorSpace === 'string' ? (webYCbCrMap[colorSpace] ?? null) : null)
+      return
+    }
+    this._setVideoColorProfile(profileFromVideoFrameColorSpace(colorSpace, this._canvasColorSpaceOverride))
   }
 
   /** Fetch and load an ASS/SSA track from `url`. */
@@ -829,6 +1065,13 @@ export default class AkariSub extends EventTarget {
       return
     }
 
+    if (this._videoFrameClock) {
+      this._videoFrameClock.paused = isPaused
+      this._playstate = isPaused
+      this._syncVideoClock()
+      return
+    }
+
     this.sendMessage('video', { isPaused })
   }
 
@@ -839,6 +1082,8 @@ export default class AkariSub extends EventTarget {
       return
     }
 
+    if (this._videoFrameClock && Number.isFinite(rate)) this._videoFrameClock.rate = rate
+
     this.sendMessage('video', { rate })
   }
 
@@ -848,6 +1093,17 @@ export default class AkariSub extends EventTarget {
    * Omit fields to keep the last known paused state, time, or rate.
    */
   setCurrentTime(isPaused?: boolean, currentTime?: number, rate?: number): void {
+    if (!this._video && this._videoFrameClock) {
+      if (isPaused != null) {
+        this._videoFrameClock.paused = isPaused
+        this._playstate = isPaused
+      }
+      if (currentTime != null && Number.isFinite(currentTime)) {
+        this._videoFrameClock.currentTime = currentTime - this.timeOffset
+      }
+      if (rate != null && Number.isFinite(rate)) this._videoFrameClock.rate = rate
+    }
+
     this.sendMessage('video', {
       isPaused,
       currentTime,
@@ -960,7 +1216,12 @@ export default class AkariSub extends EventTarget {
       rawAssImageGpu: stats.rawAssImageGpu,
       workerRenderer: stats.workerRenderer,
       offscreenRender: stats.offscreenRender ?? this._offscreenRender,
-      onDemandRender: stats.onDemandRender ?? this._onDemandRender
+      onDemandRender: stats.onDemandRender ?? this._onDemandRender,
+      wasmSimd: stats.wasmSimd ?? this._wasmSimd,
+      wasmThreads: stats.wasmThreads ?? this._wasmThreads,
+      canvasColorSpace: this._videoColorProfile.canvasColorSpace,
+      videoTransfer: this._videoColorProfile.transfer,
+      videoPrimaries: this._videoColorProfile.primaries
     }
   }
 
@@ -1184,18 +1445,20 @@ export default class AkariSub extends EventTarget {
 
   /** @internal */
   private _currentExactFrameIndex(): number | undefined {
-    if (!this._frameTimeline || !this._video) return undefined
+    if (!this._frameTimeline) return undefined
+    const currentTime = this._clockCurrentTime()
+    if (currentTime == null) return undefined
     if (!this._isVideoPausedForWorker() && this._lastPresentedFrameIndex != null) {
       return this._lastPresentedFrameIndex
     }
-    return presentedFrameIndex(this._frameTimeline, this._video.currentTime)
+    return presentedFrameIndex(this._frameTimeline, currentTime)
   }
 
   /** @internal */
   private _currentExactFrameMediaTime(): number {
     const index = this._currentExactFrameIndex()
     if (index != null && this._frameTimeline) return this._frameTimeline[index]
-    return this._video?.currentTime ?? 0
+    return this._clockCurrentTime() ?? 0
   }
 
   /** Make a freshly painted base canvas visible without discarding future prefetch. */
@@ -1325,7 +1588,7 @@ export default class AkariSub extends EventTarget {
       // A synchronized context guarantees drawImage has entered the canvas
       // presentation pipeline before this hidden stage is compositor-scheduled.
       // desynchronized:true can expose a newly appended but not-yet-painted layer.
-      const context = stage.getContext('2d', { alpha: true })
+      const context = stage.getContext('2d', this._canvas2dSettings())
       if (!context) {
         this._removeStagedCanvas(stage)
         stage = document.createElement('canvas')
@@ -1336,7 +1599,7 @@ export default class AkariSub extends EventTarget {
         frame.stage = stage
         this._stagedCanvases.add(stage)
         this._stageFrameIndices.set(stage, index)
-        const fallbackContext = stage.getContext('2d', { alpha: true })
+        const fallbackContext = stage.getContext('2d', this._canvas2dSettings())
         if (!fallbackContext) {
           this._removeStagedCanvas(stage)
           frame.stage = undefined
@@ -1631,12 +1894,7 @@ export default class AkariSub extends EventTarget {
   /** @internal */
   private _primePreparedFrames(mediaTime: number): void {
     const timeline = this._frameTimeline
-    if (
-      !timeline ||
-      timeline.length === 0 ||
-      this.framePrefetch <= 0 ||
-      this._destroyed
-    ) {
+    if (!timeline || timeline.length === 0 || this.framePrefetch <= 0 || this._destroyed) {
       return
     }
 
@@ -1945,15 +2203,25 @@ export default class AkariSub extends EventTarget {
 
   /** @internal */
   private _isVideoPausedForWorker(): boolean {
-    if (!this._video) return true
-
-    return this._video.paused || this._video.ended || this._playstate
+    if (this._video) return this._video.paused || this._video.ended || this._playstate
+    if (this._videoFrameClock) return this._videoFrameClock.paused || this._playstate
+    return true
   }
 
   /** @internal */
   private _videoPlaybackRateForWorker(): number {
-    const playbackRate = this._video?.playbackRate ?? 1
+    const playbackRate = this._video?.playbackRate ?? this._videoFrameClock?.rate ?? 1
     return Number.isFinite(playbackRate) ? playbackRate : 1
+  }
+
+  /** @internal */
+  private _clockCurrentTime(): number | undefined {
+    if (this._video) {
+      const currentTime = this._video.currentTime
+      return Number.isFinite(currentTime) ? currentTime : 0
+    }
+    if (this._videoFrameClock) return this._videoFrameClock.currentTime
+    return undefined
   }
 
   /** @internal */
@@ -1981,15 +2249,14 @@ export default class AkariSub extends EventTarget {
 
   /** @internal */
   private _currentVideoTimeWithOffset(): number {
-    const currentTime = this._video?.currentTime ?? 0
-    return (Number.isFinite(currentTime) ? currentTime : 0) + this.timeOffset
+    return (this._clockCurrentTime() ?? 0) + this.timeOffset
   }
 
   /** @internal */
   private _syncVideoClock(event?: Event): void {
-    if (!this._video || this._destroyed) return
-
-    this._setVideoClockStateFromEvent(event)
+    if (this._destroyed) return
+    if (this._video) this._setVideoClockStateFromEvent(event)
+    else if (!this._videoFrameClock) return
 
     const currentTime = this._currentVideoTimeWithOffset()
     const playbackRate = this._videoPlaybackRateForWorker()
@@ -1998,10 +2265,9 @@ export default class AkariSub extends EventTarget {
 
     if (!this._onDemandRender) return
 
-    // RVFC renders ahead while the video is actively presenting frames. When
-    // playback pauses, stalls, or seeks, RVFC may stop and the last ahead render
-    // can be visibly in the future. Force an exact render at the displayed media
-    // time for non-advancing states.
+    // RVFC and presentVideoFrame render ahead while frames are advancing. When
+    // playback pauses, stalls, or seeks, the last ahead render can be visibly
+    // in the future. Force an exact render at the displayed media time.
     const shouldRenderExactFrame =
       isPaused ||
       event?.type === 'pause' ||
@@ -2018,8 +2284,8 @@ export default class AkariSub extends EventTarget {
       this._activatePresentation(presentationId)
       this._requestDemandRender({
         mediaTime: currentTime - this.timeOffset,
-        width: this._video.videoWidth || this._videoWidth || 0,
-        height: this._video.videoHeight || this._videoHeight || 0,
+        width: this._video?.videoWidth || this._videoFrameClock?.width || this._videoWidth || 0,
+        height: this._video?.videoHeight || this._videoFrameClock?.height || this._videoHeight || 0,
         force: true,
         presentationId
       })
@@ -2077,7 +2343,7 @@ export default class AkariSub extends EventTarget {
         : now
     const mediaTime = resolvePresentationMediaTime(
       metadata.mediaTime,
-      this._video?.currentTime,
+      this._clockCurrentTime(),
       !!this._frameTimeline?.length,
       this._frameTimeline?.mediaTimeOrigin,
       this._frameTimeline ?? undefined
@@ -2208,7 +2474,7 @@ export default class AkariSub extends EventTarget {
     this._canvas.remove()
     this._createCanvas()
     this._canvasctrl = this._canvas
-    this._ctx = this._canvasctrl.getContext('2d', { alpha: true })
+    this._ctx = this._canvasctrl.getContext('2d', this._canvas2dSettings())
     this.sendMessage('detachOffscreen')
     this.busy = false
     this._pendingDemandTimes.length = 0
@@ -2223,8 +2489,37 @@ export default class AkariSub extends EventTarget {
     this._createCanvas()
     this._canvasctrl = (this._canvas as any).transferControlToOffscreen()
     this._ctx = false
-    this.sendMessage('offscreenCanvas', {}, [this._canvasctrl as OffscreenCanvas])
+    this.sendMessage(
+      'offscreenCanvas',
+      {
+        canvasColorSpace: this._videoColorProfile.canvasColorSpace,
+        hdr: this._shouldUseHdr()
+      },
+      [this._canvasctrl as OffscreenCanvas]
+    )
     this.resize(0, 0, 0, 0, true)
+  }
+
+  /** @internal */
+  private _setVideoColorSpace(next: WebYCbCrColorSpace | null, forceNotify: boolean = false): void {
+    this._setVideoColorProfile(
+      {
+        ...this._videoColorProfile,
+        matrix: next
+      },
+      forceNotify
+    )
+  }
+
+  /** @internal */
+  private _setVideoColorProfile(profile: VideoColorProfile, forceNotify: boolean = false): void {
+    const current = this._videoColorProfile ?? defaultVideoColorProfile()
+    const matrixChanged = profile.matrix !== this._videoColorSpace
+    const profileChanged = !videoColorProfilesEqual(current, profile)
+    this._videoColorSpace = profile.matrix
+    this._videoColorProfile = profile
+    if (profileChanged) this._applyVideoColorProfile()
+    if (forceNotify || matrixChanged) this.sendMessage('getColorSpace')
   }
 
   /** @internal */
@@ -2232,9 +2527,9 @@ export default class AkariSub extends EventTarget {
     ;(this._video as any).requestVideoFrameCallback(() => {
       try {
         const frame = new (globalThis as any).VideoFrame(this._video)
-        this._videoColorSpace = webYCbCrMap[frame.colorSpace.matrix] ?? null
+        const profile = profileFromVideoFrameColorSpace(frame.colorSpace, this._canvasColorSpaceOverride)
         frame.close()
-        this.sendMessage('getColorSpace')
+        this._setVideoColorProfile(profile, true)
       } catch (e) {
         console.warn(e)
       }
@@ -2242,21 +2537,40 @@ export default class AkariSub extends EventTarget {
   }
 
   /** @internal */
+  private _applyVideoColorProfile(): void {
+    this._applyGpuColorManagement()
+    const hdr = this._shouldUseHdr()
+    const canvasColorSpace = this._videoColorProfile.canvasColorSpace
+    const canvasChanged = this._appliedCanvasColorSpace !== canvasColorSpace || this._appliedHdr !== hdr
+    this._appliedCanvasColorSpace = canvasColorSpace
+    this._appliedHdr = hdr
+    if (canvasChanged) this._replaceCanvas2dContexts()
+    if (!this._workerReady) return
+    if (canvasChanged) {
+      this.sendMessage('video', { canvasColorSpace, hdr })
+    }
+  }
+
+  /** @internal */
   private _verifyColorSpace(data: {
     subtitleColorSpace: SubtitleColorSpace
     videoColorSpace?: WebYCbCrColorSpace | null
   }): void {
-    const { subtitleColorSpace, videoColorSpace = this._videoColorSpace } = data
+    const { subtitleColorSpace, videoColorSpace = this._videoColorProfile.matrix ?? this._videoColorSpace } = data
+    this._lastSubtitleColorSpace = subtitleColorSpace
+    this._applyGpuColorManagement()
 
-    if (!subtitleColorSpace || !videoColorSpace) return
-    if (subtitleColorSpace === videoColorSpace) return
+    if (!subtitleColorSpace || !videoColorSpace || subtitleColorSpace === videoColorSpace) {
+      if (this._ctx) this._ctx.filter = 'none'
+      return
+    }
+
+    if (this._gpuRenderer) return
 
     this._detachOffscreen()
 
-    const matrix = colorMatrixConversionMap[subtitleColorSpace]?.[videoColorSpace]
-    if (matrix && this._ctx) {
-      this._ctx.filter = `url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg'><filter id='f'><feColorMatrix type='matrix' values='${matrix} 0 0 0 0 0 1 0'/></filter></svg>#f")`
-    }
+    const filter = getColorSpaceFilterUrl(subtitleColorSpace, videoColorSpace)
+    if (this._ctx) this._ctx.filter = filter ?? 'none'
   }
 
   /** @internal */
@@ -2307,6 +2621,7 @@ export default class AkariSub extends EventTarget {
         return
       }
 
+      this._ensureMainThreadCanvas2d()
       if (!this._ctx) return
 
       const ctx = this._ctx
@@ -2346,7 +2661,7 @@ export default class AkariSub extends EventTarget {
               bufferCanvas.width = imgW
               bufferCanvas.height = imgH
             }
-            bufferCtx.putImageData(new ImageData(fixedData as Uint8ClampedArray<ArrayBuffer>, imgW, imgH), 0, 0)
+            bufferCtx.putImageData(createSubtitleImageData(fixedData as Uint8ClampedArray, imgW, imgH), 0, 0)
             ctx.drawImage(bufferCanvas, image.x, image.y)
           }
         }
@@ -2476,8 +2791,8 @@ export default class AkariSub extends EventTarget {
     this._workerReady = true
     this._init()
 
-    if (this._video) {
-      const currentTime = this._video.currentTime
+    if (this._video || this._videoFrameClock) {
+      const currentTime = this._clockCurrentTime() ?? 0
       const isPaused = this._isVideoPausedForWorker()
       const bufferExactFrames =
         isPaused && this._onDemandRender && !!this._frameTimeline?.length && this.framePrefetch > 0
@@ -2495,8 +2810,8 @@ export default class AkariSub extends EventTarget {
         ? latestPending
         : {
             mediaTime: currentTime,
-            width: this._video.videoWidth,
-            height: this._video.videoHeight,
+            width: this._video?.videoWidth || this._videoFrameClock?.width || this._videoWidth || 0,
+            height: this._video?.videoHeight || this._videoFrameClock?.height || this._videoHeight || 0,
             expectedDisplayTime: isPaused ? undefined : performance.now()
           }
 
