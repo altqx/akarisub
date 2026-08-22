@@ -124,6 +124,64 @@ export interface PerformanceStats {
   cacheMisses: number
 }
 
+/** Active compositor backend. */
+export type RendererType = 'webgpu' | 'webgl2' | 'canvas2d'
+
+/** One Dialogue event that is active at a sampled media time. */
+export interface CueEvent {
+  /** Event index in the loaded track. */
+  index: number
+  /** Start time in seconds. */
+  start: number
+  /** Duration in seconds. */
+  duration: number
+  /** Style name referenced by this event. */
+  style: string
+  /** Character name (for information only). Empty for encrypted tracks. */
+  name: string
+  /** Dialogue text, including override tags. Empty for encrypted tracks. */
+  text: string
+  /** Collision layer. */
+  layer: number
+}
+
+/** Snapshot emitted after a demand-frame render cycle. */
+export interface RenderEvent {
+  /** Media time sampled for this frame, in seconds. */
+  time: number
+  /** Image planes emitted by the last changed render. */
+  imageCount: number
+  /** Worker render time in milliseconds. */
+  renderTimeMs: number
+  /** Active compositor backend. */
+  rendererType: RendererType
+  /** True when the worker reused the previous bitmap. */
+  cached: boolean
+}
+
+/** Fired when the compositor backend changes after construction. */
+export interface RendererChangeEvent {
+  rendererType: RendererType
+  previous: RendererType
+}
+
+/** Why the renderer is falling behind the display clock. */
+export type PerformanceWarning =
+  | { kind: 'slow-frame'; renderTimeMs: number }
+  | { kind: 'dropped-frames'; droppedFrames: number }
+  | { kind: 'queue-backlog'; pendingRenders: number }
+
+/** Source for {@linkcode AkariSub.preloadTrack}. */
+export type PreloadTrackSource =
+  | { kind: 'url'; url: string }
+  | { kind: 'content'; content: string | Uint8Array | ArrayBuffer }
+  | { kind: 'encrypted'; content: EncryptedSubtitleContent }
+
+/** Handle returned by {@linkcode AkariSub.preloadTrack}. */
+export interface PreloadedTrack {
+  id: number
+}
+
 /** Encoded-frame timestamps with optional media/subtitle clock offsets. */
 export interface FrameTimeline extends ArrayLike<number> {
   /** Origin subtracted from raw browser media timestamps when locating a frame. */
@@ -210,6 +268,16 @@ export interface AkariSubOptions {
   fullTrackWarmupStep?: number
   /** Allow adaptive CPU preblend layouts for text-heavy frames (default: false) */
   adaptiveBlendLayouts?: boolean
+  /** Fired when a Dialogue event becomes active at the sampled media time. */
+  onCueEnter?: (cue: CueEvent) => void
+  /** Fired when a Dialogue event is no longer active at the sampled media time. */
+  onCueExit?: (cue: CueEvent) => void
+  /** Fired after each demand-frame render cycle. */
+  onRender?: (event: RenderEvent) => void
+  /** Fired when the compositor backend changes after construction. */
+  onRendererChange?: (event: RendererChangeEvent) => void
+  /** Fired when a frame is slow, dropped, or the demand queue backs up. */
+  onPerformanceWarning?: (warning: PerformanceWarning) => void
 }
 
 /** AES-GCM subtitle payload decrypted inside the worker. */
@@ -301,6 +369,18 @@ export type WorkerOutboundMessage =
   | { target: 'resetStats'; success: boolean }
   | { target: 'getEventCount'; count: number }
   | { target: 'getStyleCount'; count: number }
+  | { target: 'preloadTrack'; requestId: number; success: boolean; id?: number; error?: string }
+  | { target: 'activatePreloadedTrack'; requestId: number; success: boolean; id?: number; error?: string }
+  | { target: 'cues'; time: number; entered: CueEvent[]; exited: CueEvent[] }
+  | {
+      target: 'renderInfo'
+      time: number
+      cached: boolean
+      renderTimeMs: number
+      imageCount: number
+      framesDropped: number
+      pendingRenders: number
+    }
   | RenderMessage
 
 export interface WorkerInitMessage {
@@ -359,6 +439,8 @@ export type WorkerInboundMessage =
   | { target: 'setEncryptedTrack'; content: EncryptedSubtitleContent }
   | { target: 'setTrackByUrl'; url: string }
   | { target: 'freeTrack' }
+  | { target: 'preloadTrack'; requestId: number; source: PreloadTrackSource }
+  | { target: 'activatePreloadedTrack'; requestId: number; id?: number }
   | {
       target: 'demand'
       time: number
@@ -368,7 +450,7 @@ export type WorkerInboundMessage =
       presentationId?: number
     }
   | { target: 'prepare'; time: number; prepareId: number; renderEpoch: number; force?: boolean }
-  | { target: 'presentation'; presentationId: number }
+  | { target: 'presentation'; presentationId: number; time?: number }
   | { target: 'presentFrame'; bitmap: ImageBitmap; presentationId: number }
   | { target: 'frameTimelineMode'; enabled: boolean }
   | { target: 'destroy' }

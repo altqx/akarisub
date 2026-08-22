@@ -30,6 +30,8 @@ AkariSub is a JS wrapper for <a href="https://github.com/libass/libass">libass</
 - **Proper Fontconfig Implementation** - add Fontconfig support with multiple fallback fonts supported
 - **Encrypted Subtitles** - optionally load AES-GCM encrypted subtitle payloads that are decrypted inside the worker, so plaintext never touches the main thread
 - **Statistics Reporting** - Built-in statistics and performance metrics for debugging and monitoring
+- **Atomic Track Switching** - `preloadTrack()` / `activatePreloadedTrack()` load a second language track and its fonts before swapping, so the last frame stays visible
+- **Cue Callbacks** - `onCueEnter`, `onCueExit`, `onRender`, `onRendererChange`, and `onPerformanceWarning` for overlays and analytics without polling `getEvents()`
 - **TypeScript Support** - Full TypeScript definitions and type safety
 - **Updated Dependencies** - All dependencies updated to their latest versions, including libass
 
@@ -128,6 +130,15 @@ You're not limited to only display the subtitle file you referenced in your opti
 ```js
 renderer.setTrackByUrl('/newsub.ass')
 ```
+
+For streaming players with multiple language tracks, preload the next file so the swap does not drop a frame or hitch on font load. The last painted frame stays on screen until the new track's first frame is ready:
+
+```js
+const ja = await renderer.preloadTrack({ kind: 'url', url: '/subs/ja.ass' })
+await renderer.activatePreloadedTrack(ja.id)
+```
+
+`preloadTrack()` also accepts ASS text or bytes, `{ kind: 'content', content }`, or `{ kind: 'encrypted', content }`. `activatePreloadedTrack()` without an id uses the most recently preloaded track.
 
 ## Cleaning up the object
 
@@ -258,6 +269,11 @@ The default options are best, and automatically fallback to the next fastest opt
 | `libassGlyphLimit`    | number                               | `2048`                                   | libass glyph cache limit                                                                                                                                   |
 | `fullTrackWarmup`     | boolean                              | `false`                                  | Pre-render early track windows after load to warm libass caches                                                                                            |
 | `onCanvasFallback`    | function                             | -                                        | Callback when no GPU renderer is available (Canvas2D fallback)                                                                                             |
+| `onCueEnter`          | `(cue) => void`                      | -                                        | Dialogue event became active at the sampled media time                                                                                                     |
+| `onCueExit`           | `(cue) => void`                      | -                                        | Dialogue event is no longer active                                                                                                                         |
+| `onRender`            | `(event) => void`                    | -                                        | Demand-frame render finished                                                                                                                               |
+| `onRendererChange`    | `(event) => void`                    | -                                        | Compositor backend changed after construction                                                                                                              |
+| `onPerformanceWarning`| `(warning) => void`                  | -                                        | Slow frame, dropped frames, or a full demand queue                                                                                                         |
 
 ## Methods
 
@@ -269,6 +285,8 @@ The default options are best, and automatically fallback to the next fastest opt
 | `setTrack(content)`          | `content: string \| Uint8Array \| ArrayBuffer` | Set subtitle from content                                        |
 | `setEncryptedTrack(content)` | `content: EncryptedSubtitleContent`            | Set subtitle from an encrypted payload (decrypted in the worker) |
 | `freeTrack()`                | -                                              | Remove current subtitles                                         |
+| `preloadTrack(source)`       | `PreloadTrackSource \| string \| bytes`        | Parse a track and load its fonts without replacing the visible one |
+| `activatePreloadedTrack(id?)`| `id?: number`                                  | Atomically swap to a preloaded track; last frame stays until the first new paint |
 
 ### Playback Control
 
@@ -285,6 +303,29 @@ The default options are best, and automatically fallback to the next fastest opt
 | ---------------------------------------------- | ------------------------------------------------------------------------------- | --------------------------- |
 | `setVideo(video)`                              | `video: HTMLVideoElement`                                                       | Change target video element |
 | `resize(width?, height?, top?, left?, force?)` | `width?: number, height?: number, top?: number, left?: number, force?: boolean` | Resize the canvas           |
+
+### Cue and render callbacks
+
+Option callbacks and matching `EventTarget` events (`cueEnter`, `cueExit`, `render`, `rendererChange`, `performanceWarning`) fire from the worker clock. Use them for chapter markers, character overlays, or analytics instead of polling `getEvents()`:
+
+```ts
+const renderer = new AkariSub({
+  video,
+  subUrl: '/subs/en.ass',
+  onCueEnter: (cue) => showCharacter(cue.name, cue.text),
+  onCueExit: (cue) => hideCharacter(cue.index),
+  onRender: (event) => recordSubtitleFrame(event.time, event.renderTimeMs),
+  onPerformanceWarning: (warning) => {
+    if (warning.kind === 'slow-frame') console.warn('slow subtitle frame', warning.renderTimeMs)
+  }
+})
+
+renderer.addEventListener('rendererChange', (event) => {
+  console.log('compositor', event.detail.rendererType)
+})
+```
+
+`CueEvent.start` and `CueEvent.duration` are seconds on the subtitle clock, matching `video.currentTime` plus `timeOffset`. Encrypted tracks omit `name` and `text`.
 
 ### Event Management
 
