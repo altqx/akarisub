@@ -15,7 +15,9 @@ import type {
   VideoFrameCallbackMetadata,
   SubtitleColorSpace,
   WebYCbCrColorSpace,
-  FrameTimeline
+  FrameTimeline,
+  PresentVideoFrameOptions,
+  VideoFrameLike
 } from './types'
 import type { EncryptedSubtitleContent } from './types'
 import { classifyPerformanceWarnings, parsePreloadTrackSource } from './cue-events'
@@ -44,7 +46,16 @@ import {
   subtitleTimeForFrame,
   updateTimingCompensation
 } from './timing'
+import { isVideoFrameLike, videoFrameCallbackMetadata, videoFrameColorSpace } from './video-frame'
 import { getDefaultFontUrl, getWasmGlueUrl, getWasmUrl } from './wasm'
+
+interface VideoFrameClock {
+  currentTime: number
+  paused: boolean
+  rate: number
+  width: number
+  height: number
+}
 
 type AnyGPURenderer = WebGPURenderer | WebGL2Renderer
 
@@ -134,6 +145,7 @@ export default class AkariSub extends EventTarget {
   private _onDemandRender: boolean
   private _offscreenRender: boolean
   private _video?: HTMLVideoElement
+  private _videoFrameClock: VideoFrameClock | null = null
   private _videoWidth: number = 0
   private _videoHeight: number = 0
   private _videoColorSpace: WebYCbCrColorSpace | null = null
@@ -259,7 +271,9 @@ export default class AkariSub extends EventTarget {
 
     const test = AkariSub._test()
 
-    this._onDemandRender = 'requestVideoFrameCallback' in HTMLVideoElement.prototype && (options.onDemandRender ?? true)
+    const hasRVFC = typeof HTMLVideoElement !== 'undefined' && 'requestVideoFrameCallback' in HTMLVideoElement.prototype
+    const wantsOnDemand = options.onDemandRender ?? true
+    this._onDemandRender = wantsOnDemand && (hasRVFC || (options.video == null && options.onDemandRender === true))
     this._adaptiveTiming = options.adaptiveTiming ?? true
     this._frameTimeline = options.frameTimeline ? normalizeFrameTimeline(options.frameTimeline) : null
 
@@ -685,6 +699,7 @@ export default class AkariSub extends EventTarget {
   setVideo(video: HTMLVideoElement): void {
     if (video instanceof HTMLVideoElement) {
       this._removeListeners()
+      this._videoFrameClock = null
       this._video = video
       this._playstate = video.paused || video.ended
 
@@ -724,6 +739,61 @@ export default class AkariSub extends EventTarget {
     } else {
       this._error(new Error('Video element invalid!'))
     }
+  }
+
+  /**
+   * Present a decoded WebCodecs `VideoFrame` as the current video clock.
+   *
+   * Uses the same demand, prefetch, and frame-timeline path as
+   * `requestVideoFrameCallback`. Does not take ownership of `frame`; the caller
+   * must `close()` it. Canvas-only WebCodecs players should pass `canvas` at
+   * construction and leave `onDemandRender` enabled, or set it `true` when the
+   * browser has no `requestVideoFrameCallback`.
+   */
+  presentVideoFrame(frame: VideoFrameLike, options: PresentVideoFrameOptions = {}): void {
+    if (this._destroyed) return
+    if (!isVideoFrameLike(frame)) {
+      this._error(new Error('VideoFrame invalid!'))
+      return
+    }
+
+    const metadata = videoFrameCallbackMetadata(frame, options)
+    const previous = this._videoFrameClock
+    const isPaused = options.isPaused ?? previous?.paused ?? false
+    const rate = Number.isFinite(options.rate) ? options.rate! : (previous?.rate ?? 1)
+
+    this._videoFrameClock = {
+      currentTime: metadata.mediaTime,
+      paused: isPaused,
+      rate,
+      width: metadata.width,
+      height: metadata.height
+    }
+    this._playstate = isPaused
+    this._setVideoColorSpace(videoFrameColorSpace(frame))
+    this.setCurrentTime(isPaused, metadata.mediaTime + this.timeOffset, rate)
+
+    if (this._onDemandRender) {
+      this._handleRVFC(Number.isFinite(options.now) ? options.now! : (metadata.presentationTime ?? 0), metadata)
+    }
+  }
+
+  /**
+   * Set the video YCbCr matrix used for subtitle color conversion.
+   *
+   * Accepts `'BT709'` / `'BT601'`, a WebCodecs matrix name such as `'bt709'`,
+   * or a `VideoFrame.colorSpace` object. Pass `null` to clear the override.
+   */
+  setVideoColorSpace(colorSpace: WebYCbCrColorSpace | VideoFrameLike['colorSpace'] | string | null): void {
+    if (colorSpace === 'BT709' || colorSpace === 'BT601') {
+      this._setVideoColorSpace(colorSpace)
+      return
+    }
+    if (colorSpace == null || typeof colorSpace === 'string') {
+      this._setVideoColorSpace(typeof colorSpace === 'string' ? (webYCbCrMap[colorSpace] ?? null) : null)
+      return
+    }
+    this._setVideoColorSpace(webYCbCrMap[colorSpace.matrix ?? ''] ?? null)
   }
 
   /** Fetch and load an ASS/SSA track from `url`. */
@@ -829,6 +899,11 @@ export default class AkariSub extends EventTarget {
       return
     }
 
+    if (this._videoFrameClock) {
+      this._videoFrameClock.paused = isPaused
+      this._playstate = isPaused
+    }
+
     this.sendMessage('video', { isPaused })
   }
 
@@ -839,6 +914,8 @@ export default class AkariSub extends EventTarget {
       return
     }
 
+    if (this._videoFrameClock && Number.isFinite(rate)) this._videoFrameClock.rate = rate
+
     this.sendMessage('video', { rate })
   }
 
@@ -848,6 +925,17 @@ export default class AkariSub extends EventTarget {
    * Omit fields to keep the last known paused state, time, or rate.
    */
   setCurrentTime(isPaused?: boolean, currentTime?: number, rate?: number): void {
+    if (!this._video && this._videoFrameClock) {
+      if (isPaused != null) {
+        this._videoFrameClock.paused = isPaused
+        this._playstate = isPaused
+      }
+      if (currentTime != null && Number.isFinite(currentTime)) {
+        this._videoFrameClock.currentTime = currentTime - this.timeOffset
+      }
+      if (rate != null && Number.isFinite(rate)) this._videoFrameClock.rate = rate
+    }
+
     this.sendMessage('video', {
       isPaused,
       currentTime,
@@ -1184,18 +1272,20 @@ export default class AkariSub extends EventTarget {
 
   /** @internal */
   private _currentExactFrameIndex(): number | undefined {
-    if (!this._frameTimeline || !this._video) return undefined
+    if (!this._frameTimeline) return undefined
+    const currentTime = this._clockCurrentTime()
+    if (currentTime == null) return undefined
     if (!this._isVideoPausedForWorker() && this._lastPresentedFrameIndex != null) {
       return this._lastPresentedFrameIndex
     }
-    return presentedFrameIndex(this._frameTimeline, this._video.currentTime)
+    return presentedFrameIndex(this._frameTimeline, currentTime)
   }
 
   /** @internal */
   private _currentExactFrameMediaTime(): number {
     const index = this._currentExactFrameIndex()
     if (index != null && this._frameTimeline) return this._frameTimeline[index]
-    return this._video?.currentTime ?? 0
+    return this._clockCurrentTime() ?? 0
   }
 
   /** Make a freshly painted base canvas visible without discarding future prefetch. */
@@ -1631,12 +1721,7 @@ export default class AkariSub extends EventTarget {
   /** @internal */
   private _primePreparedFrames(mediaTime: number): void {
     const timeline = this._frameTimeline
-    if (
-      !timeline ||
-      timeline.length === 0 ||
-      this.framePrefetch <= 0 ||
-      this._destroyed
-    ) {
+    if (!timeline || timeline.length === 0 || this.framePrefetch <= 0 || this._destroyed) {
       return
     }
 
@@ -1945,15 +2030,25 @@ export default class AkariSub extends EventTarget {
 
   /** @internal */
   private _isVideoPausedForWorker(): boolean {
-    if (!this._video) return true
-
-    return this._video.paused || this._video.ended || this._playstate
+    if (this._video) return this._video.paused || this._video.ended || this._playstate
+    if (this._videoFrameClock) return this._videoFrameClock.paused || this._playstate
+    return true
   }
 
   /** @internal */
   private _videoPlaybackRateForWorker(): number {
-    const playbackRate = this._video?.playbackRate ?? 1
+    const playbackRate = this._video?.playbackRate ?? this._videoFrameClock?.rate ?? 1
     return Number.isFinite(playbackRate) ? playbackRate : 1
+  }
+
+  /** @internal */
+  private _clockCurrentTime(): number | undefined {
+    if (this._video) {
+      const currentTime = this._video.currentTime
+      return Number.isFinite(currentTime) ? currentTime : 0
+    }
+    if (this._videoFrameClock) return this._videoFrameClock.currentTime
+    return undefined
   }
 
   /** @internal */
@@ -1981,15 +2076,14 @@ export default class AkariSub extends EventTarget {
 
   /** @internal */
   private _currentVideoTimeWithOffset(): number {
-    const currentTime = this._video?.currentTime ?? 0
-    return (Number.isFinite(currentTime) ? currentTime : 0) + this.timeOffset
+    return (this._clockCurrentTime() ?? 0) + this.timeOffset
   }
 
   /** @internal */
   private _syncVideoClock(event?: Event): void {
-    if (!this._video || this._destroyed) return
-
-    this._setVideoClockStateFromEvent(event)
+    if (this._destroyed) return
+    if (this._video) this._setVideoClockStateFromEvent(event)
+    else if (!this._videoFrameClock) return
 
     const currentTime = this._currentVideoTimeWithOffset()
     const playbackRate = this._videoPlaybackRateForWorker()
@@ -1998,10 +2092,9 @@ export default class AkariSub extends EventTarget {
 
     if (!this._onDemandRender) return
 
-    // RVFC renders ahead while the video is actively presenting frames. When
-    // playback pauses, stalls, or seeks, RVFC may stop and the last ahead render
-    // can be visibly in the future. Force an exact render at the displayed media
-    // time for non-advancing states.
+    // RVFC and presentVideoFrame render ahead while frames are advancing. When
+    // playback pauses, stalls, or seeks, the last ahead render can be visibly
+    // in the future. Force an exact render at the displayed media time.
     const shouldRenderExactFrame =
       isPaused ||
       event?.type === 'pause' ||
@@ -2018,8 +2111,8 @@ export default class AkariSub extends EventTarget {
       this._activatePresentation(presentationId)
       this._requestDemandRender({
         mediaTime: currentTime - this.timeOffset,
-        width: this._video.videoWidth || this._videoWidth || 0,
-        height: this._video.videoHeight || this._videoHeight || 0,
+        width: this._video?.videoWidth || this._videoFrameClock?.width || this._videoWidth || 0,
+        height: this._video?.videoHeight || this._videoFrameClock?.height || this._videoHeight || 0,
         force: true,
         presentationId
       })
@@ -2077,7 +2170,7 @@ export default class AkariSub extends EventTarget {
         : now
     const mediaTime = resolvePresentationMediaTime(
       metadata.mediaTime,
-      this._video?.currentTime,
+      this._clockCurrentTime(),
       !!this._frameTimeline?.length,
       this._frameTimeline?.mediaTimeOrigin,
       this._frameTimeline ?? undefined
@@ -2228,13 +2321,19 @@ export default class AkariSub extends EventTarget {
   }
 
   /** @internal */
+  private _setVideoColorSpace(next: WebYCbCrColorSpace | null, forceNotify: boolean = false): void {
+    if (!forceNotify && next === this._videoColorSpace) return
+    this._videoColorSpace = next
+    this.sendMessage('getColorSpace')
+  }
+
+  /** @internal */
   private _updateColorSpace(): void {
     ;(this._video as any).requestVideoFrameCallback(() => {
       try {
         const frame = new (globalThis as any).VideoFrame(this._video)
-        this._videoColorSpace = webYCbCrMap[frame.colorSpace.matrix] ?? null
+        this._setVideoColorSpace(videoFrameColorSpace(frame), true)
         frame.close()
-        this.sendMessage('getColorSpace')
       } catch (e) {
         console.warn(e)
       }
@@ -2476,8 +2575,8 @@ export default class AkariSub extends EventTarget {
     this._workerReady = true
     this._init()
 
-    if (this._video) {
-      const currentTime = this._video.currentTime
+    if (this._video || this._videoFrameClock) {
+      const currentTime = this._clockCurrentTime() ?? 0
       const isPaused = this._isVideoPausedForWorker()
       const bufferExactFrames =
         isPaused && this._onDemandRender && !!this._frameTimeline?.length && this.framePrefetch > 0
@@ -2495,8 +2594,8 @@ export default class AkariSub extends EventTarget {
         ? latestPending
         : {
             mediaTime: currentTime,
-            width: this._video.videoWidth,
-            height: this._video.videoHeight,
+            width: this._video?.videoWidth || this._videoFrameClock?.width || this._videoWidth || 0,
+            height: this._video?.videoHeight || this._videoFrameClock?.height || this._videoHeight || 0,
             expectedDisplayTime: isPaused ? undefined : performance.now()
           }
 

@@ -22,6 +22,7 @@ AkariSub is a JS wrapper for <a href="https://github.com/libass/libass">libass</
 - Benefits from hardware acceleration (uses hardware accelerated canvas API's)
 - Doesn't manipulate the DOM to render subtitles
 - Easy to use - just connect it to video element
+- Optional WebCodecs `VideoFrame` clock for custom players and editors
 
 ### Fork Enhancements
 
@@ -117,6 +118,39 @@ Use timestamps from the encoded rendition the browser plays, normalized to the b
 If the browser timeline is normalized from decode time rather than the first display PTS, preserve that initial B-frame reorder gap in the array and set `frameTimeline.subtitleTimeOffset` to the first frame timestamp. AkariSub uses the unmodified array to locate the visible video frame, then removes the offset only when sampling libass.
 
 `subtitleTimeOffset` is signed. When the source video starts after the container subtitle clock, subtract that source lead from the reorder offset. For example, an encoded reorder gap of `0.083422` seconds and a source video start of `0.007` seconds use `subtitleTimeOffset = 0.076422`, so the first displayed frame is sampled by libass at `0.007` just like mpv.
+
+## Using with WebCodecs
+
+Apps that decode with `VideoDecoder` instead of `HTMLVideoElement` can drive the same on-demand and frame-timeline path with each output `VideoFrame`. Pass a canvas, keep `onDemandRender` enabled, and present frames as they leave the decoder. AkariSub reads `timestamp` (microseconds), `displayWidth` / `displayHeight`, and `colorSpace.matrix`. It does not take ownership of the frame.
+
+```js
+import AkariSub, { frameTimelineFromTimestamps } from 'akarisub'
+
+const renderer = new AkariSub({
+  canvas: document.querySelector('canvas'),
+  subUrl: './tracks/sub.ass',
+  frameTimeline: frameTimelineFromTimestamps(packetTimestampsUs),
+  onDemandRender: true
+})
+
+const decoder = new VideoDecoder({
+  output(frame) {
+    renderer.presentVideoFrame(frame, {
+      expectedDisplayTime: performance.now(),
+      isPaused: false,
+      rate: 1
+    })
+    frame.close()
+  },
+  error(err) {
+    console.error(err)
+  }
+})
+```
+
+Paused editor and offline-preview frames pass `isPaused: true` so libass samples that exact timestamp. `setVideoColorSpace()` can apply a matrix without presenting a frame. `frameTimelineFromVideoFrames()` builds a timeline from already-decoded frames.
+
+In browsers without `requestVideoFrameCallback`, set `onDemandRender: true` explicitly so `presentVideoFrame` uses the demand path instead of the worker RAF loop.
 
 ## Changing subtitles
 
@@ -233,76 +267,78 @@ if (renderer.isUsingGPURenderer) {
 
 The default options are best, and automatically fallback to the next fastest options in line, when the API's they use are unsupported. You can however forcefully change this behavior by specifying options.
 
-| Option                | Type                                 | Default                                  | Description                                                                                                                                                |
-| --------------------- | ------------------------------------ | ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `video`               | HTMLVideoElement                     | -                                        | Video to use as target for rendering and event listeners                                                                                                   |
-| `canvas`              | HTMLCanvasElement                    | -                                        | Canvas to use for manual handling (optional if video is provided)                                                                                          |
-| `blendMode`           | `'js'` \| `'wasm'`                   | `'wasm'`                                 | Image blending mode. WASM is better for low-end devices, JS for hardware acceleration                                                                      |
-| `asyncRender`         | boolean                              | auto                                     | Render via ImageBitmap. Defaults to `true` on Canvas2D paths and `false` when a GPU renderer is active (raw buffers upload with fewer copies) or on WebKit |
-| `offscreenRender`     | boolean                              | automatic                                | Render fully on the worker; enabled for video-managed canvases and disabled for custom canvases                                                            |
-| `rawAssImageGpu`      | boolean                              | `false`                                  | Compose raw libass masks with worker WebGL2 when offscreen rendering is active                                                                              |
-| `onDemandRender`      | boolean                              | `true`                                   | Render subtitles as the video player renders frames                                                                                                        |
-| `adaptiveTiming`      | boolean                              | `true`                                   | Compensate measured queue, worker, bitmap, IPC, and paint latency while video is playing; pause and seek renders remain frame-exact                        |
-| `frameTimeline`       | FrameTimeline                        | -                                        | Encoded browser-frame timestamps plus optional media/subtitle clock offsets; enables frame-locked libass sampling                                          |
-| `framePrefetch`       | number                               | `2`                                      | Number of exact subtitle-frame bitmaps to prepare ahead (`0` disables preparation, maximum `24`)                                                           |
-| `targetFps`           | number                               | `24`                                     | Target FPS when not using onDemandRender                                                                                                                   |
-| `timeOffset`          | number                               | `0`                                      | Subtitle time offset in seconds                                                                                                                            |
-| `debug`               | boolean                              | `false`                                  | Enable debug logging                                                                                                                                       |
-| `prescaleFactor`      | number                               | `1.0`                                    | Scale factor for subtitles canvas                                                                                                                          |
-| `prescaleHeightLimit` | number                               | `1080`                                   | Height limit for prescaling in pixels                                                                                                                      |
-| `maxRenderHeight`     | number                               | `0`                                      | Maximum render height (0 = no limit)                                                                                                                       |
-| `dropAllAnimations`   | boolean                              | `false`                                  | Discard all animated tags for performance                                                                                                                  |
-| `dropAllBlur`         | boolean                              | `false`                                  | Drop all blur effects (~10x performance gain)                                                                                                              |
-| `clampPos`            | boolean                              | `false`                                  | Clamp `\pos` values to script resolution                                                                                                                   |
-| `renderAhead`         | number                               | `0`                                      | Optional extra seconds to render ahead, in addition to adaptive timing; also applies when `onDemandRender` is disabled                                     |
-| `workerUrl`           | string                               | package worker URL                       | Optional worker script URL. Defaults to the package worker module URL                                                                                      |
-| `wasmUrl`             | string                               | package WASM URL                         | Optional WASM binary URL. Defaults to the URL resolved from `import.meta.url`                                                                              |
-| `glueUrl`             | string                               | package glue URL                         | Optional WASM glue script URL. Defaults to the URL resolved from `import.meta.url`                                                                         |
-| `subUrl`              | string                               | -                                        | URL of the subtitle file to play                                                                                                                           |
-| `subContent`          | string \| Uint8Array \| ArrayBuffer  | -                                        | Content of the subtitle file to play                                                                                                                       |
-| `encryptedSubContent` | EncryptedSubtitleContent             | -                                        | AES-GCM encrypted subtitle payload, decrypted inside the worker                                                                                            |
-| `fonts`               | (string \| Uint8Array)[]             | -                                        | Array of font URLs or Uint8Arrays to force load                                                                                                            |
-| `availableFonts`      | Record<string, string \| Uint8Array> | liberation sans from package assets      | Available fonts map (lowercase name → URL/data)                                                                                                            |
-| `fallbackFonts`       | string[]                             | `['liberation sans']`                    | Fallback font families in order, used for the fontconfig cascade                                                                                           |
-| `useLocalFonts`       | boolean                              | `true`                                   | Use Local Font Access API if available                                                                                                                     |
-| `libassMemoryLimit`   | number                               | `128`                                    | libass bitmap cache memory limit in MiB                                                                                                                    |
-| `libassGlyphLimit`    | number                               | `2048`                                   | libass glyph cache limit                                                                                                                                   |
-| `fullTrackWarmup`     | boolean                              | `false`                                  | Pre-render early track windows after load to warm libass caches                                                                                            |
-| `onCanvasFallback`    | function                             | -                                        | Callback when no GPU renderer is available (Canvas2D fallback)                                                                                             |
-| `onCueEnter`          | `(cue) => void`                      | -                                        | Dialogue event became active at the sampled media time                                                                                                     |
-| `onCueExit`           | `(cue) => void`                      | -                                        | Dialogue event is no longer active                                                                                                                         |
-| `onRender`            | `(event) => void`                    | -                                        | Demand-frame render finished                                                                                                                               |
-| `onRendererChange`    | `(event) => void`                    | -                                        | Compositor backend changed after construction                                                                                                              |
-| `onPerformanceWarning`| `(warning) => void`                  | -                                        | Slow frame, dropped frames, or a full demand queue                                                                                                         |
+| Option                 | Type                                 | Default                             | Description                                                                                                                                                |
+| ---------------------- | ------------------------------------ | ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `video`                | HTMLVideoElement                     | -                                   | Video to use as target for rendering and event listeners. WebCodecs players pass `canvas` and call `presentVideoFrame` instead                             |
+| `canvas`               | HTMLCanvasElement                    | -                                   | Canvas to use for manual handling (optional if video is provided)                                                                                          |
+| `blendMode`            | `'js'` \| `'wasm'`                   | `'wasm'`                            | Image blending mode. WASM is better for low-end devices, JS for hardware acceleration                                                                      |
+| `asyncRender`          | boolean                              | auto                                | Render via ImageBitmap. Defaults to `true` on Canvas2D paths and `false` when a GPU renderer is active (raw buffers upload with fewer copies) or on WebKit |
+| `offscreenRender`      | boolean                              | automatic                           | Render fully on the worker; enabled for video-managed canvases and disabled for custom canvases                                                            |
+| `rawAssImageGpu`       | boolean                              | `false`                             | Compose raw libass masks with worker WebGL2 when offscreen rendering is active                                                                             |
+| `onDemandRender`       | boolean                              | `true`                              | Render subtitles as the video player or `presentVideoFrame` presents frames                                                                                |
+| `adaptiveTiming`       | boolean                              | `true`                              | Compensate measured queue, worker, bitmap, IPC, and paint latency while video is playing; pause and seek renders remain frame-exact                        |
+| `frameTimeline`        | FrameTimeline                        | -                                   | Encoded browser-frame timestamps plus optional media/subtitle clock offsets; enables frame-locked libass sampling                                          |
+| `framePrefetch`        | number                               | `2`                                 | Number of exact subtitle-frame bitmaps to prepare ahead (`0` disables preparation, maximum `24`)                                                           |
+| `targetFps`            | number                               | `24`                                | Target FPS when not using onDemandRender                                                                                                                   |
+| `timeOffset`           | number                               | `0`                                 | Subtitle time offset in seconds                                                                                                                            |
+| `debug`                | boolean                              | `false`                             | Enable debug logging                                                                                                                                       |
+| `prescaleFactor`       | number                               | `1.0`                               | Scale factor for subtitles canvas                                                                                                                          |
+| `prescaleHeightLimit`  | number                               | `1080`                              | Height limit for prescaling in pixels                                                                                                                      |
+| `maxRenderHeight`      | number                               | `0`                                 | Maximum render height (0 = no limit)                                                                                                                       |
+| `dropAllAnimations`    | boolean                              | `false`                             | Discard all animated tags for performance                                                                                                                  |
+| `dropAllBlur`          | boolean                              | `false`                             | Drop all blur effects (~10x performance gain)                                                                                                              |
+| `clampPos`             | boolean                              | `false`                             | Clamp `\pos` values to script resolution                                                                                                                   |
+| `renderAhead`          | number                               | `0`                                 | Optional extra seconds to render ahead, in addition to adaptive timing; also applies when `onDemandRender` is disabled                                     |
+| `workerUrl`            | string                               | package worker URL                  | Optional worker script URL. Defaults to the package worker module URL                                                                                      |
+| `wasmUrl`              | string                               | package WASM URL                    | Optional WASM binary URL. Defaults to the URL resolved from `import.meta.url`                                                                              |
+| `glueUrl`              | string                               | package glue URL                    | Optional WASM glue script URL. Defaults to the URL resolved from `import.meta.url`                                                                         |
+| `subUrl`               | string                               | -                                   | URL of the subtitle file to play                                                                                                                           |
+| `subContent`           | string \| Uint8Array \| ArrayBuffer  | -                                   | Content of the subtitle file to play                                                                                                                       |
+| `encryptedSubContent`  | EncryptedSubtitleContent             | -                                   | AES-GCM encrypted subtitle payload, decrypted inside the worker                                                                                            |
+| `fonts`                | (string \| Uint8Array)[]             | -                                   | Array of font URLs or Uint8Arrays to force load                                                                                                            |
+| `availableFonts`       | Record<string, string \| Uint8Array> | liberation sans from package assets | Available fonts map (lowercase name → URL/data)                                                                                                            |
+| `fallbackFonts`        | string[]                             | `['liberation sans']`               | Fallback font families in order, used for the fontconfig cascade                                                                                           |
+| `useLocalFonts`        | boolean                              | `true`                              | Use Local Font Access API if available                                                                                                                     |
+| `libassMemoryLimit`    | number                               | `128`                               | libass bitmap cache memory limit in MiB                                                                                                                    |
+| `libassGlyphLimit`     | number                               | `2048`                              | libass glyph cache limit                                                                                                                                   |
+| `fullTrackWarmup`      | boolean                              | `false`                             | Pre-render early track windows after load to warm libass caches                                                                                            |
+| `onCanvasFallback`     | function                             | -                                   | Callback when no GPU renderer is available (Canvas2D fallback)                                                                                             |
+| `onCueEnter`           | `(cue) => void`                      | -                                   | Dialogue event became active at the sampled media time                                                                                                     |
+| `onCueExit`            | `(cue) => void`                      | -                                   | Dialogue event is no longer active                                                                                                                         |
+| `onRender`             | `(event) => void`                    | -                                   | Demand-frame render finished                                                                                                                               |
+| `onRendererChange`     | `(event) => void`                    | -                                   | Compositor backend changed after construction                                                                                                              |
+| `onPerformanceWarning` | `(warning) => void`                  | -                                   | Slow frame, dropped frames, or a full demand queue                                                                                                         |
 
 ## Methods
 
 ### Track Management
 
-| Method                       | Parameters                                     | Description                                                      |
-| ---------------------------- | ---------------------------------------------- | ---------------------------------------------------------------- |
-| `setTrackByUrl(url)`         | `url: string`                                  | Load subtitle from URL                                           |
-| `setTrack(content)`          | `content: string \| Uint8Array \| ArrayBuffer` | Set subtitle from content                                        |
-| `setEncryptedTrack(content)` | `content: EncryptedSubtitleContent`            | Set subtitle from an encrypted payload (decrypted in the worker) |
-| `freeTrack()`                | -                                              | Remove current subtitles                                         |
-| `preloadTrack(source)`       | `PreloadTrackSource \| string \| bytes`        | Parse a track and load its fonts without replacing the visible one |
-| `activatePreloadedTrack(id?)`| `id?: number`                                  | Atomically swap to a preloaded track; last frame stays until the first new paint |
+| Method                        | Parameters                                     | Description                                                                      |
+| ----------------------------- | ---------------------------------------------- | -------------------------------------------------------------------------------- |
+| `setTrackByUrl(url)`          | `url: string`                                  | Load subtitle from URL                                                           |
+| `setTrack(content)`           | `content: string \| Uint8Array \| ArrayBuffer` | Set subtitle from content                                                        |
+| `setEncryptedTrack(content)`  | `content: EncryptedSubtitleContent`            | Set subtitle from an encrypted payload (decrypted in the worker)                 |
+| `freeTrack()`                 | -                                              | Remove current subtitles                                                         |
+| `preloadTrack(source)`        | `PreloadTrackSource \| string \| bytes`        | Parse a track and load its fonts without replacing the visible one               |
+| `activatePreloadedTrack(id?)` | `id?: number`                                  | Atomically swap to a preloaded track; last frame stays until the first new paint |
 
 ### Playback Control
 
-| Method                                           | Parameters                                                | Description                                   |
-| ------------------------------------------------ | --------------------------------------------------------- | --------------------------------------------- |
-| `setIsPaused(isPaused)`                          | `isPaused: boolean`                                       | Set playback pause state                      |
-| `setRate(rate)`                                  | `rate: number`                                            | Set playback rate (speed multiplier)          |
-| `setCurrentTime(isPaused?, currentTime?, rate?)` | `isPaused?: boolean, currentTime?: number, rate?: number` | Set current time, playback state and rate     |
-| `setFrameTimeline(frameTimes)`                   | `ArrayLike<number> \| null`                               | Replace or disable the encoded-frame timeline |
+| Method                                           | Parameters                                                  | Description                                   |
+| ------------------------------------------------ | ----------------------------------------------------------- | --------------------------------------------- |
+| `setIsPaused(isPaused)`                          | `isPaused: boolean`                                         | Set playback pause state                      |
+| `setRate(rate)`                                  | `rate: number`                                              | Set playback rate (speed multiplier)          |
+| `setCurrentTime(isPaused?, currentTime?, rate?)` | `isPaused?: boolean, currentTime?: number, rate?: number`   | Set current time, playback state and rate     |
+| `setFrameTimeline(frameTimes)`                   | `ArrayLike<number> \| null`                                 | Replace or disable the encoded-frame timeline |
+| `presentVideoFrame(frame, options?)`             | `frame: VideoFrame, options?: PresentVideoFrameOptions`     | Present a WebCodecs frame as the video clock  |
+| `setVideoColorSpace(colorSpace)`                 | `BT709` \| `BT601` \| matrix name \| `colorSpace` \| `null` | Set the video YCbCr matrix from WebCodecs     |
 
 ### Video & Canvas
 
-| Method                                         | Parameters                                                                      | Description                 |
-| ---------------------------------------------- | ------------------------------------------------------------------------------- | --------------------------- |
-| `setVideo(video)`                              | `video: HTMLVideoElement`                                                       | Change target video element |
-| `resize(width?, height?, top?, left?, force?)` | `width?: number, height?: number, top?: number, left?: number, force?: boolean` | Resize the canvas           |
+| Method                                         | Parameters                                                                      | Description                                                 |
+| ---------------------------------------------- | ------------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| `setVideo(video)`                              | `video: HTMLVideoElement`                                                       | Change target video element. Clears a WebCodecs frame clock |
+| `resize(width?, height?, top?, left?, force?)` | `width?: number, height?: number, top?: number, left?: number, force?: boolean` | Resize the canvas                                           |
 
 ### Cue and render callbacks
 

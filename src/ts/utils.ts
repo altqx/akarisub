@@ -3,6 +3,7 @@ import type { SubtitleColorSpace, WebYCbCrColorSpace } from './types'
 /** Map from HTMLVideoElement color-space names to {@linkcode WebYCbCrColorSpace}. */
 export const webYCbCrMap: Record<string, WebYCbCrColorSpace> = {
   bt709: 'BT709',
+  bt601: 'BT601',
   bt470bg: 'BT601', // BT.601 PAL
   smpte170m: 'BT601' // BT.601 NTSC
 }

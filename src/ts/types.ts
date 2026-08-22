@@ -190,9 +190,56 @@ export interface FrameTimeline extends ArrayLike<number> {
   subtitleTimeOffset?: number
 }
 
+/**
+ * WebCodecs `VideoFrame` fields used as a subtitle clock.
+ *
+ * A real `VideoFrame` satisfies this type. Tests and custom decoders may pass a
+ * duck-typed object. AkariSub never takes ownership or calls `close()`.
+ */
+export interface VideoFrameLike {
+  /** Presentation timestamp in microseconds. */
+  readonly timestamp: number
+  /** Frame duration in microseconds, when the decoder provides one. */
+  readonly duration?: number | null
+  /** Display width in pixels. */
+  readonly displayWidth: number
+  /** Display height in pixels. */
+  readonly displayHeight: number
+  /** Coded width in pixels. */
+  readonly codedWidth?: number
+  /** Coded height in pixels. */
+  readonly codedHeight?: number
+  /** Optional WebCodecs color description. */
+  readonly colorSpace?: {
+    readonly matrix?: string | null
+  } | null
+}
+
+/** Options for {@linkcode AkariSub.presentVideoFrame}. */
+export interface PresentVideoFrameOptions {
+  /** `performance.now()` for this presentation. Defaults to `performance.now()`. */
+  now?: number
+  /** Predicted compositor display time, in milliseconds. */
+  expectedDisplayTime?: number
+  /** Capture timestamp, in milliseconds. */
+  presentationTime?: number
+  /**
+   * Decoder clock paused state. Defaults to the previous VideoFrame clock value,
+   * or `false` on the first presented frame.
+   */
+  isPaused?: boolean
+  /** Playback rate. Defaults to the previous VideoFrame clock value, or `1`. */
+  rate?: number
+  /** Media time in seconds. Defaults to `timestamp / 1e6`. */
+  mediaTime?: number
+}
+
 /** Construction options for {@linkcode AkariSub}. */
 export interface AkariSubOptions {
-  /** Video element to overlay. Either `video` or `canvas` is required. */
+  /**
+   * Video element to overlay. Either `video` or `canvas` is required.
+   * WebCodecs players pass `canvas` and drive time with {@linkcode AkariSub.presentVideoFrame}.
+   */
   video?: HTMLVideoElement
   /** Existing canvas to paint into instead of creating an overlay. */
   canvas?: HTMLCanvasElement
@@ -204,7 +251,11 @@ export interface AkariSubOptions {
   offscreenRender?: boolean
   /** Use worker-side raw ASS_Image WebGL2 composition (default: false) */
   rawAssImageGpu?: boolean
-  /** Use requestVideoFrameCallback for precise sync (default: true) */
+  /**
+   * Use requestVideoFrameCallback or {@linkcode AkariSub.presentVideoFrame} for
+   * precise sync (default: true when RVFC exists, or when `onDemandRender` is
+   * set true for a canvas-only WebCodecs clock)
+   */
   onDemandRender?: boolean
   /** Compensate measured render/presentation latency while playing (default: true) */
   adaptiveTiming?: boolean

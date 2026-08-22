@@ -32,6 +32,7 @@ export type {
   PerformanceWarning,
   PreloadedTrack,
   PreloadTrackSource,
+  PresentVideoFrameOptions,
   RenderEvent,
   RendererChangeEvent,
   RendererType,
@@ -42,6 +43,7 @@ export type {
   RenderImage,
   RenderTimes,
   VideoFrameCallbackMetadata,
+  VideoFrameLike,
   SubtitleColorSpace,
   WebYCbCrColorSpace,
   EncryptedSubtitleContent
@@ -70,5 +72,13 @@ export {
   WebGPURenderer,
   isWebGPUSupported,
   WebGL2Renderer,
-  isWebGL2Supported
+  isWebGL2Supported,
+  VIDEO_FRAME_TIMESTAMP_SECONDS,
+  frameTimelineFromTimestamps,
+  frameTimelineFromVideoFrames,
+  isVideoFrameLike,
+  isWebCodecsVideoFrameSupported,
+  videoFrameCallbackMetadata,
+  videoFrameColorSpace,
+  videoFrameMediaTime
 } from './wrapper'
