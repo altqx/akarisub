@@ -450,7 +450,7 @@ export type WorkerInboundMessage =
       presentationId?: number
     }
   | { target: 'prepare'; time: number; prepareId: number; renderEpoch: number; force?: boolean }
-  | { target: 'presentation'; presentationId: number }
+  | { target: 'presentation'; presentationId: number; time?: number }
   | { target: 'presentFrame'; bitmap: ImageBitmap; presentationId: number }
   | { target: 'frameTimelineMode'; enabled: boolean }
   | { target: 'destroy' }

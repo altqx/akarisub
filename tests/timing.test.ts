@@ -399,7 +399,7 @@ describe('subtitle timing compensation', () => {
     })
 
     expect(presentations).toEqual([
-      { frame: { width: 1920, height: 1080, bitmap, index: 5 }, presentationId: 12, expectedDisplayTime: 140 }
+      { frame: { width: 1920, height: 1080, bitmap, index: 5, time: 5 }, presentationId: 12, expectedDisplayTime: 140 }
     ])
     expect(renderer._prepareForce).toBe(true)
     expect(finished).toBe(1)

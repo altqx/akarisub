@@ -1403,6 +1403,8 @@ const applyPlainTrack = (content: string | Uint8Array | ArrayBuffer): void => {
 const publishPartialTrack = (text: string): boolean => {
   if (!hasRenderableAssPrefix(text)) return false
 
+  resetCueState(lastCurrentTime)
+
   let content = text
   if (dropAllBlur) content = dropBlur(content)
   createTrackFromString(content)
@@ -1605,6 +1607,7 @@ self.setTrackByUrl = async ({ url }: { url: string }): Promise<void> => {
     if (publishedPartial) {
       requireApi().removeTrack(requireHandle())
       syncTotalEventsMetric()
+      resetCueState(lastCurrentTime)
       markNextRenderForced()
     }
     throw error
@@ -1751,7 +1754,11 @@ self.activatePreloadedTrack = ({ requestId, id }: { requestId: number; id?: numb
   stopWarmup()
   advanceTrackGeneration()
   preloadedTrack = null
-  applyStoredTrack(pending.content, pending.encrypted)
+  try {
+    applyStoredTrack(pending.content, pending.encrypted)
+  } finally {
+    if (pending.encrypted && pending.content instanceof Uint8Array) pending.content.fill(0)
+  }
   postMessage({ target: 'activatePreloadedTrack', requestId, success: true, id: pending.id })
 }
 
@@ -1888,7 +1895,7 @@ const postRenderInfo = (time: number, cached: boolean): void => {
     target: 'renderInfo',
     time,
     cached,
-    renderTimeMs: metrics.lastRenderTime,
+    renderTimeMs: cached ? 0 : metrics.lastRenderTime,
     imageCount: metrics.lastImageCount,
     framesDropped: droppedDelta,
     pendingRenders: Math.max(0, metrics.pendingRenders)
@@ -2984,10 +2991,11 @@ self.presentFrame = ({
   }
 }
 
-self.presentation = ({ presentationId }: { presentationId: number }): void => {
+self.presentation = ({ presentationId, time }: { presentationId: number; time?: number }): void => {
   if (Number.isSafeInteger(presentationId)) {
     latestPresentationId = Math.max(latestPresentationId, presentationId)
   }
+  if (typeof time === 'number' && Number.isFinite(time)) emitCueChanges(time)
 }
 
 self.frameTimelineMode = ({ enabled }: { enabled: boolean }): void => {
@@ -3189,10 +3197,12 @@ self.getEvents = (): void => {
 self.setEvent = ({ event, index }: { event: Partial<ASSEvent>; index: number }): void => {
   applyEventFields(index, event)
   rebuildCueTimes()
+  if (lastActiveCues.has(index)) lastActiveCues.set(index, readCueEvent(index))
   markNextRenderForced()
 }
 
 self.removeEvent = ({ index }: { index: number }): void => {
+  resetCueState(lastCurrentTime)
   requireApi().removeEvent(requireHandle(), index)
   syncTotalEventsMetric()
   rebuildCueTimes()

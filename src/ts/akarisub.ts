@@ -69,6 +69,7 @@ interface PreparedFrame {
   bitmap?: ImageBitmap
   stage?: HTMLCanvasElement
   index?: number
+  time?: number
   targetDisplayTime?: number
   ready?: boolean
   scheduled?: boolean
@@ -1720,7 +1721,8 @@ export default class AkariSub extends EventTarget {
             width: data.width ?? this._canvasctrl.width,
             height: data.height ?? this._canvasctrl.height,
             bitmap: data.bitmap,
-            index: request.index
+            index: request.index,
+            time: data.time
           },
           presentation.presentationId!,
           presentation.expectedDisplayTime
@@ -1761,7 +1763,8 @@ export default class AkariSub extends EventTarget {
       const prepared: PreparedFrame = {
         width: data.width ?? this._canvasctrl.width,
         height: data.height ?? this._canvasctrl.height,
-        bitmap: data.bitmap
+        bitmap: data.bitmap,
+        time: data.time
       }
       this._stagePreparedFrame(request.index, prepared)
       this._preparedFrames.set(request.index, prepared)
@@ -1779,7 +1782,7 @@ export default class AkariSub extends EventTarget {
 
   /** @internal */
   private _presentPreparedFrame(frame: PreparedFrame, presentationId: number, expectedDisplayTime?: number): void {
-    if (!this._activatePresentation(presentationId)) {
+    if (!this._activatePresentation(presentationId, frame.time)) {
       // Scheduling happens on the display clock before RVFC validation. If a
       // newer callback has already advanced the presentation watermark, this
       // stage can still be the compositor's current frame. Never tear down a
@@ -1866,10 +1869,10 @@ export default class AkariSub extends EventTarget {
   // Advance the presentation watermark only when a frame enters the pipeline,
   // not when an RVFC is merely queued (avoids starving the in-flight render).
   /** @internal */
-  private _activatePresentation(presentationId: number): boolean {
+  private _activatePresentation(presentationId: number, time?: number): boolean {
     if (isStalePresentation(presentationId, this._latestPresentationId)) return false
     this._latestPresentationId = presentationId
-    if (this._workerReady) this._postWorkerMessage('presentation', { presentationId })
+    if (this._workerReady) this._postWorkerMessage('presentation', { presentationId, time })
     return true
   }
 
