@@ -12,6 +12,16 @@ import type {
 import { parseAss, dropBlur, fixPlayRes, libassYCbCrMap } from './utils'
 import { glueUrlFromWasmUrl } from './wasm'
 import { compensatedMediaTime, isStalePresentation, updateTimingCompensation } from './timing'
+import {
+  AssStreamDecoder,
+  LARGE_SUBTITLE_BYTES,
+  MAX_SUBTITLE_BYTES,
+  SUBTITLE_FETCH_TIMEOUT_MS,
+  collectAssFontNames,
+  fetchBoundedAsset,
+  hasRenderableAssPrefix,
+  isAbortError
+} from './asset-loader'
 
 interface WorkerMetrics {
   framesRendered: number
@@ -65,6 +75,7 @@ let fallbackFontId = 0 // For fallback fonts (lower priority)
 const MAX_FONT_BYTES = 32 * 1024 * 1024
 const FONT_FETCH_TIMEOUT_MS = 30_000
 const pendingFontFamilies = new Set<string>()
+let subtitleFetchAbort: AbortController | null = null
 let debug = false
 let clampPos = false
 let renderInFlight = false
@@ -725,7 +736,19 @@ const consumeNextRenderForce = (): 0 | 1 => {
   return 1
 }
 
+const abortSubtitleFetch = (): void => {
+  subtitleFetchAbort?.abort()
+  subtitleFetchAbort = null
+}
+
+const beginSubtitleFetch = (): AbortSignal => {
+  abortSubtitleFetch()
+  subtitleFetchAbort = new AbortController()
+  return subtitleFetchAbort.signal
+}
+
 const advanceTrackGeneration = (): number => {
+  abortSubtitleFetch()
   trackGeneration++
   fullTrackWarmupGeneration = trackGeneration
   fullTrackWarmupPromise = null
@@ -1069,47 +1092,12 @@ const requireHandle = (): number => {
 
 // Fonts added via addFont are explicitly requested, so they should be attached (high priority).
 // A correlated acknowledgement prevents callers from treating rejected bytes as loaded.
-const readBoundedFontUrl = async (url: string): Promise<Uint8Array> => {
-  const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), FONT_FETCH_TIMEOUT_MS)
-  try {
-    const response = await fetch(url, { signal: controller.signal })
-    if (!response.ok) throw new Error(`Font request failed with HTTP ${response.status}`)
-    const declaredLength = Number(response.headers.get('content-length'))
-    if (Number.isFinite(declaredLength) && declaredLength > MAX_FONT_BYTES) {
-      await response.body?.cancel()
-      throw new Error('Font files are limited to 32 MiB')
-    }
-    if (!response.body) {
-      const bytes = new Uint8Array(await response.arrayBuffer())
-      if (bytes.byteLength > MAX_FONT_BYTES) throw new Error('Font files are limited to 32 MiB')
-      return bytes
-    }
-
-    const reader = response.body.getReader()
-    const chunks: Uint8Array[] = []
-    let total = 0
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
-      total += value.byteLength
-      if (total > MAX_FONT_BYTES) {
-        await reader.cancel()
-        throw new Error('Font files are limited to 32 MiB')
-      }
-      chunks.push(value)
-    }
-    const result = new Uint8Array(total)
-    let offset = 0
-    for (const chunk of chunks) {
-      result.set(chunk, offset)
-      offset += chunk.byteLength
-    }
-    return result
-  } finally {
-    clearTimeout(timeout)
-  }
-}
+const readBoundedFontUrl = (url: string): Promise<Uint8Array> =>
+  fetchBoundedAsset(url, {
+    maxBytes: MAX_FONT_BYTES,
+    timeoutMs: FONT_FETCH_TIMEOUT_MS,
+    label: 'Font'
+  })
 
 self.addFont = async ({ font, requestId }: { font: string | Uint8Array; requestId: number }): Promise<void> => {
   const respond = (bytes: Uint8Array): void => {
@@ -1334,17 +1322,86 @@ const read_ = (url: string, ab?: boolean): string | ArrayBuffer => {
   return xhr.response
 }
 
-const readAsync = (url: string, load: (data: ArrayBuffer) => void, err: (e: any) => void): void => {
-  const xhr = new XMLHttpRequest()
-  xhr.open('GET', url, true)
-  xhr.responseType = 'arraybuffer'
-  xhr.onload = () => {
-    if ((xhr.status === 200 || xhr.status === 0) && xhr.response) {
-      return load(xhr.response)
-    }
+const applyPlainTrack = (content: string | Uint8Array | ArrayBuffer): void => {
+  protectedTrackContent = false
+
+  if (isBinaryContent(content)) {
+    createTrackFromBytes(toUint8Array(content))
+    finishTrackLoad()
+    return
   }
-  xhr.onerror = err
-  xhr.send(null)
+
+  processAvailableFonts(content)
+
+  if (clampPos) content = fixPlayRes(content)
+  if (dropAllBlur) content = dropBlur(content)
+
+  createTrackFromString(content)
+  finishTrackLoad()
+}
+
+const publishPartialTrack = (text: string): boolean => {
+  if (!hasRenderableAssPrefix(text)) return false
+
+  let content = text
+  if (dropAllBlur) content = dropBlur(content)
+  createTrackFromString(content)
+  syncTotalEventsMetric()
+  firstTrackEventStartTime = getFirstEventStartTime()
+  subtitleColorSpace = libassYCbCrMap[requireApi().getTrackColorSpace(requireHandle())]
+  markNextRenderForced()
+  postMessage({ target: 'verifyColorSpace', subtitleColorSpace })
+  return true
+}
+
+const scanAssFonts = (fragment: string): void => {
+  if (!fragment) return
+  for (const font of collectAssFontNames(fragment)) findAvailableFonts(font)
+}
+
+const loadSubtitleUrl = async (
+  url: string,
+  generation: number,
+  signal: AbortSignal,
+  onPartialTrack?: (text: string) => void
+): Promise<{ content: string; emittedPartialReady: boolean }> => {
+  const decoder = new AssStreamDecoder()
+  let emittedPartialReady = false
+  let seenBytes = 0
+
+  const emitPartialReady = (): void => {
+    if (emittedPartialReady) return
+    emittedPartialReady = true
+    postMessage({ target: 'partial_ready' })
+    if (debug) console.log('[AkariSub] Emitting partial_ready while the subtitle asset is still loading')
+  }
+
+  const bytes = await fetchBoundedAsset(url, {
+    maxBytes: MAX_SUBTITLE_BYTES,
+    timeoutMs: SUBTITLE_FETCH_TIMEOUT_MS,
+    signal,
+    label: 'Subtitle',
+    onChunk: (chunk, info) => {
+      if (generation !== trackGeneration) return
+      seenBytes = Math.max(seenBytes, info.offset + chunk.byteLength)
+      const { completeText, newComplete } = decoder.push(chunk)
+      scanAssFonts(newComplete)
+      const moreComing = info.total != null && seenBytes < info.total
+      if (!moreComing || emittedPartialReady) return
+      if (onPartialTrack && hasRenderableAssPrefix(completeText)) {
+        onPartialTrack(completeText)
+        emitPartialReady()
+      } else if ((info.total ?? 0) > LARGE_SUBTITLE_BYTES) {
+        emitPartialReady()
+      }
+    }
+  })
+
+  if (generation !== trackGeneration) {
+    throw new DOMException('The operation was aborted.', 'AbortError')
+  }
+
+  return { content: new TextDecoder('utf-8').decode(bytes), emittedPartialReady }
 }
 
 const finishTrackLoad = (): void => {
@@ -1361,21 +1418,7 @@ const finishTrackLoad = (): void => {
 self.setTrack = ({ content }: { content: string | Uint8Array | ArrayBuffer }): void => {
   stopWarmup()
   advanceTrackGeneration()
-  protectedTrackContent = false
-
-  if (isBinaryContent(content)) {
-    createTrackFromBytes(toUint8Array(content))
-    finishTrackLoad()
-    return
-  }
-
-  processAvailableFonts(content)
-
-  if (clampPos) content = fixPlayRes(content)
-  if (dropAllBlur) content = dropBlur(content)
-
-  createTrackFromString(content)
-  finishTrackLoad()
+  applyPlainTrack(content)
 }
 
 self.setEncryptedTrack = async ({ content }: { content: EncryptedSubtitleContent }): Promise<void> => {
@@ -1408,8 +1451,31 @@ self.freeTrack = (): void => {
   markNextRenderForced()
 }
 
-self.setTrackByUrl = ({ url }: { url: string }): void => {
-  self.setTrack({ content: read_(url) as string })
+self.setTrackByUrl = async ({ url }: { url: string }): Promise<void> => {
+  stopWarmup()
+  const generation = advanceTrackGeneration()
+  protectedTrackContent = false
+  const signal = beginSubtitleFetch()
+  let publishedPartial = false
+
+  try {
+    const content = await loadSubtitleUrl(url, generation, signal, (text) => {
+      if (generation !== trackGeneration) return
+      publishedPartial = publishPartialTrack(text)
+    })
+    if (generation !== trackGeneration) return
+    applyPlainTrack(content.content)
+  } catch (error) {
+    if (generation !== trackGeneration || isAbortError(error)) return
+    if (publishedPartial) {
+      requireApi().removeTrack(requireHandle())
+      syncTotalEventsMetric()
+      markNextRenderForced()
+    }
+    throw error
+  } finally {
+    if (subtitleFetchAbort?.signal === signal) subtitleFetchAbort = null
+  }
 }
 
 let _isPaused = true
@@ -2380,6 +2446,7 @@ self.init = async (data: any): Promise<void> => {
 
     let subContent = data.subContent
     let decryptedSubContent: Uint8Array | null = null
+    let emittedPartialReady = false
 
     if (data.encryptedSubContent) {
       protectedTrackContent = true
@@ -2387,12 +2454,23 @@ self.init = async (data: any): Promise<void> => {
       subContent = decryptedSubContent
     } else {
       protectedTrackContent = false
-      if (!subContent) subContent = read_(data.subUrl) as string
+      if (!subContent && typeof data.subUrl === 'string' && data.subUrl) {
+        const signal = beginSubtitleFetch()
+        try {
+          const loaded = await loadSubtitleUrl(data.subUrl, trackGeneration, signal)
+          subContent = loaded.content
+          emittedPartialReady = loaded.emittedPartialReady
+        } finally {
+          if (subtitleFetchAbort?.signal === signal) subtitleFetchAbort = null
+        }
+      }
     }
 
     const isLargeSubtitle =
-      typeof subContent === 'string' ? subContent.length > 500000 : toUint8Array(subContent).byteLength > 500000
-    if (isLargeSubtitle) {
+      typeof subContent === 'string'
+        ? subContent.length > LARGE_SUBTITLE_BYTES
+        : toUint8Array(subContent).byteLength > LARGE_SUBTITLE_BYTES
+    if (isLargeSubtitle && !emittedPartialReady) {
       postMessage({ target: 'partial_ready' })
       if (debug) console.log('[AkariSub] Large subtitle detected, emitting partial_ready early')
     }
