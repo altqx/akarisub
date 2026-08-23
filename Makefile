@@ -23,7 +23,7 @@ BASE_CFLAGS = -O3 -flto -fno-exceptions -fno-unwind-tables -fno-asynchronous-unw
 	-fmacro-prefix-map=$(BASE_DIR)=/src/akarisub/ \
 	-fdebug-prefix-map=$(BASE_DIR)=/src/akarisub/
 
-export CFLAGS = $(BASE_CFLAGS) -s USE_PTHREADS=0 $(WASM_FEATURES)
+export CFLAGS = $(BASE_CFLAGS) $(WASM_FEATURES)
 export CXXFLAGS = $(CFLAGS)
 export PKG_CONFIG_PATH = $(DIST_DIR)/lib/pkgconfig
 export EM_PKG_CONFIG_PATH = $(PKG_CONFIG_PATH)
@@ -233,7 +233,6 @@ PERFORMANCE_ARGS = \
 		-s BINARYEN_EXTRA_PASSES="--one-caller-inline-max-function-size=19306,--flatten,--rereloop,--coalesce-locals,--reorder-locals,--vacuum,--simplify-locals,--precompute-propagate,--dce,--remove-unused-names" \
 		-s INVOKE_RUN=0 \
 		-s TEXTDECODER=2 \
-		-s MINIMAL_RUNTIME_STREAMING_WASM_INSTANTIATION=1 \
 		-s SUPPORT_LONGJMP=1 \
 		-s MALLOC=emmalloc \
 		-ffast-math
@@ -245,6 +244,7 @@ SIZE_ARGS = \
 		-s INCOMING_MODULE_JS_API="[]" \
 		-s USE_SDL=0 \
 		-s MINIMAL_RUNTIME=1 \
+		-s MINIMAL_RUNTIME_STREAMING_WASM_INSTANTIATION=1 \
 		-s ASSERTIONS=0 \
 		-s STACK_OVERFLOW_CHECK=0 \
 		-s DYNAMIC_EXECUTION=0 \
@@ -260,7 +260,7 @@ COMPAT_ARGS = \
 		-s MIN_CHROME_VERSION=114 \
 		-s MIN_SAFARI_VERSION=160400
 
-pkg/$(WORKER_NAME).js: src/AkariSub.cpp src/pre-worker.js src/post-worker.js $(LIBASS_DEPS)
+pkg/$(WORKER_NAME).js: src/AkariSub.cpp src/pre-worker.js src/pre-worker-readbinary.js src/post-worker.js $(LIBASS_DEPS)
 	mkdir -p pkg
 	em++ src/AkariSub.cpp $(LIBASS_DEPS) \
 		-O3 \
@@ -274,6 +274,7 @@ pkg/$(WORKER_NAME).js: src/AkariSub.cpp src/pre-worker.js src/post-worker.js $(L
 		$(COMPAT_ARGS) \
 		--closure=1 \
 		--pre-js src/pre-worker.js \
+		--pre-js src/pre-worker-readbinary.js \
 		--post-js src/post-worker.js \
 		-s ENVIRONMENT=worker \
 		-s EXIT_RUNTIME=0 \
@@ -318,7 +319,6 @@ pkg/$(WORKER_NAME)-mt.js: src/AkariSub.cpp src/pre-worker.js src/post-worker.js 
 		-s ENVIRONMENT=worker \
 		-s EXIT_RUNTIME=0 \
 		-s WASM_BIGINT=1 \
-		-s USE_PTHREADS=1 \
 		-s PTHREAD_POOL_SIZE=4 \
 		-s PTHREAD_POOL_SIZE_STRICT=0 \
 		-s ALLOW_MEMORY_GROWTH=1 \

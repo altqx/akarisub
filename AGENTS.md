@@ -42,6 +42,6 @@ plain static file server will 404 the module graph (native ESM cannot resolve `.
 
 To demo end-to-end: build first (`bun run build`), then run a Vite dev server rooted at the
 repo and open `/tests/browser-libass-timing.html`. On success `<pre id="result">` shows
-`PASS`. The WASM is built with `USE_PTHREADS=0`, so no COOP/COEP cross-origin isolation is
+`PASS`. The default WASM is built without `-pthread`, so no COOP/COEP cross-origin isolation is
 required. The worker, WASM binary, and default font are resolved relative to the package
 module URL (`pkg/akarisub.js`, `pkg/akarisub.wasm`, `assets/default.woff2`).
