@@ -2,6 +2,84 @@ import { describe, expect, test } from 'bun:test'
 import { WebGPURenderer } from '../src/ts/webgpu-renderer'
 
 describe('WebGPU bitmap uploads', () => {
+  test('reports device.lost and marks the renderer unavailable', async () => {
+    let resolveLost!: (info: GPUDeviceLostInfo) => void
+    const lost = new Promise<GPUDeviceLostInfo>((resolve) => {
+      resolveLost = resolve
+    })
+    const buffer = { destroy: () => undefined }
+    const texture = {
+      createView: () => ({}),
+      destroy: () => undefined
+    }
+    const device = {
+      lost,
+      queue: {
+        writeBuffer: () => undefined,
+        submit: () => undefined
+      },
+      createShaderModule: () => ({}),
+      createBuffer: () => buffer,
+      createTexture: () => texture,
+      createBindGroupLayout: () => ({}),
+      createPipelineLayout: () => ({}),
+      createRenderPipeline: () => ({}),
+      createCommandEncoder: () => ({
+        beginRenderPass: () => ({ end: () => undefined }),
+        finish: () => ({})
+      }),
+      destroy: () => undefined
+    }
+    const gpu = {
+      requestAdapter: async () => ({ requestDevice: async () => device }),
+      getPreferredCanvasFormat: () => 'bgra8unorm'
+    }
+    const globals = ['GPUBufferUsage', 'GPUShaderStage', 'GPUTextureUsage'] as const
+    const globalDescriptors = globals.map((name) => Object.getOwnPropertyDescriptor(globalThis, name))
+    const gpuDescriptor = Object.getOwnPropertyDescriptor(navigator, 'gpu')
+
+    try {
+      Object.defineProperty(navigator, 'gpu', { configurable: true, value: gpu })
+      Object.defineProperty(globalThis, 'GPUBufferUsage', {
+        configurable: true,
+        value: { UNIFORM: 1, COPY_DST: 2, STORAGE: 4 }
+      })
+      Object.defineProperty(globalThis, 'GPUShaderStage', {
+        configurable: true,
+        value: { VERTEX: 1, FRAGMENT: 2 }
+      })
+      Object.defineProperty(globalThis, 'GPUTextureUsage', {
+        configurable: true,
+        value: { TEXTURE_BINDING: 1, COPY_DST: 2, RENDER_ATTACHMENT: 4 }
+      })
+
+      const renderer = new WebGPURenderer()
+      let lossInfo: GPUDeviceLostInfo | undefined
+      renderer.onDeviceLost = (info) => {
+        lossInfo = info
+      }
+      await renderer.init()
+      expect(renderer.initialized).toBe(true)
+
+      const info = { reason: 'unknown', message: 'test device loss' } as GPUDeviceLostInfo
+      resolveLost(info)
+      await Promise.resolve()
+      await Promise.resolve()
+
+      expect(lossInfo).toBe(info)
+      expect(renderer.initialized).toBe(false)
+      renderer.destroy()
+    } finally {
+      if (gpuDescriptor) Object.defineProperty(navigator, 'gpu', gpuDescriptor)
+      else Reflect.deleteProperty(navigator, 'gpu')
+      globals.forEach((name, index) => {
+        const descriptor = globalDescriptors[index]
+        if (descriptor) Object.defineProperty(globalThis, name, descriptor)
+        else Reflect.deleteProperty(globalThis, name)
+      })
+    }
+  })
+
   test('configures, renders, and releases prepared-frame WebGPU canvases', () => {
     const configured: unknown[] = []
     let unconfigured = 0

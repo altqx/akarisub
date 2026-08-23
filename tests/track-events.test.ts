@@ -10,6 +10,8 @@ import {
 } from '../src/ts/cue-events'
 import { parseStreamingTrackOptions } from '../src/ts/streaming'
 import type { CueEvent } from '../src/ts/types'
+import { WebGPURenderer } from '../src/ts/webgpu-renderer'
+import { WebGL2Renderer } from '../src/ts/webgl2-renderer'
 
 const cue = (index: number, start = 1, duration = 2): CueEvent => ({
   index,
@@ -264,26 +266,98 @@ describe('AkariSub track swap and callbacks', () => {
     expect(warnings.map((item) => item.kind)).toEqual(['slow-frame', 'dropped-frames'])
   })
 
-  test('fires onRendererChange only when the compositor actually changes', () => {
-    const changes: Array<{ previous: string; rendererType: string }> = []
+  test('fires onRendererChange for backend changes and same-backend recovery', () => {
+    const changes: Array<{ previous: string; rendererType: string; reason?: string }> = []
     const renderer = Object.create(AkariSub.prototype) as AkariSub & {
       _destroyed: boolean
       _rendererType: string
-      _onRendererChange: (event: { previous: string; rendererType: string }) => void
-      _setRendererType: (next: string) => void
+      _onRendererChange: (event: { previous: string; rendererType: string; reason?: string }) => void
+      _setRendererType: (next: string, reason?: 'device-lost' | 'context-lost') => void
     }
 
     Object.assign(renderer, {
       _destroyed: false,
       _rendererType: 'canvas2d',
-      _onRendererChange: (event: { previous: string; rendererType: string }) => changes.push(event),
+      _onRendererChange: (event: { previous: string; rendererType: string; reason?: string }) => changes.push(event),
       dispatchEvent: () => true
     })
 
     renderer._setRendererType('canvas2d')
     renderer._setRendererType('webgpu')
     renderer._setRendererType('webgpu')
+    renderer._setRendererType('webgpu', 'device-lost')
 
-    expect(changes).toEqual([{ rendererType: 'webgpu', previous: 'canvas2d' }])
+    expect(changes).toEqual([
+      { rendererType: 'webgpu', previous: 'canvas2d' },
+      { rendererType: 'webgpu', previous: 'webgpu', reason: 'device-lost' }
+    ])
+  })
+
+  test('warns immediately when GPU recovery starts and keeps the last successful snapshot', () => {
+    const warnings: unknown[] = []
+    const gpu = new WebGPURenderer()
+    const renderer = Object.create(AkariSub.prototype) as any
+    const retained = { canvas: { id: 'retained' }, sequence: 1, colorManaged: false }
+    const rejected = { canvas: { id: 'rejected' }, sequence: 2, colorManaged: false }
+    const recovered = { canvas: { id: 'recovered' }, sequence: 3, colorManaged: false }
+    Object.assign(renderer, {
+      _destroyed: false,
+      _gpuRenderer: gpu,
+      _gpuRecovering: null,
+      _gpuRecoveryGeneration: 0,
+      _rendererType: 'webgpu',
+      _renderEpoch: 4,
+      _pendingDemandTimes: [{}],
+      _demandTimings: new Map([[1, {}]]),
+      _lastGPUFrame: retained,
+      _gpuSnapshotPool: [],
+      _onPerformanceWarning: (warning: unknown) => warnings.push(warning),
+      _clearPreparedFrames: () => undefined,
+      _showGPURecoveryFrame: () => undefined,
+      dispatchEvent: () => true
+    })
+
+    expect(renderer._beginGPURecovery(gpu, 'device-lost')).toBe(true)
+    expect(warnings).toEqual([{ kind: 'renderer-recovery', reason: 'device-lost', rendererType: 'webgpu' }])
+    expect(renderer._pendingDemandTimes).toEqual([])
+    expect(renderer._demandTimings.size).toBe(0)
+
+    expect(renderer._retainGPUFrameAfter(false, rejected)).toBe(false)
+    expect(renderer._lastGPUFrame).toBe(retained)
+    expect(renderer._retainGPUFrameAfter(true, recovered)).toBe(true)
+    expect(renderer._lastGPUFrame).toBe(recovered)
+  })
+
+  test('downgrades to Canvas2D with the loss reason when recovery fails', () => {
+    const changes: unknown[] = []
+    const gpu = new WebGL2Renderer()
+    const renderer = Object.create(AkariSub.prototype) as any
+    const originalWarn = console.warn
+    Object.assign(renderer, {
+      _destroyed: false,
+      _gpuRenderer: gpu,
+      _gpuRecovering: gpu,
+      _gpuRecoveryTimer: null,
+      _gpuRecoveryGeneration: 2,
+      _rendererType: 'webgl2',
+      _prepareForce: false,
+      _onRendererChange: (event: unknown) => changes.push(event),
+      _adoptGPURecoveryCanvas: () => undefined,
+      _syncVideoClock: () => undefined,
+      sendMessage: async () => undefined,
+      dispatchEvent: () => true
+    })
+
+    try {
+      console.warn = () => undefined
+      renderer._fallbackFromGPU(gpu, 'context-lost', new Error('restore failed'))
+    } finally {
+      console.warn = originalWarn
+    }
+
+    expect(renderer._gpuRenderer).toBeNull()
+    expect(renderer._rendererType).toBe('canvas2d')
+    expect(renderer._prepareForce).toBe(true)
+    expect(changes).toEqual([{ rendererType: 'canvas2d', previous: 'webgl2', reason: 'context-lost' }])
   })
 })

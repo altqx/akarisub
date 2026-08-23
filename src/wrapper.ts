@@ -11,6 +11,7 @@ export type {
   PresentVideoFrameOptions,
   RenderEvent,
   RendererChangeEvent,
+  RendererRecoveryReason,
   RendererType,
   ASSEventCallback,
   ASSStyleCallback,

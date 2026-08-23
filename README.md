@@ -315,6 +315,8 @@ console.log(`Events: ${eventCount}, Styles: ${styleCount}`)
 
 AkariSub automatically picks the fastest available renderer: WebGPU → WebGL2 → Canvas2D. GPU renderers are used when no custom canvas is given and the browser supports them:
 
+GPU failures are recovered automatically. AkariSub retains the last completed subtitle frame while rebuilding after WebGPU `device.lost` or WebGL2 `webglcontextlost`; it resumes the same backend after recovery, or switches to Canvas2D if rebuilding/restoration fails. Recovery notifications include `reason: 'device-lost' | 'context-lost'`.
+
 ```typescript
 import AkariSub from 'akarisub'
 
@@ -381,8 +383,8 @@ The default options are best, and automatically fallback to the next fastest opt
 | `onCueEnter`           | `(cue) => void`                      | -                                   | Dialogue event became active at the sampled media time                                                                                                     |
 | `onCueExit`            | `(cue) => void`                      | -                                   | Dialogue event is no longer active                                                                                                                         |
 | `onRender`             | `(event) => void`                    | -                                   | Demand-frame render finished                                                                                                                               |
-| `onRendererChange`     | `(event) => void`                    | -                                   | Compositor backend changed after construction                                                                                                              |
-| `onPerformanceWarning` | `(warning) => void`                  | -                                   | Slow frame, dropped frames, or a full demand queue                                                                                                         |
+| `onRendererChange`     | `(event) => void`                    | -                                   | Compositor backend changed or recovered; GPU recovery includes `event.reason`                                                                               |
+| `onPerformanceWarning` | `(warning) => void`                  | -                                   | Slow frame, dropped frames, a full demand queue, or GPU recovery                                                                                           |
 
 ## Methods
 
@@ -424,7 +426,7 @@ The default options are best, and automatically fallback to the next fastest opt
 
 ### Cue and render callbacks
 
-Option callbacks and matching `EventTarget` events (`cueEnter`, `cueExit`, `render`, `rendererChange`, `performanceWarning`) fire from the worker clock. Use them for chapter markers, character overlays, or analytics instead of polling `getEvents()`:
+Option callbacks and matching `EventTarget` events (`cueEnter`, `cueExit`, `render`, `rendererChange`, `performanceWarning`) report subtitle-clock activity and compositor lifecycle changes. Use them for chapter markers, character overlays, or analytics instead of polling `getEvents()`:
 
 ```ts
 const renderer = new AkariSub({
@@ -435,11 +437,12 @@ const renderer = new AkariSub({
   onRender: (event) => recordSubtitleFrame(event.time, event.renderTimeMs),
   onPerformanceWarning: (warning) => {
     if (warning.kind === 'slow-frame') console.warn('slow subtitle frame', warning.renderTimeMs)
+    if (warning.kind === 'renderer-recovery') console.warn('GPU recovery', warning.reason)
   }
 })
 
 renderer.addEventListener('rendererChange', (event) => {
-  console.log('compositor', event.detail.rendererType)
+  console.log('compositor', event.detail.rendererType, event.detail.reason)
 })
 ```
 

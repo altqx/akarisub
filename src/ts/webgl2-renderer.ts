@@ -120,6 +120,32 @@ export class WebGL2Renderer {
   private _initialized = false
   private _initPromise: Promise<void> | null = null
 
+  /** Invoked after the browser reports that the WebGL context was lost. */
+  onContextLost?: () => void
+  /** Invoked after GPU resources were rebuilt, or with the rebuild error. */
+  onContextRestored?: (error?: unknown) => void
+
+  private readonly _boundContextLost = (event: Event): void => {
+    event.preventDefault()
+    this._initialized = false
+    this.onContextLost?.()
+  }
+
+  private readonly _boundContextRestored = (): void => {
+    this._dropGLResourceReferences()
+    this._gl = null
+    try {
+      this._initGL()
+      const gl = this._gl as WebGL2RenderingContext | null
+      if (gl && this._lastCanvasWidth > 0 && this._lastCanvasHeight > 0) {
+        gl.viewport(0, 0, this._lastCanvasWidth, this._lastCanvasHeight)
+      }
+      this.onContextRestored?.()
+    } catch (error) {
+      this.onContextRestored?.(error)
+    }
+  }
+
   /** Allocate instance buffers. Call {@linkcode init} before rendering. */
   constructor() {
     this._instanceData = new Float32Array(MAX_IMAGES_PER_BATCH * 8)
@@ -196,6 +222,21 @@ export class WebGL2Renderer {
     this._uploadColorMatrix()
   }
 
+  /** @internal */
+  private _dropGLResourceReferences(): void {
+    this._program = null
+    this._vao = null
+    this._instanceBuffer = null
+    this._texArray = null
+    this._resolutionLoc = null
+    this._texArraySizeLoc = null
+    this._colorMatrixLoc = null
+    this._texWidth = 0
+    this._texHeight = 0
+    this._texLayers = 0
+    this._initialized = false
+  }
+
   /** Apply YCbCr mangling and the compositor canvas color space. */
   setColorManagement(matrix: ColorMatrix3, colorSpace: CanvasColorSpace): void {
     this._colorMatrix = matrix
@@ -259,6 +300,12 @@ export class WebGL2Renderer {
   async setCanvas(canvas: HTMLCanvasElement, width: number, height: number): Promise<void> {
     await this.init()
     if (width <= 0 || height <= 0) return
+    if (this._canvas !== canvas) {
+      this._canvas?.removeEventListener('webglcontextlost', this._boundContextLost)
+      this._canvas?.removeEventListener('webglcontextrestored', this._boundContextRestored)
+      canvas.addEventListener('webglcontextlost', this._boundContextLost)
+      canvas.addEventListener('webglcontextrestored', this._boundContextRestored)
+    }
     this._canvas = canvas
     canvas.width = width
     canvas.height = height
@@ -284,16 +331,16 @@ export class WebGL2Renderer {
     images: { image: ImageBitmap; x: number; y: number }[],
     _canvasWidth: number,
     _canvasHeight: number
-  ): void {
-    if (!this._gl || !this._initialized) return
+  ): boolean {
+    if (!this._gl || !this._initialized || this._gl.isContextLost()) return false
 
     const len = images.length
     if (len === 0) {
-      this.clear()
-      return
+      return this.clear()
     }
 
-    let maxW = 0, maxH = 0
+    let maxW = 0,
+      maxH = 0
     for (let i = 0; i < len; i++) {
       const { image } = images[i]
       if (image.width > maxW) maxW = image.width
@@ -319,7 +366,8 @@ export class WebGL2Renderer {
       let count = 0
       while (imageIndex < len && count < MAX_TEXTURE_ARRAY_LAYERS) {
         const img = images[imageIndex++]
-        const w = img.image.width, h = img.image.height
+        const w = img.image.width,
+          h = img.image.height
         if (w <= 0 || h <= 0) continue
         gl.texSubImage3D(gl.TEXTURE_2D_ARRAY, 0, 0, 0, count, w, h, 1, gl.RGBA, gl.UNSIGNED_BYTE, img.image)
         const off = count << 3
@@ -340,23 +388,20 @@ export class WebGL2Renderer {
       gl.drawArraysInstanced(gl.TRIANGLES, 0, 6, count)
       gl.bindVertexArray(null)
     }
+    return !gl.isContextLost()
   }
 
   /** Composite {@linkcode RenderImage} planes onto the bound canvas. */
-  render(
-    images: RenderImage[],
-    _canvasWidth: number,
-    _canvasHeight: number
-  ): void {
-    if (!this._gl || !this._initialized) return
+  render(images: RenderImage[], _canvasWidth: number, _canvasHeight: number): boolean {
+    if (!this._gl || !this._initialized || this._gl.isContextLost()) return false
 
     const len = images.length
     if (len === 0) {
-      this.clear()
-      return
+      return this.clear()
     }
 
-    let maxW = 0, maxH = 0
+    let maxW = 0,
+      maxH = 0
     for (let i = 0; i < len; i++) {
       const { w, h } = images[i]
       if (w > maxW) maxW = w
@@ -382,7 +427,8 @@ export class WebGL2Renderer {
       let count = 0
       while (imageIndex < len && count < MAX_TEXTURE_ARRAY_LAYERS) {
         const img = images[imageIndex++]
-        const w = img.w, h = img.h
+        const w = img.w,
+          h = img.h
         if (w <= 0 || h <= 0) continue
         const imgData = img.image
         if (imgData instanceof ImageBitmap) {
@@ -409,13 +455,15 @@ export class WebGL2Renderer {
       gl.drawArraysInstanced(gl.TRIANGLES, 0, 6, count)
       gl.bindVertexArray(null)
     }
+    return !gl.isContextLost()
   }
 
   /** Clear the bound canvas to transparent black. */
-  clear(): void {
-    if (!this._gl) return
+  clear(): boolean {
+    if (!this._gl || !this._initialized || this._gl.isContextLost()) return false
     this._gl.clearColor(0, 0, 0, 0)
     this._gl.clear(this._gl.COLOR_BUFFER_BIT)
+    return !this._gl.isContextLost()
   }
 
   /** True after {@linkcode init} has completed successfully. */
@@ -425,6 +473,8 @@ export class WebGL2Renderer {
 
   /** Delete GL objects and drop the context. */
   destroy(): void {
+    this._canvas?.removeEventListener('webglcontextlost', this._boundContextLost)
+    this._canvas?.removeEventListener('webglcontextrestored', this._boundContextRestored)
     const gl = this._gl
     if (gl) {
       gl.deleteProgram(this._program)
@@ -433,12 +483,8 @@ export class WebGL2Renderer {
       gl.deleteTexture(this._texArray)
     }
     this._gl = null
-    this._program = null
-    this._vao = null
-    this._instanceBuffer = null
-    this._texArray = null
+    this._dropGLResourceReferences()
     this._canvas = null
-    this._initialized = false
     this._initPromise = null
   }
 }

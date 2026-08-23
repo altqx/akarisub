@@ -170,9 +170,14 @@ export interface RenderEvent {
 }
 
 /** Fired when the compositor backend changes after construction. */
+export type RendererRecoveryReason = 'device-lost' | 'context-lost'
+
+/** Fired when the compositor backend changes or recovers after a GPU failure. */
 export interface RendererChangeEvent {
   rendererType: RendererType
   previous: RendererType
+  /** Present when the notification was caused by automatic GPU recovery. */
+  reason?: RendererRecoveryReason
 }
 
 /** Why the renderer is falling behind the display clock. */
@@ -180,6 +185,7 @@ export type PerformanceWarning =
   | { kind: 'slow-frame'; renderTimeMs: number }
   | { kind: 'dropped-frames'; droppedFrames: number }
   | { kind: 'queue-backlog'; pendingRenders: number }
+  | { kind: 'renderer-recovery'; reason: RendererRecoveryReason; rendererType: RendererType }
 
 /** Source for {@linkcode AkariSub.preloadTrack}. */
 export type PreloadTrackSource =

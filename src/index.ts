@@ -38,6 +38,7 @@ export type {
   PresentVideoFrameOptions,
   RenderEvent,
   RendererChangeEvent,
+  RendererRecoveryReason,
   RendererType,
   StreamingTrackFormat,
   StreamingTrackOptions,

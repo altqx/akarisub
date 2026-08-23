@@ -167,6 +167,9 @@ export class WebGPURenderer {
   private _initPromise: Promise<void> | null = null
   private _initialized = false
 
+  /** Invoked when the active GPU device becomes unusable. */
+  onDeviceLost?: (info: GPUDeviceLostInfo) => void
+
   /** Allocate GPU upload buffers. Call {@linkcode init} before rendering. */
   constructor() {
     this.imageDataArray = new Float32Array(MAX_IMAGES_PER_BATCH * 8)
@@ -193,7 +196,13 @@ export class WebGPURenderer {
       throw new Error('No WebGPU adapter found')
     }
 
-    this.device = await adapter.requestDevice()
+    const device = await adapter.requestDevice()
+    this.device = device
+    void device.lost.then((info) => {
+      if (this.device !== device) return
+      this._initialized = false
+      this.onDeviceLost?.(info)
+    })
     this.format = navigator.gpu.getPreferredCanvasFormat()
 
     const vertexModule = this.device.createShaderModule({ code: VERTEX_SHADER })
