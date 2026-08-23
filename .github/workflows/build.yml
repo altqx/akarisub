@@ -104,6 +104,11 @@ jobs:
       - name: Build WASM and TypeScript
         run: bun run build
 
+      - name: Verify hashed pthread bootstrap support
+        run: |
+          grep -Fq 'mainScriptUrlOrBlob' pkg/akarisub-mt.js
+          grep -Fq 'mainScriptUrlOrBlob' dist/ts/worker.js
+
       - name: Verify reproducible clean WASM build
         run: |
           cp pkg/akarisub.wasm /tmp/akarisub.first.wasm

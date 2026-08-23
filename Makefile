@@ -290,7 +290,8 @@ pkg/$(WORKER_NAME).js: src/AkariSub.cpp src/pre-worker.js src/pre-worker-readbin
 # Pthread SIMD build. MINIMAL_RUNTIME and IMPORTED_MEMORY are incompatible with
 # emscripten pthreads, so this variant uses the default runtime and shared memory.
 # Keep Emscripten's conditional UTF-8 decoder so shared heap views are copied
-# before browsers pass them to TextDecoder.
+# before browsers pass them to TextDecoder. Accept mainScriptUrlOrBlob so a
+# bundler-renamed glue module can spawn pthread workers from its hashed URL.
 pkg/$(WORKER_NAME)-mt.js: src/AkariSub.cpp src/pre-worker.js src/post-worker.js $(LIBASS_DEPS)
 	mkdir -p pkg
 	em++ src/AkariSub.cpp $(LIBASS_DEPS) \
@@ -306,7 +307,7 @@ pkg/$(WORKER_NAME)-mt.js: src/AkariSub.cpp src/pre-worker.js src/post-worker.js 
 		-s POLYFILL=0 \
 		-s NO_FILESYSTEM=0 \
 		-s HTML5_SUPPORT_DEFERRING_USER_SENSITIVE_REQUESTS=0 \
-		-s INCOMING_MODULE_JS_API="[]" \
+		-s INCOMING_MODULE_JS_API="['mainScriptUrlOrBlob']" \
 		-s USE_SDL=0 \
 		-s ASSERTIONS=0 \
 		-s STACK_OVERFLOW_CHECK=0 \

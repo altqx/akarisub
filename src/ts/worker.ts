@@ -2790,6 +2790,7 @@ self.init = async (data: any): Promise<void> => {
     setWasmUrl(wasmUrl)
     try {
       return await WASM({
+        mainScriptUrlOrBlob: jsGlueUrl,
         locateFile: (path: string) => {
           if (path.endsWith('.wasm')) return wasmUrl
           if (path.endsWith('.worker.js')) {
