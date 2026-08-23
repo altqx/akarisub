@@ -1062,7 +1062,13 @@ const readCString = (ptr: number): string => {
   let end = ptr
   const heap = self.HEAPU8
   while (heap[end] !== 0) end++
-  return TEXT_DECODER.decode(heap.subarray(ptr, end))
+  const bytes = heap.subarray(ptr, end)
+  // TextDecoder rejects SharedArrayBuffer-backed views in browsers.
+  const decodable =
+    typeof SharedArrayBuffer !== 'undefined' && bytes.buffer instanceof SharedArrayBuffer
+      ? Uint8Array.from(bytes)
+      : bytes
+  return TEXT_DECODER.decode(decodable)
 }
 
 const withCString = <T>(input: string, callback: (ptr: number) => T): T => {

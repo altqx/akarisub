@@ -3525,15 +3525,28 @@ export default class AkariSub extends EventTarget {
   }
 
   /** @internal */
-  private _error(err: Error | ErrorEvent | string): Error {
+  private _error(err: Error | Event | string): Error {
+    const errorEvent = err instanceof ErrorEvent ? err : null
     const error =
       err instanceof Error
         ? err
-        : err instanceof ErrorEvent
-          ? err.error || new Error(err.message)
+        : errorEvent
+          ? errorEvent.error instanceof Error
+            ? errorEvent.error
+            : new Error(
+                `${errorEvent.message || 'Worker error'}${errorEvent.filename ? ` (${errorEvent.filename}${errorEvent.lineno ? `:${errorEvent.lineno}:${errorEvent.colno}` : ''})` : ''}`
+              )
+          : err instanceof Event
+            ? new Error(err.type === 'error' ? 'Worker error' : `${err.type} event`)
           : new Error(String(err))
 
-    const event = err instanceof Event ? new ErrorEvent(err.type, err) : new ErrorEvent('error', { error })
+    const event = new ErrorEvent(err instanceof Event ? err.type : 'error', {
+      error,
+      message: error.message,
+      filename: errorEvent?.filename,
+      lineno: errorEvent?.lineno,
+      colno: errorEvent?.colno
+    })
 
     this.dispatchEvent(event)
     console.error(error)

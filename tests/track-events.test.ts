@@ -266,6 +266,28 @@ describe('AkariSub track swap and callbacks', () => {
     expect(warnings.map((item) => item.kind)).toEqual(['slow-frame', 'dropped-frames'])
   })
 
+  test('reports an opaque worker event as a useful error', () => {
+    const renderer = Object.create(AkariSub.prototype) as any
+    const events: ErrorEvent[] = []
+    const originalError = console.error
+    Object.assign(renderer, {
+      dispatchEvent: (event: ErrorEvent) => {
+        events.push(event)
+        return true
+      }
+    })
+
+    try {
+      console.error = () => undefined
+      const error = renderer._error(new Event('error'))
+      expect(error).toBeInstanceOf(Error)
+      expect(error.message).toBe('Worker error')
+      expect(events[0]?.error).toBe(error)
+    } finally {
+      console.error = originalError
+    }
+  })
+
   test('fires onRendererChange for backend changes and same-backend recovery', () => {
     const changes: Array<{ previous: string; rendererType: string; reason?: string }> = []
     const renderer = Object.create(AkariSub.prototype) as AkariSub & {

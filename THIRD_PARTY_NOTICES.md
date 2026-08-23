@@ -24,7 +24,7 @@ Regenerate it with `bun run license:third-party` after dependency, submodule, fo
 
 | Package | Version | License | Source |
 | --- | --- | --- | --- |
-| `@types/bun` | 1.3.14 | MIT | https://github.com/DefinitelyTyped/DefinitelyTyped.git |
+| `@types/bun` | 1.4.0 | MIT | https://github.com/DefinitelyTyped/DefinitelyTyped.git |
 | `@types/emscripten` | 1.41.5 | MIT | https://github.com/DefinitelyTyped/DefinitelyTyped.git |
 | `@types/node` | 25.0.9 | MIT | https://github.com/DefinitelyTyped/DefinitelyTyped.git |
 | `@typescript/typescript-aix-ppc64` | 7.0.2 | Apache-2.0 | https://github.com/microsoft/TypeScript.git |
@@ -47,8 +47,8 @@ Regenerate it with `bun run license:third-party` after dependency, submodule, fo
 | `@typescript/typescript-sunos-x64` | 7.0.2 | Apache-2.0 | https://github.com/microsoft/TypeScript.git |
 | `@typescript/typescript-win32-arm64` | 7.0.2 | Apache-2.0 | https://github.com/microsoft/TypeScript.git |
 | `@typescript/typescript-win32-x64` | 7.0.2 | Apache-2.0 | https://github.com/microsoft/TypeScript.git |
-| `@webgpu/types` | 0.1.71 | BSD-3-Clause | gpuweb/types |
-| `bun-types` | 1.3.14 | MIT | https://github.com/oven-sh/bun |
+| `@webgpu/types` | 0.1.72 | BSD-3-Clause | gpuweb/types |
+| `bun-types` | 1.4.0 | MIT | https://github.com/oven-sh/bun |
 | `prettier` | 3.9.6 | MIT | prettier/prettier |
 | `typescript` | 7.0.2 | Apache-2.0 | https://github.com/microsoft/TypeScript.git |
 | `undici-types` | 7.16.0 | MIT | git+https://github.com/nodejs/undici.git |
