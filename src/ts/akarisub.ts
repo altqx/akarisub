@@ -12,6 +12,7 @@ import type {
   RendererChangeEvent,
   RendererType,
   RenderTimes,
+  StreamingTrackOptions,
   VideoFrameCallbackMetadata,
   SubtitleColorSpace,
   WebYCbCrColorSpace,
@@ -21,6 +22,8 @@ import type {
 } from './types'
 import type { EncryptedSubtitleContent } from './types'
 import { classifyPerformanceWarnings, parsePreloadTrackSource } from './cue-events'
+import { parseStreamingTrackOptions } from './streaming'
+import { normalizeFontFamilySource } from './font-subsets'
 import { computeCanvasSize, getVideoPosition, fixAlpha, getAlphaBug, getBitmapBug } from './utils'
 import {
   canvas2dContextSettings,
@@ -273,8 +276,10 @@ export default class AkariSub extends EventTarget {
       }
     }
     for (const [name, font] of Object.entries(options.availableFonts ?? {})) {
-      if (typeof font !== 'string' && font.byteLength > AkariSub.MAX_FONT_BYTES) {
-        throw new Error(`Font ${name} exceeds the 32 MiB per-font limit`)
+      for (const subset of normalizeFontFamilySource(font)) {
+        if (typeof subset.src !== 'string' && subset.src.byteLength > AkariSub.MAX_FONT_BYTES) {
+          throw new Error(`Font ${name} exceeds the 32 MiB per-font limit`)
+        }
       }
     }
 
@@ -442,6 +447,7 @@ export default class AkariSub extends EventTarget {
         fonts: options.fonts || [],
         availableFonts: options.availableFonts || { 'liberation sans': getDefaultFontUrl() },
         fallbackFonts: options.fallbackFonts || ['liberation sans'],
+        lazyFonts: options.lazyFonts !== false,
         debug: this.debug,
         targetFps: options.targetFps || 24,
         renderAhead: this.renderAhead,
@@ -993,6 +999,76 @@ export default class AkariSub extends EventTarget {
   /** Unload the current track without destroying the renderer. */
   freeTrack(): void {
     this._sendMutatingMessage('freeTrack')
+  }
+
+  /**
+   * Start a track that can grow as live or HLS fragments arrive. Pass an ASS
+   * header (Script Info + Styles) or Matroska CodecPrivate. Events can follow
+   * with {@linkcode appendSubtitleData}, {@linkcode appendSubtitleChunk}, or
+   * {@linkcode appendEvents}.
+   */
+  initStreamingTrack(options?: StreamingTrackOptions | string | Uint8Array | ArrayBuffer): void {
+    const parsed = parseStreamingTrackOptions(options)
+    this._bumpRenderEpoch()
+    this.sendMessage(
+      'initStreamingTrack',
+      { options: parsed },
+      parsed.header ? AkariSub._getSubtitleTransfers(parsed.header) : undefined
+    )
+    this._reAttachOffscreen()
+    if (this._ctx) this._ctx.filter = 'none'
+  }
+
+  /**
+   * Parse ASS text into the current track. Use this for live Dialogue lines
+   * or HLS fragments converted to ASS.
+   */
+  appendSubtitleData(content: string | Uint8Array | ArrayBuffer): void {
+    this._sendMutatingMessage(
+      'appendSubtitleData',
+      { content },
+      AkariSub._getSubtitleTransfers(content)
+    )
+  }
+
+  /**
+   * Append one Matroska subtitle packet. `start` and `duration` are seconds on
+   * the subtitle clock. Prefer this over {@linkcode appendSubtitleData} when
+   * the source is a Matroska/WebM stream.
+   */
+  appendSubtitleChunk(content: string | Uint8Array | ArrayBuffer, start: number, duration: number): void {
+    this._sendMutatingMessage(
+      'appendSubtitleChunk',
+      { content, start, duration },
+      AkariSub._getSubtitleTransfers(content)
+    )
+  }
+
+  /** Append several Dialogue events in one worker message. */
+  appendEvents(events: Partial<ASSEvent>[]): void {
+    this._sendMutatingMessage('appendEvents', { events })
+  }
+
+  /** Drop every event and keep styles and script info. */
+  flushEvents(): void {
+    this._sendMutatingMessage('flushEvents')
+  }
+
+  /**
+   * Drop events whose end time is before `before` seconds on the subtitle
+   * clock. Use this as a live window so a long HLS session does not retain
+   * every past cue.
+   */
+  pruneEvents(before: number): void {
+    this._sendMutatingMessage('pruneEvents', { before })
+  }
+
+  /**
+   * After each render, drop events that ended more than `delay` seconds ago.
+   * Pass a negative number to disable.
+   */
+  configurePrune(delay: number): void {
+    this.sendMessage('configurePrune', { delay })
   }
 
   /**

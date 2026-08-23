@@ -27,6 +27,9 @@ export type {
   ASSStyle,
   AkariSubOptions,
   CueEvent,
+  FontBytes,
+  FontFamilySource,
+  FontSubsetSource,
   FrameTimeline,
   PerformanceStats,
   PerformanceWarning,
@@ -36,6 +39,8 @@ export type {
   RenderEvent,
   RendererChangeEvent,
   RendererType,
+  StreamingTrackFormat,
+  StreamingTrackOptions,
   ASSEventCallback,
   ASSStyleCallback,
   PerformanceStatsCallback,
@@ -89,3 +94,19 @@ export {
   videoFrameColorSpace,
   videoFrameMediaTime
 } from './wrapper'
+
+export {
+  collectUnicodeScripts,
+  collectUnicodeScriptsFromAss,
+  expandScriptAlias,
+  parseUnicodeRange,
+  stripAssOverrides
+} from './ts/unicode-scripts'
+
+export {
+  collectNeededScripts,
+  matchFontSubsets,
+  normalizeFontFamilySource
+} from './ts/font-subsets'
+
+export { parseStreamingTrackOptions } from './ts/streaming'

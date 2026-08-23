@@ -467,6 +467,25 @@ public:
     scanned_events = i;
   }
 
+  // libass ass_configure_prune deletes events inside ass_render_frame.
+  // scanned_events is an index into that array, so it has to be rebuilt when
+  // the list shrinks or later appends skip animation stripping.
+  ASS_Image *renderFrame(double tm, int *changed_out) {
+    if (!track)
+      return NULL;
+    const int previous_n_events = track->n_events;
+    ASS_Image *img = ass_render_frame(ass_renderer, track,
+                                      toLibassTimestampMs(tm), changed_out);
+    if (track->n_events < previous_n_events) {
+      scanned_events = 0;
+      if (drop_animations)
+        scanAnimations(0);
+    } else if (scanned_events > track->n_events) {
+      scanned_events = track->n_events;
+    }
+    return img;
+  }
+
   // ass_read_memory copies the buffer internally, so the caller's heap
   // pointer can be passed straight through without intermediate copies.
   void createTrackMem(const char *data, size_t size) {
@@ -605,10 +624,7 @@ public:
     time = 0;
     count = 0;
 
-    if (!track)
-      return NULL;
-    ASS_Image *imgs = ass_render_frame(
-        ass_renderer, track, toLibassTimestampMs(tm), &changed);
+    ASS_Image *imgs = renderFrame(tm, &changed);
     if (imgs == NULL || (changed == 0 && !force))
       return NULL;
 
@@ -622,10 +638,7 @@ public:
     time = 0;
     count = 0;
 
-    if (!track)
-      return NULL;
-    ASS_Image *imgs = ass_render_frame(
-        ass_renderer, track, toLibassTimestampMs(tm), &changed);
+    ASS_Image *imgs = renderFrame(tm, &changed);
     if (imgs == NULL || (changed == 0 && !force))
       return NULL;
 
@@ -647,10 +660,7 @@ public:
     time = 0;
     count = 0;
 
-    if (!track)
-      return NULL;
-    ASS_Image *imgs = ass_render_frame(
-        ass_renderer, track, toLibassTimestampMs(tm), &changed);
+    ASS_Image *imgs = renderFrame(tm, &changed);
     if (debug)
       time = emscripten_get_now();
     if (imgs == NULL || (changed == 0 && !force))
@@ -733,14 +743,93 @@ public:
     ass_set_margins(ass_renderer, top, bottom, left, right);
   }
 
-  int getEventCount() const { return track->n_events; }
+  bool ensureTrack() {
+    if (track)
+      return true;
+    track = ass_new_track(ass_library);
+    if (!track) {
+      fprintf(stderr, "AkariSub: Failed to allocate a track\n");
+      scanned_events = 0;
+      return false;
+    }
+    scanned_events = 0;
+    trackColorSpace = track->YCbCrMatrix;
+    return true;
+  }
+
+  void afterProcessTrack() {
+    if (!track)
+      return;
+    if (drop_animations)
+      scanAnimations(scanned_events);
+    trackColorSpace = track->YCbCrMatrix;
+  }
+
+  void newTrack() {
+    removeTrack();
+    ensureTrack();
+  }
+
+  void processCodecPrivate(const char *data, int size) {
+    if (!ensureTrack() || !data || size <= 0)
+      return;
+    ass_process_codec_private(track, data, size);
+    afterProcessTrack();
+  }
+
+  void processData(const char *data, int size) {
+    if (!ensureTrack() || !data || size <= 0)
+      return;
+    ass_process_data(track, data, size);
+    afterProcessTrack();
+  }
+
+  void processChunk(const char *data, int size, double timecode_ms, double duration_ms) {
+    if (!ensureTrack() || !data || size <= 0)
+      return;
+    ass_process_chunk(track, data, size, static_cast<long long>(timecode_ms),
+                      static_cast<long long>(duration_ms));
+    afterProcessTrack();
+  }
+
+  void flushEvents() {
+    if (!track)
+      return;
+    ass_flush_events(track);
+    scanned_events = 0;
+  }
+
+  void pruneEvents(double deadline_ms) {
+    if (!track)
+      return;
+    ass_prune_events(track, static_cast<long long>(deadline_ms));
+    scanned_events = 0;
+    if (drop_animations)
+      scanAnimations(0);
+  }
+
+  void configurePrune(double delay_ms) {
+    if (!ensureTrack())
+      return;
+    ass_configure_prune(track, static_cast<long long>(delay_ms));
+  }
+
+  void setCheckReadOrder(int check) {
+    if (!ensureTrack())
+      return;
+    ass_set_check_readorder(track, check);
+  }
+
+  int getEventCount() const { return track ? track->n_events : 0; }
 
   int allocEvent() {
+    if (!ensureTrack())
+      return -1;
     return ass_alloc_event(track);
   }
 
   void removeEvent(int eid) {
-    if (eid < 0 || eid >= track->n_events) {
+    if (!track || eid < 0 || eid >= track->n_events) {
       return;
     }
 
@@ -751,14 +840,22 @@ public:
     }
     memset(&track->events[track->n_events - 1], 0, sizeof(ASS_Event));
     track->n_events--;
+    if (eid < scanned_events)
+      scanned_events--;
+    if (scanned_events > track->n_events)
+      scanned_events = track->n_events;
   }
 
-  int getStyleCount() const { return track->n_styles; }
+  int getStyleCount() const { return track ? track->n_styles : 0; }
 
-  int allocStyle() { return ass_alloc_style(track); }
+  int allocStyle() {
+    if (!ensureTrack())
+      return -1;
+    return ass_alloc_style(track);
+  }
 
   void removeStyle(int sid) {
-    if (sid < 0 || sid >= track->n_styles) {
+    if (!track || sid < 0 || sid >= track->n_styles) {
       return;
     }
 
@@ -771,9 +868,7 @@ public:
     track->n_styles--;
   }
 
-  void removeAllEvents() {
-    ass_flush_events(track);
-  }
+  void removeAllEvents() { flushEvents(); }
 
   void setMemoryLimits(int glyph_limit, int bitmap_cache_limit) {
     printf("AkariSub: setting total libass memory limits to: glyph=%d MiB, "
@@ -786,8 +881,7 @@ public:
     time = 0;
     count = 0;
 
-    ASS_Image *img = ass_render_frame(
-        ass_renderer, track, toLibassTimestampMs(tm), &changed);
+    ASS_Image *img = renderFrame(tm, &changed);
     if (img == NULL || (changed == 0 && !force)) {
       return NULL;
     }
@@ -1254,6 +1348,47 @@ EMSCRIPTEN_KEEPALIVE void akarisub_create_track_mem(AkariSub *instance, const ch
 EMSCRIPTEN_KEEPALIVE void akarisub_remove_track(AkariSub *instance) {
   if (instance)
     instance->removeTrack();
+}
+
+EMSCRIPTEN_KEEPALIVE void akarisub_new_track(AkariSub *instance) {
+  if (instance)
+    instance->newTrack();
+}
+
+EMSCRIPTEN_KEEPALIVE void akarisub_process_data(AkariSub *instance, const char *data, int size) {
+  if (instance)
+    instance->processData(data, size);
+}
+
+EMSCRIPTEN_KEEPALIVE void akarisub_process_codec_private(AkariSub *instance, const char *data, int size) {
+  if (instance)
+    instance->processCodecPrivate(data, size);
+}
+
+EMSCRIPTEN_KEEPALIVE void akarisub_process_chunk(AkariSub *instance, const char *data, int size,
+                                                double timecode_ms, double duration_ms) {
+  if (instance)
+    instance->processChunk(data, size, timecode_ms, duration_ms);
+}
+
+EMSCRIPTEN_KEEPALIVE void akarisub_flush_events(AkariSub *instance) {
+  if (instance)
+    instance->flushEvents();
+}
+
+EMSCRIPTEN_KEEPALIVE void akarisub_prune_events(AkariSub *instance, double deadline_ms) {
+  if (instance)
+    instance->pruneEvents(deadline_ms);
+}
+
+EMSCRIPTEN_KEEPALIVE void akarisub_configure_prune(AkariSub *instance, double delay_ms) {
+  if (instance)
+    instance->configurePrune(delay_ms);
+}
+
+EMSCRIPTEN_KEEPALIVE void akarisub_set_check_readorder(AkariSub *instance, int check) {
+  if (instance)
+    instance->setCheckReadOrder(check);
 }
 
 EMSCRIPTEN_KEEPALIVE void akarisub_resize_canvas(AkariSub *instance, int width, int height, int video_w, int video_h) {

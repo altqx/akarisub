@@ -6,8 +6,10 @@ import type {
   AkariSubModule,
   CueEvent,
   EncryptedSubtitleContent,
+  FontFamilySource,
   PreloadTrackSource,
   RawASSImage,
+  StreamingTrackOptions,
   SubtitleColorSpace,
   WorkerInboundMessage
 } from './types'
@@ -25,12 +27,13 @@ import {
   LARGE_SUBTITLE_BYTES,
   MAX_SUBTITLE_BYTES,
   SUBTITLE_FETCH_TIMEOUT_MS,
-  collectAssFontNames,
   fetchBoundedAsset,
   hasRenderableAssPrefix,
   isAbortError
 } from './asset-loader'
 import { diffActiveCues, isCueActiveAt, toLibassTimestampMs } from './cue-events'
+import { collectNeededScripts, matchFontSubsets, normalizeFontFamilySource } from './font-subsets'
+import { parseStreamingTrackOptions } from './streaming'
 
 interface WorkerMetrics {
   framesRendered: number
@@ -77,8 +80,11 @@ let rawAssImageGpuEnabled = false
 let useLocalFonts = false
 let useFontconfigProvider = true
 let blendMode: 'js' | 'wasm' = 'wasm'
-let availableFonts: Record<string, string | Uint8Array> = {}
+let availableFonts: Record<string, FontFamilySource> = {}
 const fontMap_: Record<string, boolean> = {}
+const loadedFontSubsets = new Set<string>()
+const neededFontScripts = new Set<string>(['latn'])
+let lazyFonts = true
 let attachedFontId = 0 // For attached/preloaded fonts (higher priority)
 let fallbackFontId = 0 // For fallback fonts (lower priority)
 const MAX_FONT_BYTES = 32 * 1024 * 1024
@@ -225,6 +231,14 @@ interface AkariSubApi {
   setAdaptiveBlendLayouts: (handle: number, value: number) => void
   createTrackMem: (handle: number, contentPtr: number) => void
   removeTrack: (handle: number) => void
+  newTrack: (handle: number) => void
+  processData: (handle: number, dataPtr: number, size: number) => void
+  processCodecPrivate: (handle: number, dataPtr: number, size: number) => void
+  processChunk: (handle: number, dataPtr: number, size: number, timecodeMs: number, durationMs: number) => void
+  flushEvents: (handle: number) => void
+  pruneEvents: (handle: number, deadlineMs: number) => void
+  configurePrune: (handle: number, delayMs: number) => void
+  setCheckReadOrder: (handle: number, check: number) => void
   resizeCanvas: (handle: number, width: number, height: number, videoWidth: number, videoHeight: number) => void
   addFont: (handle: number, namePtr: number, dataPtr: number, dataSize: number) => number
   reloadFonts: (handle: number) => void
@@ -1084,6 +1098,17 @@ const withCBytes = <T>(input: Uint8Array, callback: (ptr: number) => T): T => {
   }
 }
 
+const withProcessBytes = (
+  content: string | Uint8Array | ArrayBuffer,
+  callback: (ptr: number, size: number) => void
+): void => {
+  const bytes = typeof content === 'string' ? TEXT_ENCODER.encode(content) : toUint8Array(content)
+  if (bytes.byteLength === 0) return
+  withCBytes(bytes, (ptr) => {
+    callback(ptr, bytes.byteLength)
+  })
+}
+
 const decryptV2Payload = async (encrypted: ArrayBuffer, contentKey: CryptoKey): Promise<Uint8Array> => {
   const data = new Uint8Array(encrypted)
   const keyIdSize = 8
@@ -1223,6 +1248,58 @@ const waitForPendingFonts = (timeoutMs: number = FONT_WAIT_TIMEOUT_MS): Promise<
   })
 }
 
+const requireStreamingApi = (): AkariSubApi => {
+  const api = requireApi()
+  if (!api.processData || !api.newTrack || !api.processChunk) {
+    throw new Error('This WASM build does not support streaming subtitles. Rebuild with bun run build:wasm.')
+  }
+  return api
+}
+
+const contentToText = (content: string | Uint8Array | ArrayBuffer): string => {
+  return typeof content === 'string' ? content : new TextDecoder('utf-8').decode(toUint8Array(content))
+}
+
+const ingestSubtitleText = (content: string): void => {
+  const next = collectNeededScripts(content, neededFontScripts)
+  neededFontScripts.clear()
+  for (const script of next) neededFontScripts.add(script)
+  processAvailableFonts(content)
+  loadMatchingFontSubsets(content)
+}
+
+const loadMatchingFontSubsets = (text?: string): void => {
+  if (!availableFonts) return
+  for (const [family, source] of Object.entries(availableFonts)) {
+    if (!fontMap_[family]) continue
+    const subsets = lazyFonts
+      ? matchFontSubsets(family, source, neededFontScripts, text)
+      : normalizeFontFamilySource(source).map((subset, index) => ({
+          family,
+          index,
+          subset,
+          identity: `${family}#${index}`
+        }))
+    for (const match of subsets) {
+      loadFontSubset(match.family, match.identity, match.subset.src)
+    }
+  }
+}
+
+const loadFontSubset = (family: string, identity: string, src: string | Uint8Array): void => {
+  if (loadedFontSubsets.has(identity)) return
+  loadedFontSubsets.add(identity)
+  fontMap_[family] = true
+  if (pendingFontFamilies.has(identity)) return
+  pendingFontFamilies.add(identity)
+  asyncWrite(src, true, (success) => {
+    pendingFontFamilies.delete(identity)
+    if (!success) loadedFontSubsets.delete(identity)
+    else fontMap_[family] = true
+    notifyFontsSettled()
+  })
+}
+
 self.localFontResult = ({ font, success }: { font: string; success: boolean }): void => {
   markFontFamilySettled(font)
   if (success) fontMap_[font] = true
@@ -1231,21 +1308,36 @@ self.localFontResult = ({ font, success }: { font: string; success: boolean }): 
 const findAvailableFonts = (font: string): void => {
   font = font.trim().toLowerCase()
   if (font.startsWith('@')) font = font.substring(1)
-  if (fontMap_[font]) return
 
-  if (!availableFonts[font]) {
+  const source = availableFonts[font]
+  if (!source) {
+    if (fontMap_[font]) return
     if (useLocalFonts && !pendingFontFamilies.has(font)) {
       pendingFontFamilies.add(font)
       postMessage({ target: 'getLocalFont', font })
       setTimeout(() => markFontFamilySettled(font), LOCAL_FONT_WAIT_MS)
     }
-  } else {
-    if (pendingFontFamilies.has(font)) return
-    pendingFontFamilies.add(font)
-    asyncWrite(availableFonts[font], true, (success) => {
-      markFontFamilySettled(font)
-      if (success) fontMap_[font] = true
-    })
+    return
+  }
+
+  const matches = lazyFonts
+    ? matchFontSubsets(font, source, neededFontScripts)
+    : normalizeFontFamilySource(source).map((subset, index) => ({
+        family: font,
+        index,
+        subset,
+        identity: `${font}#${index}`
+      }))
+
+  if (matches.length === 0) {
+    const unconstrained = normalizeFontFamilySource(source).filter(
+      (subset) => subset.unicodeRange == null && (subset.scripts == null || subset.scripts.length === 0)
+    )
+    if (unconstrained.length === 0) return
+  }
+
+  for (const match of matches) {
+    loadFontSubset(match.family, match.identity, match.subset.src)
   }
 }
 
@@ -1442,11 +1534,12 @@ const applyPlainTrack = (content: string | Uint8Array | ArrayBuffer): void => {
 
   if (isBinaryContent(content)) {
     createTrackFromBytes(toUint8Array(content))
+    ingestSubtitleText(contentToText(content))
     finishTrackLoad()
     return
   }
 
-  processAvailableFonts(content)
+  ingestSubtitleText(content)
 
   if (clampPos) content = fixPlayRes(content)
   if (dropAllBlur) content = dropBlur(content)
@@ -1474,7 +1567,7 @@ const publishPartialTrack = (text: string): boolean => {
 
 const scanAssFonts = (fragment: string): void => {
   if (!fragment) return
-  for (const font of collectAssFontNames(fragment)) findAvailableFonts(font)
+  ingestSubtitleText(fragment)
 }
 
 const rebuildCueTimes = (): void => {
@@ -1643,6 +1736,101 @@ self.freeTrack = (): void => {
   markNextRenderForced()
 }
 
+const applyStreamingPrune = (parsed: StreamingTrackOptions): void => {
+  const api = requireStreamingApi()
+  const handle = requireHandle()
+  if (parsed.checkReadOrder != null) api.setCheckReadOrder(handle, parsed.checkReadOrder ? 1 : 0)
+  if (parsed.pruneDelay === null) api.configurePrune(handle, -1)
+  else if (parsed.pruneDelay != null) {
+    api.configurePrune(handle, parsed.pruneDelay < 0 ? -1 : parsed.pruneDelay * 1000)
+  }
+}
+
+const afterStreamingMutation = (): void => {
+  syncTotalEventsMetric()
+  rebuildCueTimes()
+  firstTrackEventStartTime = getFirstEventStartTime()
+  markNextRenderForced()
+}
+
+self.initStreamingTrack = ({ options }: { options: StreamingTrackOptions }): void => {
+  stopWarmup()
+  advanceTrackGeneration()
+  protectedTrackContent = false
+  resetCueState(lastCurrentTime)
+
+  const parsed = parseStreamingTrackOptions(options)
+  const api = requireStreamingApi()
+  const handle = requireHandle()
+  api.newTrack(handle)
+  applyStreamingPrune(parsed)
+
+  if (parsed.header != null) {
+    ingestSubtitleText(contentToText(parsed.header))
+    withProcessBytes(parsed.header, (ptr, size) => {
+      if (parsed.format === 'matroska') api.processCodecPrivate(handle, ptr, size)
+      else api.processData(handle, ptr, size)
+    })
+  }
+
+  finishTrackLoad()
+}
+
+self.appendSubtitleData = ({ content }: { content: string | Uint8Array | ArrayBuffer }): void => {
+  const api = requireStreamingApi()
+  ingestSubtitleText(contentToText(content))
+  withProcessBytes(content, (ptr, size) => {
+    api.processData(requireHandle(), ptr, size)
+  })
+  afterStreamingMutation()
+}
+
+self.appendSubtitleChunk = ({
+  content,
+  start,
+  duration
+}: {
+  content: string | Uint8Array | ArrayBuffer
+  start: number
+  duration: number
+}): void => {
+  const api = requireStreamingApi()
+  ingestSubtitleText(contentToText(content))
+  const startMs = toLibassTimestampMs(start)
+  const durationMs = toLibassTimestampMs(duration)
+  withProcessBytes(content, (ptr, size) => {
+    api.processChunk(requireHandle(), ptr, size, startMs, durationMs)
+  })
+  afterStreamingMutation()
+}
+
+self.appendEvents = ({ events }: { events: Partial<ASSEvent>[] }): void => {
+  const api = requireApi()
+  const handle = requireHandle()
+  for (const event of events) {
+    if (event.Text) ingestSubtitleText(event.Text)
+    const index = api.allocEvent(handle)
+    if (index >= 0) applyEventFields(index, event)
+  }
+  afterStreamingMutation()
+}
+
+self.flushEvents = (): void => {
+  requireStreamingApi().flushEvents(requireHandle())
+  resetCueState(lastCurrentTime)
+  afterStreamingMutation()
+}
+
+self.pruneEvents = ({ before }: { before: number }): void => {
+  requireStreamingApi().pruneEvents(requireHandle(), toLibassTimestampMs(before))
+  resetCueState(lastCurrentTime)
+  afterStreamingMutation()
+}
+
+self.configurePrune = ({ delay }: { delay: number }): void => {
+  requireStreamingApi().configurePrune(requireHandle(), delay < 0 ? -1 : delay * 1000)
+}
+
 self.setTrackByUrl = async ({ url }: { url: string }): Promise<void> => {
   stopWarmup()
   const generation = advanceTrackGeneration()
@@ -1684,15 +1872,7 @@ const clearPreloadedTrack = (): void => {
 }
 
 const scanTrackFonts = (content: string | Uint8Array): void => {
-  if (typeof content === 'string') {
-    processAvailableFonts(content)
-    return
-  }
-
-  const text = new TextDecoder('utf-8').decode(content)
-  if (text.includes('[Script Info]') || text.includes('[Events]') || text.includes('[V4')) {
-    processAvailableFonts(text)
-  }
+  ingestSubtitleText(typeof content === 'string' ? content : contentToText(content))
 }
 
 const prepareStoredTrackContent = (
@@ -2630,6 +2810,14 @@ self.init = async (data: any): Promise<void> => {
       setAdaptiveBlendLayouts: Module._akarisub_set_adaptive_blend_layouts,
       createTrackMem: Module._akarisub_create_track_mem,
       removeTrack: Module._akarisub_remove_track,
+      newTrack: Module._akarisub_new_track,
+      processData: Module._akarisub_process_data,
+      processCodecPrivate: Module._akarisub_process_codec_private,
+      processChunk: Module._akarisub_process_chunk,
+      flushEvents: Module._akarisub_flush_events,
+      pruneEvents: Module._akarisub_prune_events,
+      configurePrune: Module._akarisub_configure_prune,
+      setCheckReadOrder: Module._akarisub_set_check_readorder,
       resizeCanvas: Module._akarisub_resize_canvas,
       addFont: Module._akarisub_add_font,
       reloadFonts: Module._akarisub_reload_fonts,
@@ -2760,6 +2948,7 @@ self.init = async (data: any): Promise<void> => {
     }
 
     availableFonts = data.availableFonts
+    lazyFonts = data.lazyFonts !== false
     debug = data.debug
     targetFps = data.targetFps || targetFps
     useLocalFonts = data.useLocalFonts
@@ -2775,13 +2964,25 @@ self.init = async (data: any): Promise<void> => {
       for (const font of fallbackFonts) {
         const fontLower = font.trim().toLowerCase()
         const fontKey = fontLower.startsWith('@') ? fontLower.substring(1) : fontLower
-        if (availableFonts && availableFonts[fontKey]) {
-          const fontUrl = availableFonts[fontKey]
-          if (typeof fontUrl === 'string') {
-            const promise = readBoundedFontUrl(fontUrl)
+        const source = availableFonts?.[fontKey]
+        if (!source) continue
+        const matches = lazyFonts
+          ? matchFontSubsets(fontKey, source, neededFontScripts)
+          : normalizeFontFamilySource(source).map((subset, index) => ({
+              family: fontKey,
+              index,
+              subset,
+              identity: `${fontKey}#${index}`
+            }))
+        for (const match of matches) {
+          if (loadedFontSubsets.has(match.identity)) continue
+          const src = match.subset.src
+          if (typeof src === 'string') {
+            const promise = readBoundedFontUrl(src)
               .then((fontData) => {
                 const accepted = writeFontToFSImmediate(fontData, true)
                 if (accepted) {
+                  loadedFontSubsets.add(match.identity)
                   fontMap_[fontKey] = true
                   if (debug) console.log('[AkariSub] Loaded fallback font async:', fontKey)
                 }
@@ -2790,8 +2991,9 @@ self.init = async (data: any): Promise<void> => {
                 console.error('Failed to load fallback font:', fontKey, error)
               })
             fontPromises.push(promise)
-          } else {
-            if (writeFontToFSImmediate(fontUrl, true)) fontMap_[fontKey] = true
+          } else if (writeFontToFSImmediate(src, true)) {
+            loadedFontSubsets.add(match.identity)
+            fontMap_[fontKey] = true
           }
         }
       }
@@ -2868,7 +3070,7 @@ self.init = async (data: any): Promise<void> => {
     }
 
     if (typeof subContent === 'string') {
-      processAvailableFonts(subContent)
+      ingestSubtitleText(subContent)
       if (clampPos) subContent = fixPlayRes(subContent)
       if (dropAllBlur) subContent = dropBlur(subContent)
     } else if (debug && (clampPos || dropAllBlur)) {
@@ -3261,6 +3463,7 @@ const readStyle = (index: number): ASSStyle => {
 }
 
 self.createEvent = ({ event }: { event: Partial<ASSEvent> }): void => {
+  if (event.Text) ingestSubtitleText(event.Text)
   const index = requireApi().allocEvent(requireHandle())
   if (index >= 0) applyEventFields(index, event)
   syncTotalEventsMetric()
@@ -3285,6 +3488,7 @@ self.getEvents = (): void => {
 }
 
 self.setEvent = ({ event, index }: { event: Partial<ASSEvent>; index: number }): void => {
+  if (event.Text) ingestSubtitleText(event.Text)
   applyEventFields(index, event)
   rebuildCueTimes()
   if (lastActiveCues.has(index)) lastActiveCues.set(index, readCueEvent(index))

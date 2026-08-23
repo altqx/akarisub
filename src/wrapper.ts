@@ -23,6 +23,11 @@ export type {
   SubtitleColorSpace,
   WebYCbCrColorSpace,
   EncryptedSubtitleContent,
+  FontBytes,
+  FontFamilySource,
+  FontSubsetSource,
+  StreamingTrackFormat,
+  StreamingTrackOptions,
   AkariSubModule,
   WorkerInboundMessage,
   WorkerOutboundMessage
@@ -73,6 +78,20 @@ export {
   videoFrameColorSpace,
   videoFrameMediaTime
 } from './ts/video-frame'
+
+export { parseStreamingTrackOptions } from './ts/streaming'
+export {
+  collectUnicodeScripts,
+  collectUnicodeScriptsFromAss,
+  expandScriptAlias,
+  parseUnicodeRange,
+  stripAssOverrides
+} from './ts/unicode-scripts'
+export {
+  collectNeededScripts,
+  matchFontSubsets,
+  normalizeFontFamilySource
+} from './ts/font-subsets'
 
 export { default } from './ts/akarisub'
 export { default as AkariSub } from './ts/akarisub'

@@ -63,6 +63,14 @@ const __akarisub_expose = () => {
   Module['_akarisub_get_blend_threads'] = _akarisub_get_blend_threads
   Module['_akarisub_create_track_mem'] = _akarisub_create_track_mem
   Module['_akarisub_remove_track'] = _akarisub_remove_track
+  Module['_akarisub_new_track'] = _akarisub_new_track
+  Module['_akarisub_process_data'] = _akarisub_process_data
+  Module['_akarisub_process_codec_private'] = _akarisub_process_codec_private
+  Module['_akarisub_process_chunk'] = _akarisub_process_chunk
+  Module['_akarisub_flush_events'] = _akarisub_flush_events
+  Module['_akarisub_prune_events'] = _akarisub_prune_events
+  Module['_akarisub_configure_prune'] = _akarisub_configure_prune
+  Module['_akarisub_set_check_readorder'] = _akarisub_set_check_readorder
   Module['_akarisub_resize_canvas'] = _akarisub_resize_canvas
   Module['_akarisub_add_font'] = _akarisub_add_font
   Module['_akarisub_reload_fonts'] = _akarisub_reload_fonts

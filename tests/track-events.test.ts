@@ -8,6 +8,7 @@ import {
   SLOW_FRAME_MS,
   toLibassTimestampMs
 } from '../src/ts/cue-events'
+import { parseStreamingTrackOptions } from '../src/ts/streaming'
 import type { CueEvent } from '../src/ts/types'
 
 const cue = (index: number, start = 1, duration = 2): CueEvent => ({
@@ -90,6 +91,31 @@ describe('preload track source parsing', () => {
   })
 })
 
+describe('streaming track options', () => {
+  test('treats raw ASS text as an ASS header', () => {
+    expect(parseStreamingTrackOptions('[Script Info]\nTitle: live')).toEqual({
+      header: '[Script Info]\nTitle: live',
+      format: 'ass'
+    })
+  })
+
+  test('accepts Matroska CodecPrivate and a prune window', () => {
+    expect(
+      parseStreamingTrackOptions({
+        header: 'codec-private',
+        format: 'matroska',
+        pruneDelay: 15,
+        checkReadOrder: false
+      })
+    ).toEqual({
+      header: 'codec-private',
+      format: 'matroska',
+      pruneDelay: 15,
+      checkReadOrder: false
+    })
+  })
+})
+
 describe('AkariSub track swap and callbacks', () => {
   test('preloadTrack waits for the worker handle before swapping', async () => {
     const renderer = Object.create(AkariSub.prototype) as AkariSub & {
@@ -158,6 +184,34 @@ describe('AkariSub track swap and callbacks', () => {
     await expect(renderer.activatePreloadedTrack()).resolves.toEqual({ id: 4 })
     expect(calls).toEqual(['bump', 'activate:4', 'reattach', 'sync'])
     expect(renderer._preloadedTrackId).toBe(null)
+    expect(renderer._ctx?.filter).toBe('none')
+  })
+
+  test('initStreamingTrack posts a parsed header without replacing via setTrack', () => {
+    const posted: Array<{ target: string; options?: unknown }> = []
+    const renderer = Object.create(AkariSub.prototype) as AkariSub & {
+      _bumpRenderEpoch: () => void
+      _reAttachOffscreen: () => void
+      _ctx: { filter: string } | null
+      sendMessage: (target: string, data?: Record<string, unknown>) => Promise<void>
+    }
+
+    Object.assign(renderer, {
+      _ctx: { filter: 'url("#f")' },
+      _bumpRenderEpoch: () => {},
+      _reAttachOffscreen: () => {},
+      sendMessage: async (target: string, data?: Record<string, unknown>) => {
+        posted.push({ target, options: data?.options })
+      }
+    })
+
+    renderer.initStreamingTrack({ header: '[Script Info]', format: 'ass', pruneDelay: 20 })
+    expect(posted).toEqual([
+      {
+        target: 'initStreamingTrack',
+        options: { header: '[Script Info]', format: 'ass', pruneDelay: 20 }
+      }
+    ])
     expect(renderer._ctx?.filter).toBe('none')
   })
 

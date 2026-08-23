@@ -192,6 +192,47 @@ export interface PreloadedTrack {
   id: number
 }
 
+/** Packet format for {@linkcode AkariSub.initStreamingTrack}. */
+export type StreamingTrackFormat = 'ass' | 'matroska'
+
+/** Options for {@linkcode AkariSub.initStreamingTrack}. */
+export interface StreamingTrackOptions {
+  /** ASS header or Matroska CodecPrivate. Omit to start from an empty track. */
+  header?: string | Uint8Array | ArrayBuffer
+  /**
+   * How `header` and later packets are parsed.
+   * `'ass'` uses `ass_process_data` (Dialogue lines). `'matroska'` uses
+   * CodecPrivate plus `ass_process_chunk`.
+   */
+  format?: StreamingTrackFormat
+  /**
+   * Drop events that ended more than this many seconds before the last
+   * rendered timestamp. `null` or a negative value disables automatic pruning.
+   */
+  pruneDelay?: number | null
+  /** Deduplicate Matroska packets by ReadOrder. Default true. */
+  checkReadOrder?: boolean
+}
+
+/** URL or in-memory font file. */
+export type FontBytes = string | Uint8Array
+
+/**
+ * One downloadable glyph slice of a family. Use `unicodeRange` and/or
+ * `scripts` so AkariSub can skip CJK (and other) slices the current track
+ * does not need.
+ */
+export interface FontSubsetSource {
+  src: FontBytes
+  /** CSS `unicode-range` syntax, for example `U+0000-00FF, U+3040-309F`. */
+  unicodeRange?: string
+  /** OpenType tags or aliases: `latn`, `hani`, `cjk`, `jp`, `kr`. */
+  scripts?: string[]
+}
+
+/** Value stored under one `availableFonts` family name. */
+export type FontFamilySource = FontBytes | FontSubsetSource | FontSubsetSource[]
+
 /** Encoded-frame timestamps with optional media/subtitle clock offsets. */
 export interface FrameTimeline extends ArrayLike<number> {
   /** Origin subtracted from raw browser media timestamps when locating a frame. */
@@ -317,12 +358,20 @@ export interface AkariSubOptions {
   subContent?: string | Uint8Array | ArrayBuffer
   /** Encrypted subtitle content decrypted inside the worker before loading into libass */
   encryptedSubContent?: EncryptedSubtitleContent
-  /** Extra fonts as URLs or file bytes. */
-  fonts?: (string | Uint8Array)[]
-  /** Map of font family name to URL or file bytes. */
-  availableFonts?: Record<string, string | Uint8Array>
+  /** Extra fonts as URLs or file bytes. Always loaded in full. */
+  fonts?: FontBytes[]
+  /**
+   * Map of font family name (lowercase) to a file or unicode-range slices.
+   * Slice descriptors load lazily from the scripts in the current track.
+   */
+  availableFonts?: Record<string, FontFamilySource>
   /** Fallback font families in order (default: ['liberation sans']). Fontconfig uses these for cascade. */
   fallbackFonts?: string[]
+  /**
+   * When `availableFonts` entries declare `unicodeRange` or `scripts`, load
+   * only the slices that overlap the current track. Default true.
+   */
+  lazyFonts?: boolean
   /** Use Local Font Access API for OS font lookup (default: true if available) */
   useLocalFonts?: boolean
   /** Use libass fontconfig provider for virtual/packaged font lookup (default: true) */
@@ -492,9 +541,10 @@ export interface WorkerInitMessage {
   subUrl?: string
   subContent?: string | Uint8Array | ArrayBuffer | null
   encryptedSubContent?: EncryptedSubtitleContent | null
-  fonts: (string | Uint8Array)[]
-  availableFonts: Record<string, string | Uint8Array>
+  fonts: FontBytes[]
+  availableFonts: Record<string, FontFamilySource>
   fallbackFonts: string[]
+  lazyFonts: boolean
   debug: boolean
   targetFps: number
   renderAhead: number
@@ -535,6 +585,18 @@ export type WorkerInboundMessage =
   | { target: 'setEncryptedTrack'; content: EncryptedSubtitleContent }
   | { target: 'setTrackByUrl'; url: string }
   | { target: 'freeTrack' }
+  | { target: 'initStreamingTrack'; options: StreamingTrackOptions }
+  | { target: 'appendSubtitleData'; content: string | Uint8Array | ArrayBuffer }
+  | {
+      target: 'appendSubtitleChunk'
+      content: string | Uint8Array | ArrayBuffer
+      start: number
+      duration: number
+    }
+  | { target: 'appendEvents'; events: Partial<ASSEvent>[] }
+  | { target: 'flushEvents' }
+  | { target: 'pruneEvents'; before: number }
+  | { target: 'configurePrune'; delay: number }
   | { target: 'preloadTrack'; requestId: number; source: PreloadTrackSource }
   | { target: 'activatePreloadedTrack'; requestId: number; id?: number }
   | {
@@ -600,6 +662,20 @@ export interface AkariSubModule extends EmscriptenModule {
   _akarisub_set_adaptive_blend_layouts: (handle: number, value: number) => void
   _akarisub_create_track_mem: (handle: number, contentPtr: number) => void
   _akarisub_remove_track: (handle: number) => void
+  _akarisub_new_track: (handle: number) => void
+  _akarisub_process_data: (handle: number, dataPtr: number, size: number) => void
+  _akarisub_process_codec_private: (handle: number, dataPtr: number, size: number) => void
+  _akarisub_process_chunk: (
+    handle: number,
+    dataPtr: number,
+    size: number,
+    timecodeMs: number,
+    durationMs: number
+  ) => void
+  _akarisub_flush_events: (handle: number) => void
+  _akarisub_prune_events: (handle: number, deadlineMs: number) => void
+  _akarisub_configure_prune: (handle: number, delayMs: number) => void
+  _akarisub_set_check_readorder: (handle: number, check: number) => void
   _akarisub_resize_canvas: (
     handle: number,
     width: number,

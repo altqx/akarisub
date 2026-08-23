@@ -23,6 +23,8 @@ AkariSub is a JS wrapper for <a href="https://github.com/libass/libass">libass</
 - Doesn't manipulate the DOM to render subtitles
 - Easy to use - just connect it to video element
 - Optional WebCodecs `VideoFrame` clock for custom players and editors
+- Streaming / live tracks: append ASS fragments, Matroska packets, or events without reloading the file
+- Font subset lazy loading: fetch only the unicode-range slices the current script needs (CJK fonts in particular)
 
 ### Fork Enhancements
 
@@ -32,6 +34,8 @@ AkariSub is a JS wrapper for <a href="https://github.com/libass/libass">libass</
 - **Encrypted Subtitles** - optionally load AES-GCM encrypted subtitle payloads that are decrypted inside the worker, so plaintext never touches the main thread
 - **Statistics Reporting** - Built-in statistics and performance metrics for debugging and monitoring
 - **Atomic Track Switching** - `preloadTrack()` / `activatePreloadedTrack()` load a second language track and its fonts before swapping, so the last frame stays visible
+- **Streaming / live tracks** - `initStreamingTrack()` plus `appendSubtitleData()` / `appendSubtitleChunk()` accept HLS fragments and Matroska packets without a full file
+- **Font subset lazy loading** - `availableFonts` can list unicode-range slices so CJK (and other) glyph files load only when the track needs them
 - **Cue Callbacks** - `onCueEnter`, `onCueExit`, `onRender`, `onRendererChange`, and `onPerformanceWarning` for overlays and analytics without polling `getEvents()`
 - **TypeScript Support** - Full TypeScript definitions and type safety
 - **HDR / Wide Color Gamut** - Matches Display P3 / Rec.2020 canvases and PQ/HLG video, and converts BT.2020 YCbCr matrices
@@ -176,6 +180,70 @@ await renderer.activatePreloadedTrack(ja.id)
 
 `preloadTrack()` also accepts ASS text or bytes, `{ kind: 'content', content }`, or `{ kind: 'encrypted', content }`. `activatePreloadedTrack()` without an id uses the most recently preloaded track.
 
+## Streaming and live tracks
+
+Live streams and HLS fragments rarely have a complete ASS file up front. Initialize a header-only track, then append events as packets arrive. libass keeps styles and script info; you decide how long past cues stay in memory.
+
+```js
+const renderer = new AkariSub({
+  video,
+  // Header only: Script Info + Styles, no Dialogue lines required
+})
+
+renderer.initStreamingTrack({
+  header: `[Script Info]
+ScriptType: v4.00+
+PlayResX: 1920
+PlayResY: 1080
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Default,Arial,48,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,0,2,10,10,10,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+`,
+  pruneDelay: 30
+})
+
+// HLS WebVTT/ASS fragment converted to Dialogue lines:
+renderer.appendSubtitleData('Dialogue: 0,0:00:01.00,0:00:03.00,Default,,0,0,0,,Hello live\n')
+
+// Or structured events (Start/Duration are libass milliseconds, same as createEvent):
+renderer.appendEvents([{ Start: 4000, Duration: 2000, Style: 'Default', Text: 'Next cue' }])
+
+// Matroska/WebM live packets:
+renderer.initStreamingTrack({ header: codecPrivate, format: 'matroska', pruneDelay: 15 })
+renderer.appendSubtitleChunk(packet, startSeconds, durationSeconds)
+```
+
+`pruneDelay` deletes events that ended more than that many seconds before the last rendered timestamp. Call `pruneEvents(video.currentTime - 30)` yourself when you want an explicit live window. `flushEvents()` drops every event and keeps the header.
+
+Do not mix `appendSubtitleChunk` with `appendSubtitleData` / `createEvent` on the same track. libass uses ReadOrder to drop duplicate Matroska packets, and that check breaks if the event list is edited some other way.
+
+## Font subsetting / lazy loading
+
+A full CJK font is often 10-20MB. Split it into unicode-range files (the same files you would ship for CSS `@font-face`) and list them under `availableFonts`. AkariSub reads the current track, keeps Latin loaded, and fetches Hiragana/Katakana/Han/Hangul (or other scripts) only when those glyphs appear, including as live events arrive.
+
+```js
+const renderer = new AkariSub({
+  video,
+  subUrl: './tracks/sub.ass',
+  availableFonts: {
+    'liberation sans': '/fonts/liberation-sans.woff2',
+    'noto sans cjk jp': [
+      { src: '/fonts/noto-cjk-latin.woff2', unicodeRange: 'U+0000-00FF' },
+      { src: '/fonts/noto-cjk-hira.woff2', scripts: ['hira'] },
+      { src: '/fonts/noto-cjk-kana.woff2', scripts: ['kana'] },
+      { src: '/fonts/noto-cjk-han.woff2', scripts: ['hani'] }
+    ]
+  },
+  fallbackFonts: ['liberation sans']
+})
+```
+
+`scripts` accepts OpenType tags (`latn`, `hani`, `hira`, `kana`, `hang`) and aliases (`cjk`, `jp`, `kr`, `latin`). `fonts` still force-loads complete files. Set `lazyFonts: false` to fetch every listed slice when the family is first referenced.
+
 ## Cleaning up the object
 
 After you're finished with rendering the subtitles. You need to call the `destroy()` method to correctly destroy the object.
@@ -301,8 +369,9 @@ The default options are best, and automatically fallback to the next fastest opt
 | `subUrl`               | string                               | -                                   | URL of the subtitle file to play                                                                                                                           |
 | `subContent`           | string \| Uint8Array \| ArrayBuffer  | -                                   | Content of the subtitle file to play                                                                                                                       |
 | `encryptedSubContent`  | EncryptedSubtitleContent             | -                                   | AES-GCM encrypted subtitle payload, decrypted inside the worker                                                                                            |
-| `fonts`                | (string \| Uint8Array)[]             | -                                   | Array of font URLs or Uint8Arrays to force load                                                                                                            |
-| `availableFonts`       | Record<string, string \| Uint8Array> | liberation sans from package assets | Available fonts map (lowercase name → URL/data)                                                                                                            |
+| `fonts`                | (string \| Uint8Array)[]             | -                                   | Font URLs or bytes to force-load in full                                                                                                                   |
+| `availableFonts`       | Record<string, FontFamilySource>     | liberation sans from package assets | Family name (lowercase) → URL, bytes, or unicode-range / script slices. Slices load lazily from the current track                                          |
+| `lazyFonts`            | boolean                              | `true`                              | When `availableFonts` entries declare slices, fetch only the ones the current scripts need                                                                 |
 | `fallbackFonts`        | string[]                             | `['liberation sans']`               | Fallback font families in order, used for the fontconfig cascade                                                                                           |
 | `useLocalFonts`        | boolean                              | `true`                              | Use Local Font Access API if available                                                                                                                     |
 | `libassMemoryLimit`    | number                               | `128`                               | libass bitmap cache memory limit in MiB                                                                                                                    |
@@ -325,6 +394,13 @@ The default options are best, and automatically fallback to the next fastest opt
 | `setTrack(content)`           | `content: string \| Uint8Array \| ArrayBuffer` | Set subtitle from content                                                        |
 | `setEncryptedTrack(content)`  | `content: EncryptedSubtitleContent`            | Set subtitle from an encrypted payload (decrypted in the worker)                 |
 | `freeTrack()`                 | -                                              | Remove current subtitles                                                         |
+| `initStreamingTrack(options?)` | `StreamingTrackOptions \| string \| bytes`    | Create a header-only track that can accept later fragments                       |
+| `appendSubtitleData(content)` | `content: string \| Uint8Array \| ArrayBuffer` | Parse ASS text (Dialogue lines, extra styles) into the current track             |
+| `appendSubtitleChunk(data, start, duration)` | `data`, `start: number`, `duration: number` | Append one Matroska packet; `start`/`duration` are seconds                       |
+| `appendEvents(events)`       | `events: Partial<ASSEvent>[]`                  | Append several Dialogue events in one message                                    |
+| `pruneEvents(before)`         | `before: number`                               | Drop events that ended before `before` seconds                                   |
+| `flushEvents()`               | -                                              | Drop every event and keep styles / script info                                   |
+| `configurePrune(delay)`       | `delay: number`                                | Auto-drop events that ended more than `delay` seconds before the last render     |
 | `preloadTrack(source)`        | `PreloadTrackSource \| string \| bytes`        | Parse a track and load its fonts without replacing the visible one               |
 | `activatePreloadedTrack(id?)` | `id?: number`                                  | Atomically swap to a preloaded track; last frame stays until the first new paint |
 
