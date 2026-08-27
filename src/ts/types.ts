@@ -476,6 +476,8 @@ export interface RenderTimes {
 export interface RenderMessage {
   target: 'render'
   asyncRender: boolean
+  /** True when every RGBA plane is already flattened and planes never overlap. */
+  preblended?: boolean
   images: RenderImage[]
   times: RenderTimes
   width: number
@@ -490,7 +492,7 @@ export interface RenderMessage {
 
 export type WorkerOutboundMessage =
   | { target: 'ready' }
-  | { target: 'trackReady' }
+  | { target: 'trackReady'; requestId?: number }
   | { target: 'unbusy'; requestId?: number; renderEpoch?: number; presentationId?: number; painted?: boolean }
   | { target: 'console'; command: string; content: string }
   | { target: 'getLocalFont'; font: string }

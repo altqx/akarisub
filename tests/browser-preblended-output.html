@@ -1,0 +1,144 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>AkariSub preblended output parity and benchmark</title>
+<pre id="result">RUNNING</pre>
+<script>
+  const result = document.querySelector('#result')
+  const width = 1280
+  const height = 720
+
+  const makeCanvas = () => {
+    const canvas = document.createElement('canvas')
+    canvas.width = width
+    canvas.height = height
+    return canvas
+  }
+
+  const planeSpecs = [
+    { x: 28, y: 46, w: 420, h: 96, seed: 11 },
+    { x: 704, y: 72, w: 520, h: 132, seed: 29 },
+    { x: 92, y: 392, w: 360, h: 84, seed: 47 },
+    { x: 612, y: 506, w: 610, h: 156, seed: 71 }
+  ]
+
+  const planes = planeSpecs.map((plane) => {
+    const pixels = new Uint8ClampedArray(plane.w * plane.h * 4)
+    for (let y = 0; y < plane.h; y++) {
+      for (let x = 0; x < plane.w; x++) {
+        const offset = (y * plane.w + x) * 4
+        const edge = Math.min(x, y, plane.w - 1 - x, plane.h - 1 - y)
+        pixels[offset] = (x * 13 + y * 7 + plane.seed) & 255
+        pixels[offset + 1] = (x * 5 + y * 17 + plane.seed) & 255
+        pixels[offset + 2] = (x * 19 + y * 3 + plane.seed) & 255
+        // Exercise the low-alpha tails that are most sensitive to an extra
+        // premultiply/unpremultiply round trip.
+        pixels[offset + 3] = Math.min(255, Math.max(1, edge * 9))
+      }
+    }
+    return { ...plane, imageData: new ImageData(pixels, plane.w, plane.h) }
+  })
+
+  const legacyCanvas = makeCanvas()
+  const directCanvas = makeCanvas()
+  const legacyContext = legacyCanvas.getContext('2d')
+  const directContext = directCanvas.getContext('2d')
+  const bufferCanvas = document.createElement('canvas')
+  const bufferContext = bufferCanvas.getContext('2d')
+
+  const renderLegacy = () => {
+    legacyContext.clearRect(0, 0, width, height)
+    for (const plane of planes) {
+      if (bufferCanvas.width !== plane.w || bufferCanvas.height !== plane.h) {
+        bufferCanvas.width = plane.w
+        bufferCanvas.height = plane.h
+      }
+      bufferContext.putImageData(plane.imageData, 0, 0)
+      legacyContext.drawImage(bufferCanvas, plane.x, plane.y)
+    }
+  }
+
+  const renderDirect = () => {
+    directContext.clearRect(0, 0, width, height)
+    for (const plane of planes) {
+      directContext.putImageData(plane.imageData, plane.x, plane.y)
+    }
+  }
+
+  const compare = (actual, expected) => {
+    let differingChannels = 0
+    let maxChannelDifference = 0
+    for (let i = 0; i < actual.length; i++) {
+      const difference = Math.abs(actual[i] - expected[i])
+      if (difference !== 0) differingChannels++
+      maxChannelDifference = Math.max(maxChannelDifference, difference)
+    }
+    return { differingChannels, maxChannelDifference }
+  }
+
+  const displayedPixels = (source) => {
+    const canvas = makeCanvas()
+    const context = canvas.getContext('2d')
+    context.fillStyle = '#26364c'
+    context.fillRect(0, 0, width, height)
+    context.drawImage(source, 0, 0)
+    return context.getImageData(0, 0, width, height).data
+  }
+
+  const median = (values) => {
+    const sorted = [...values].sort((a, b) => a - b)
+    return sorted[Math.floor(sorted.length / 2)]
+  }
+
+  const measure = (render, context) => {
+    const started = performance.now()
+    for (let i = 0; i < 40; i++) render()
+    // Force queued canvas work to complete before recording the sample.
+    context.getImageData(width - 1, height - 1, 1, 1)
+    return performance.now() - started
+  }
+
+  try {
+    renderLegacy()
+    renderDirect()
+
+    const legacyPixels = legacyContext.getImageData(0, 0, width, height).data
+    const directPixels = directContext.getImageData(0, 0, width, height).data
+    const rawParity = compare(directPixels, legacyPixels)
+    const displayedParity = compare(displayedPixels(directCanvas), displayedPixels(legacyCanvas))
+
+    for (let i = 0; i < 4; i++) {
+      renderLegacy()
+      renderDirect()
+    }
+
+    const legacySamples = []
+    const directSamples = []
+    for (let i = 0; i < 5; i++) {
+      if ((i & 1) === 0) {
+        directSamples.push(measure(renderDirect, directContext))
+        legacySamples.push(measure(renderLegacy, legacyContext))
+      } else {
+        legacySamples.push(measure(renderLegacy, legacyContext))
+        directSamples.push(measure(renderDirect, directContext))
+      }
+    }
+
+    const legacyMs = median(legacySamples)
+    const directMs = median(directSamples)
+    const observations = {
+      rawParity,
+      displayedParity,
+      benchmark: {
+        framesPerSample: 40,
+        planesPerFrame: planes.length,
+        legacyMs: Number(legacyMs.toFixed(2)),
+        directMs: Number(directMs.toFixed(2)),
+        speedup: Number((legacyMs / directMs).toFixed(2))
+      }
+    }
+    const failed = rawParity.maxChannelDifference > 1 || displayedParity.maxChannelDifference > 1
+    result.textContent = `${failed ? 'FAIL' : 'PASS'} ${JSON.stringify(observations)}`
+  } catch (error) {
+    result.textContent = `ERROR ${error?.stack || error}`
+  }
+</script>

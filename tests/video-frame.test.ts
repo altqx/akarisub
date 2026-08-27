@@ -91,6 +91,38 @@ describe('WebCodecs VideoFrame helpers', () => {
 })
 
 describe('presentVideoFrame', () => {
+  test('sizes a caller canvas from the decoded-frame clock when dimensions are omitted', () => {
+    const renderer = Object.create(AkariSub.prototype) as any
+    const messages: Array<{ width: number; height: number; videoWidth: number; videoHeight: number }> = []
+    let epochBumps = 0
+    const canvas = { width: 0, height: 0 }
+
+    Object.assign(renderer, {
+      _video: undefined,
+      _videoFrameClock: { currentTime: 0, paused: true, rate: 1, width: 1920, height: 1080 },
+      _videoWidth: 1920,
+      _videoHeight: 1080,
+      _canvas: { style: {} },
+      _canvasctrl: canvas,
+      _stagedCanvases: new Set(),
+      _gpuRenderer: null,
+      prescaleFactor: 1,
+      prescaleHeightLimit: 1080,
+      maxRenderHeight: 0,
+      busy: false,
+      _bumpRenderEpoch: () => epochBumps++,
+      sendMessage: (target: string, data: any) => {
+        if (target === 'canvas') messages.push(data)
+      }
+    })
+
+    renderer.resize()
+
+    expect(canvas).toEqual({ width: 1920, height: 1080 })
+    expect(epochBumps).toBe(1)
+    expect(messages).toEqual([{ width: 1920, height: 1080, videoWidth: 1920, videoHeight: 1080, force: false }])
+  })
+
   test('drives the RVFC presentation path without an HTMLVideoElement', () => {
     const renderer = Object.create(AkariSub.prototype) as any
     const demands: Array<{ mediaTime: number; width: number; height: number; presentationId: number }> = []

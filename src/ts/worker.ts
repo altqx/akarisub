@@ -1692,7 +1692,7 @@ const loadSubtitleUrl = async (
   return { content: new TextDecoder('utf-8').decode(bytes), emittedPartialReady }
 }
 
-const finishTrackLoad = (): void => {
+const finishTrackLoad = (requestId?: number): void => {
   const api = requireApi()
   const handle = requireHandle()
   syncTotalEventsMetric()
@@ -1701,7 +1701,7 @@ const finishTrackLoad = (): void => {
   subtitleColorSpace = libassYCbCrMap[api.getTrackColorSpace(handle)]
   markNextRenderForced()
   postMessage({ target: 'verifyColorSpace', subtitleColorSpace })
-  postMessage({ target: 'trackReady' })
+  postMessage({ target: 'trackReady', requestId })
 }
 
 self.setTrack = ({ content }: { content: string | Uint8Array | ArrayBuffer }): void => {
@@ -1892,12 +1892,12 @@ const prepareStoredTrackContent = (
   return text
 }
 
-const applyStoredTrack = (content: string | Uint8Array, encrypted: boolean): void => {
+const applyStoredTrack = (content: string | Uint8Array, encrypted: boolean, requestId?: number): void => {
   resetCueState(lastCurrentTime)
   protectedTrackContent = encrypted
   if (typeof content === 'string') createTrackFromString(content)
   else createTrackFromBytes(content)
-  finishTrackLoad()
+  finishTrackLoad(requestId)
 }
 
 const runPreload = async (source: PreloadTrackSource, generation: number): Promise<number> => {
@@ -1996,7 +1996,7 @@ self.activatePreloadedTrack = ({ requestId, id }: { requestId: number; id?: numb
   advanceTrackGeneration()
   preloadedTrack = null
   try {
-    applyStoredTrack(pending.content, pending.encrypted)
+    applyStoredTrack(pending.content, pending.encrypted, requestId)
   } finally {
     if (pending.encrypted && pending.content instanceof Uint8Array) pending.content.fill(0)
   }
@@ -2380,6 +2380,9 @@ const render = (
       // transferable buffer instead of allocating/transferring one per image.
       let copyTarget: Uint8ClampedArray<ArrayBuffer> | null = null
       let copyOffset = 0
+      // Both main-thread presentation and prepared snapshots need standalone
+      // storage. In particular, Chromium cannot reliably snapshot a canvas
+      // after ImageData uploads backed by the reusable WASM memory buffer.
       if (!offCanvasCtx) {
         let totalBytes = 0
         for (let i = 0; i < written; ++i) {
@@ -2528,6 +2531,11 @@ const postPreparedSnapshot = async (
   renderEpoch: number | undefined,
   time: number
 ): Promise<void> => {
+  if (self.width <= 0 || self.height <= 0) {
+    postMessage({ target: 'preparedFrame', prepareId, renderEpoch, time, failed: true })
+    return
+  }
+
   try {
     const context = ensurePreparedCanvas()
     const bitmap = context.canvas.transferToImageBitmap()
@@ -2537,7 +2545,7 @@ const postPreparedSnapshot = async (
     )
   } catch (error) {
     if (debug) console.warn('[AkariSub] Failed to copy prepared exact frame:', error)
-    postMessage({ target: 'preparedFrame', prepareId, renderEpoch, time })
+    postMessage({ target: 'preparedFrame', prepareId, renderEpoch, time, failed: true })
   }
 }
 
@@ -2549,6 +2557,15 @@ const paintPreparedImages = (
 ): void => {
   const width = self.width
   const height = self.height
+
+  if (width <= 0 || height <= 0) {
+    for (const image of images) {
+      if (image.image instanceof ImageBitmap) image.image.close()
+    }
+    postMessage({ target: 'preparedFrame', prepareId, renderEpoch, time, failed: true })
+    completeRenderCycle()
+    return
+  }
 
   try {
     preparedCtx = ensurePreparedCanvas()
@@ -2563,6 +2580,20 @@ const paintPreparedImages = (
         continue
       }
 
+      const byteLength = image.w * image.h * 4
+      const pixels =
+        image.image instanceof Uint8ClampedArray
+          ? image.image
+          : self.HEAPU8C.subarray(image.image as number, (image.image as number) + byteLength)
+
+      if (blendMode === 'wasm') {
+        // renderBlendCollect returns fully composited, mutually disjoint
+        // rectangles. Writing them directly is output-equivalent and avoids a
+        // second canvas upload plus draw for every prepared plane.
+        preparedCtx.putImageData(createSubtitleImageData(pixels, image.w, image.h), image.x, image.y)
+        continue
+      }
+
       if (!preparedBufferCanvas) preparedBufferCanvas = new OffscreenCanvas(image.w, image.h)
       if (preparedBufferCanvas.width !== image.w || preparedBufferCanvas.height !== image.h) {
         preparedBufferCanvas.width = image.w
@@ -2572,11 +2603,6 @@ const paintPreparedImages = (
       preparedBufferCtx ??= preparedBufferCanvas.getContext('2d', workerCanvas2dSettings())
       if (!preparedBufferCtx) throw new Error('Prepared-frame buffer canvas is unavailable')
 
-      const byteLength = image.w * image.h * 4
-      const pixels =
-        image.image instanceof Uint8ClampedArray
-          ? image.image
-          : self.HEAPU8C.subarray(image.image as number, (image.image as number) + byteLength)
       preparedBufferCtx.putImageData(createSubtitleImageData(pixels, image.w, image.h), 0, 0)
       preparedCtx.drawImage(preparedBufferCanvas, image.x, image.y)
     }
@@ -2587,7 +2613,7 @@ const paintPreparedImages = (
       if (image.image instanceof ImageBitmap) image.image.close()
     }
     if (debug) console.warn('[AkariSub] Failed to prepare exact frame:', error)
-    postMessage({ target: 'preparedFrame', prepareId, renderEpoch, time, unchanged: true })
+    postMessage({ target: 'preparedFrame', prepareId, renderEpoch, time, failed: true })
     completeRenderCycle()
   }
 }
@@ -2634,6 +2660,7 @@ const paintImages = ({
   const resultObject = {
     target: 'render',
     asyncRender,
+    preblended: blendMode === 'wasm',
     images,
     times,
     width,
@@ -2672,14 +2699,21 @@ const paintImages = ({
           const imgW = img.w
           const imgH = img.h
 
+          const pointer = img.image as number
+          const byteLength = imgW * imgH * 4
+          const rawData = self.HEAPU8C.subarray(pointer, pointer + byteLength)
+
+          if (blendMode === 'wasm') {
+            // WASM blend planes are flattened and disjoint, so direct writes
+            // preserve their pixels without an intermediate upload/draw.
+            offCanvasCtx!.putImageData(createSubtitleImageData(rawData, imgW, imgH), img.x, img.y)
+            continue
+          }
+
           if (bufferCanvas!.width !== imgW || bufferCanvas!.height !== imgH) {
             bufferCanvas!.width = imgW
             bufferCanvas!.height = imgH
           }
-
-          const pointer = img.image as number
-          const byteLength = imgW * imgH * 4
-          const rawData = self.HEAPU8C.subarray(pointer, pointer + byteLength)
 
           bufferCtx!.putImageData(createSubtitleImageData(rawData, imgW, imgH), 0, 0)
           offCanvasCtx!.drawImage(bufferCanvas!, img.x, img.y)

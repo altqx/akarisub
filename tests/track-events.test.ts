@@ -23,6 +23,31 @@ const cue = (index: number, start = 1, duration = 2): CueEvent => ({
   layer: 0
 })
 
+const installEventTargetMock = (renderer: any) => {
+  const listeners = new Map<string, Set<(event: any) => void>>()
+  renderer.addEventListener = (type: string, listener: (event: any) => void) => {
+    let handlers = listeners.get(type)
+    if (!handlers) listeners.set(type, (handlers = new Set()))
+    handlers.add(listener)
+  }
+  renderer.removeEventListener = (type: string, listener: (event: any) => void) => {
+    listeners.get(type)?.delete(listener)
+  }
+  renderer.dispatchEvent = (event: any) => {
+    for (const listener of [...(listeners.get(event.type) ?? [])]) listener(event)
+    return true
+  }
+
+  return {
+    dispatch(type: string, event: Record<string, unknown> = {}) {
+      renderer.dispatchEvent({ type, ...event })
+    },
+    count(type: string) {
+      return listeners.get(type)?.size ?? 0
+    }
+  }
+}
+
 describe('libass cue timestamps', () => {
   test('floors fractional milliseconds and snaps exact millisecond round-off', () => {
     expect(toLibassTimestampMs(1.001)).toBe(1001)
@@ -150,27 +175,22 @@ describe('AkariSub track swap and callbacks', () => {
     expect(posted[0]?.source).toEqual({ kind: 'url', url: '/subs/en.ass' })
   })
 
-  test('activatePreloadedTrack bumps the render epoch and keeps the last frame until the new track paints', async () => {
-    const renderer = Object.create(AkariSub.prototype) as AkariSub & {
-      _destroyed: boolean
-      _workerReady: boolean
-      _loaded: Promise<void>
-      _destroyedSignal: Promise<void>
-      _nextTrackRequestId: number
-      _preloadedTrackId: number | null
-      _ctx: { filter: string } | null
-      _bumpRenderEpoch: () => void
-      _reAttachOffscreen: () => void
-      _syncVideoClock: () => void
-      _fetchFromWorker: (message: Record<string, unknown>) => Promise<Record<string, unknown>>
-    }
+  test('activatePreloadedTrack waits for its tagged readiness after the worker response', async () => {
+    const renderer = Object.create(AkariSub.prototype) as any
     const calls: string[] = []
+    const events = installEventTargetMock(renderer)
+    let resolveResponse!: (response: Record<string, unknown>) => void
+    const response = new Promise<Record<string, unknown>>((resolve) => {
+      resolveResponse = resolve
+    })
 
     Object.assign(renderer, {
       _destroyed: false,
       _workerReady: true,
       _loaded: Promise.resolve(),
       _destroyedSignal: new Promise<void>(() => {}),
+      _pendingWorkerRejectors: new Set(),
+      _pendingTrackReadyWaiters: new Map(),
       _nextTrackRequestId: 3,
       _preloadedTrackId: 4,
       _ctx: { filter: 'url("#f")' },
@@ -179,14 +199,303 @@ describe('AkariSub track swap and callbacks', () => {
       _syncVideoClock: () => calls.push('sync'),
       _fetchFromWorker: async (message: Record<string, unknown>) => {
         calls.push(`activate:${String(message.id)}`)
+        renderer._trackReady({ requestId: message.requestId })
+        return response
+      }
+    })
+
+    let settled = false
+    const activation = renderer.activatePreloadedTrack().then((value: unknown) => {
+      settled = true
+      return value
+    })
+    await Promise.resolve()
+    expect(settled).toBe(false)
+    expect(calls).toEqual(['bump', 'activate:4', 'sync'])
+
+    resolveResponse({ success: true, id: 4 })
+    await expect(activation).resolves.toEqual({ id: 4 })
+    expect(calls).toEqual(['bump', 'activate:4', 'sync', 'reattach'])
+    expect(renderer._preloadedTrackId).toBe(null)
+    expect(renderer._ctx?.filter).toBe('none')
+    expect(events.count('trackReady')).toBe(0)
+    expect(renderer._pendingWorkerRejectors.size).toBe(0)
+    expect(renderer._pendingTrackReadyWaiters.size).toBe(0)
+  })
+
+  test('activatePreloadedTrack resynchronizes only when offscreen reattachment replaces the canvas', async () => {
+    const renderer = Object.create(AkariSub.prototype) as any
+    const calls: string[] = []
+    installEventTargetMock(renderer)
+
+    Object.assign(renderer, {
+      _destroyed: false,
+      _workerReady: true,
+      _loaded: Promise.resolve(),
+      _destroyedSignal: new Promise<void>(() => {}),
+      _pendingWorkerRejectors: new Set(),
+      _pendingTrackReadyWaiters: new Map(),
+      _nextTrackRequestId: 5,
+      _preloadedTrackId: 6,
+      _offscreenRender: true,
+      _ctx: { filter: 'url("#f")' },
+      _onDemandRender: false,
+      _bumpRenderEpoch: () => calls.push('bump'),
+      _reAttachOffscreen: () => {
+        calls.push('reattach')
+        renderer._ctx = false
+      },
+      _syncVideoClock: () => calls.push('sync'),
+      _fetchFromWorker: async (message: Record<string, unknown>) => {
+        calls.push(`activate:${String(message.id)}`)
+        renderer._trackReady({ requestId: message.requestId })
         return { success: true, id: message.id }
       }
     })
 
-    await expect(renderer.activatePreloadedTrack()).resolves.toEqual({ id: 4 })
-    expect(calls).toEqual(['bump', 'activate:4', 'reattach', 'sync'])
-    expect(renderer._preloadedTrackId).toBe(null)
-    expect(renderer._ctx?.filter).toBe('none')
+    await expect(renderer.activatePreloadedTrack()).resolves.toEqual({ id: 6 })
+    expect(calls).toEqual(['bump', 'activate:6', 'sync', 'reattach', 'sync'])
+    expect(renderer._pendingWorkerRejectors.size).toBe(0)
+    expect(renderer._pendingTrackReadyWaiters.size).toBe(0)
+  })
+
+  test('activatePreloadedTrack preserves color conversion verified before the worker response', async () => {
+    const renderer = Object.create(AkariSub.prototype) as any
+    const calls: string[] = []
+    installEventTargetMock(renderer)
+
+    Object.assign(renderer, {
+      _destroyed: false,
+      _workerReady: true,
+      _loaded: Promise.resolve(),
+      _destroyedSignal: new Promise<void>(() => {}),
+      _pendingWorkerRejectors: new Set(),
+      _pendingTrackReadyWaiters: new Map(),
+      _nextTrackRequestId: 7,
+      _preloadedTrackId: 8,
+      _offscreenRender: true,
+      _ctx: false,
+      _gpuRenderer: null,
+      _lastSubtitleColorSpace: null,
+      _videoColorSpace: 'BT601',
+      _videoColorProfile: { matrix: 'BT601' },
+      _onDemandRender: false,
+      _bumpRenderEpoch: () => calls.push('bump'),
+      _applyGpuColorManagement: () => calls.push('color'),
+      _detachOffscreen: () => {
+        calls.push('detach')
+        renderer._ctx = { filter: 'none' }
+      },
+      _reAttachOffscreen: () => calls.push('reattach'),
+      _syncVideoClock: () => calls.push('sync'),
+      _fetchFromWorker: async (message: Record<string, unknown>) => {
+        renderer._verifyColorSpace({ subtitleColorSpace: 'BT709', videoColorSpace: 'BT601' })
+        renderer._trackReady({ requestId: message.requestId })
+        return { success: true, id: message.id }
+      }
+    })
+
+    await expect(renderer.activatePreloadedTrack()).resolves.toEqual({ id: 8 })
+    expect(calls).toEqual(['bump', 'color', 'detach', 'sync'])
+    expect(renderer._ctx).toBeTruthy()
+    expect(renderer._ctx.filter).not.toBe('none')
+    expect(renderer._lastSubtitleColorSpace).toBe('BT709')
+  })
+
+  test('a later track change rejects a paused exact activation instead of stranding its runway wait', async () => {
+    const renderer = Object.create(AkariSub.prototype) as any
+    const events = installEventTargetMock(renderer)
+
+    Object.assign(renderer, {
+      _destroyed: false,
+      _workerReady: true,
+      _loaded: Promise.resolve(),
+      _destroyedSignal: new Promise<void>(() => {}),
+      _pendingWorkerRejectors: new Set(),
+      _pendingTrackReadyWaiters: new Map(),
+      _frameBufferReadyEvent: null,
+      _nextTrackRequestId: 30,
+      _preloadedTrackId: 31,
+      _ctx: null,
+      _onDemandRender: true,
+      _frameTimeline: new Float64Array([0, 0.04, 0.08]),
+      framePrefetch: 2,
+      _bumpRenderEpoch: () => {},
+      _reAttachOffscreen: () => {},
+      _syncVideoClock: () => {},
+      _currentExactFrameMediaTime: () => 0,
+      _primePreparedFrames: () => {},
+      _dispatchNextPreparation: () => {},
+      _fetchFromWorker: async (message: Record<string, unknown>) => {
+        renderer._trackReady({ requestId: message.requestId })
+        return { success: true, id: message.id }
+      }
+    })
+
+    const activation = renderer.activatePreloadedTrack()
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(renderer._frameBufferReadyEvent).toEqual({ type: 'trackReady', requestId: 30 })
+    expect(renderer._pendingTrackReadyWaiters.size).toBe(1)
+
+    renderer._trackReady()
+
+    await expect(activation).rejects.toThrow('superseded by a newer track change')
+    expect(renderer._frameBufferReadyEvent).toEqual({ type: 'trackReady', requestId: undefined })
+    expect(events.count('trackReady')).toBe(0)
+    expect(events.count('error')).toBe(0)
+    expect(renderer._pendingWorkerRejectors.size).toBe(0)
+    expect(renderer._pendingTrackReadyWaiters.size).toBe(0)
+  })
+
+  test('freeTrack immediately supersedes a paused exact activation runway', async () => {
+    const renderer = Object.create(AkariSub.prototype) as any
+    const events = installEventTargetMock(renderer)
+    const posted: string[] = []
+    let resolveActivation: (() => void) | undefined
+
+    Object.assign(renderer, {
+      _destroyed: false,
+      _workerReady: true,
+      _loaded: Promise.resolve(),
+      _destroyedSignal: new Promise<void>(() => {}),
+      _pendingWorkerRejectors: new Set(),
+      _pendingTrackReadyWaiters: new Map(),
+      _frameBufferReadyEvent: null,
+      _nextTrackRequestId: 40,
+      _preloadedTrackId: 41,
+      _ctx: null,
+      _onDemandRender: true,
+      _frameTimeline: new Float64Array([0, 0.04, 0.08]),
+      framePrefetch: 2,
+      _bumpRenderEpoch: () => {},
+      _reAttachOffscreen: () => {},
+      _syncVideoClock: () => {},
+      _currentExactFrameMediaTime: () => 0,
+      _primePreparedFrames: () => {},
+      _dispatchNextPreparation: () => {},
+      sendMessage: async (target: string) => {
+        posted.push(target)
+      },
+      _fetchFromWorker: (message: Record<string, unknown>) =>
+        new Promise((resolve) => {
+          resolveActivation = () => resolve({ success: true, id: message.id })
+        })
+    })
+
+    const activation = renderer.activatePreloadedTrack()
+    expect(renderer._frameBufferReadyEvent).toBe(null)
+    expect(renderer._pendingTrackReadyWaiters.size).toBe(1)
+    renderer.freeTrack()
+    expect(renderer._pendingTrackReadyWaiters.size).toBe(0)
+    resolveActivation?.()
+
+    await expect(activation).rejects.toThrow('superseded by a newer track change')
+    expect(posted).toEqual(['freeTrack'])
+    expect(renderer._frameBufferReadyEvent).toBe(null)
+    expect(events.count('trackReady')).toBe(0)
+    expect(events.count('error')).toBe(0)
+    expect(renderer._pendingWorkerRejectors.size).toBe(0)
+    expect(renderer._pendingTrackReadyWaiters.size).toBe(0)
+  })
+
+  test('activatePreloadedTrack ignores stale readiness and rejects cleanly on renderer error', async () => {
+    const renderer = Object.create(AkariSub.prototype) as any
+    const events = installEventTargetMock(renderer)
+    let requestId = -1
+
+    Object.assign(renderer, {
+      _destroyed: false,
+      _workerReady: true,
+      _loaded: Promise.resolve(),
+      _destroyedSignal: new Promise<void>(() => {}),
+      _pendingWorkerRejectors: new Set(),
+      _pendingTrackReadyWaiters: new Map(),
+      _nextTrackRequestId: 8,
+      _preloadedTrackId: 12,
+      _ctx: null,
+      _bumpRenderEpoch: () => {},
+      _reAttachOffscreen: () => {},
+      _syncVideoClock: () => {},
+      _fetchFromWorker: async (message: Record<string, unknown>) => {
+        requestId = Number(message.requestId)
+        return { success: true, id: message.id }
+      }
+    })
+
+    let settled = false
+    const activation = renderer.activatePreloadedTrack().finally(() => {
+      settled = true
+    })
+    await Promise.resolve()
+    await Promise.resolve()
+
+    events.dispatch('trackReady', { detail: { requestId: requestId - 1 } })
+    await Promise.resolve()
+    expect(settled).toBe(false)
+
+    const originalError = new Error('render pipeline failed')
+    events.dispatch('error', { error: originalError, message: originalError.message })
+    await expect(activation).rejects.toBe(originalError)
+    expect(events.count('trackReady')).toBe(0)
+    expect(events.count('error')).toBe(0)
+    expect(renderer._pendingWorkerRejectors.size).toBe(0)
+  })
+
+  test('activatePreloadedTrack cleans its readiness waiter when activation is rejected', async () => {
+    const renderer = Object.create(AkariSub.prototype) as any
+    const events = installEventTargetMock(renderer)
+
+    Object.assign(renderer, {
+      _destroyed: false,
+      _workerReady: true,
+      _loaded: Promise.resolve(),
+      _destroyedSignal: new Promise<void>(() => {}),
+      _pendingWorkerRejectors: new Set(),
+      _pendingTrackReadyWaiters: new Map(),
+      _nextTrackRequestId: 14,
+      _preloadedTrackId: 20,
+      _bumpRenderEpoch: () => {},
+      _fetchFromWorker: async () => ({ success: false, error: 'activation rejected' })
+    })
+
+    await expect(renderer.activatePreloadedTrack()).rejects.toThrow('activation rejected')
+    expect(events.count('trackReady')).toBe(0)
+    expect(events.count('error')).toBe(0)
+    expect(renderer._pendingWorkerRejectors.size).toBe(0)
+  })
+
+  test('activatePreloadedTrack rejects and cleans readiness when the renderer is destroyed', async () => {
+    const renderer = Object.create(AkariSub.prototype) as any
+    const events = installEventTargetMock(renderer)
+
+    Object.assign(renderer, {
+      _destroyed: false,
+      _workerReady: true,
+      _loaded: Promise.resolve(),
+      _destroyedSignal: new Promise<void>(() => {}),
+      _pendingWorkerRejectors: new Set<(error: Error) => void>(),
+      _pendingTrackReadyWaiters: new Map(),
+      _nextTrackRequestId: 21,
+      _preloadedTrackId: 22,
+      _ctx: null,
+      _bumpRenderEpoch: () => {},
+      _reAttachOffscreen: () => {},
+      _syncVideoClock: () => {},
+      _fetchFromWorker: async (message: Record<string, unknown>) => ({ success: true, id: message.id })
+    })
+
+    const activation = renderer.activatePreloadedTrack()
+    await Promise.resolve()
+    await Promise.resolve()
+
+    const destroyedError = new Error('renderer destroyed')
+    for (const rejectPending of [...renderer._pendingWorkerRejectors]) rejectPending(destroyedError)
+    await expect(activation).rejects.toBe(destroyedError)
+    expect(events.count('trackReady')).toBe(0)
+    expect(events.count('error')).toBe(0)
+    expect(renderer._pendingWorkerRejectors.size).toBe(0)
   })
 
   test('initStreamingTrack posts a parsed header without replacing via setTrack', () => {

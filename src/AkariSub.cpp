@@ -1121,13 +1121,11 @@ public:
 
       // The LUT is laid out as RGBA vectors so each pixel blends with one
       // SIMD multiply-add over all four channels.
-      float lut_a[256];
       float lut_rgba[256][4] __attribute__((aligned(16)));
       float lut_inv_rgba[256][4] __attribute__((aligned(16)));
       for (int i = 0; i < 256; ++i) {
         float pix_alpha = i * a_factor;
         float inv_pix_alpha = 1.0f - pix_alpha;
-        lut_a[i] = pix_alpha;
         lut_rgba[i][0] = r * pix_alpha;
         lut_rgba[i][1] = g * pix_alpha;
         lut_rgba[i][2] = b_val * pix_alpha;
@@ -1186,7 +1184,6 @@ public:
       return NULL;
     }
     storage->taken = true;
-    memset(result, 0, needed);
 
     int total_pixels = width * height;
     // Preserve every contribution that rounds to a visible 8-bit alpha.
@@ -1215,6 +1212,11 @@ public:
         v128_t n16 = wasm_i16x8_narrow_i32x4(u, u);
         v128_t n8 = wasm_u8x16_narrow_i16x8(n16, n16);
         result[i] = (unsigned int)wasm_i32x4_extract_lane(n8, 0);
+      } else {
+        // The reusable output plane is not zero-initialized. Overwrite every
+        // transparent pixel explicitly so stale bytes can never escape while
+        // avoiding a second full-plane memory pass before this loop.
+        result[i] = 0;
       }
     }
 

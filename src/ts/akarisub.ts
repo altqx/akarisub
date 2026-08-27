@@ -124,6 +124,11 @@ interface PrepareRequest {
   presentation?: DemandMetadata
 }
 
+interface DeferredReadyEvent {
+  type: 'ready' | 'trackReady'
+  requestId?: number
+}
+
 const DEFAULT_RENDER_AHEAD = 0
 
 const isLikelyWebKit = (): boolean => {
@@ -172,6 +177,7 @@ export default class AkariSub extends EventTarget {
   private _destroyedSignal: Promise<void>
   private _resolveDestroyed!: () => void
   private _pendingWorkerRejectors = new Set<(error: Error) => void>()
+  private _pendingTrackReadyWaiters = new Map<number, (error: Error) => void>()
   private _onDemandRender: boolean
   private _offscreenRender: boolean
   private _video?: HTMLVideoElement
@@ -197,7 +203,7 @@ export default class AkariSub extends EventTarget {
   private _playstate: boolean = true
   private _destroyed: boolean = false
   private _workerReady: boolean = false
-  private _frameBufferReadyEvent: 'ready' | 'trackReady' | null = null
+  private _frameBufferReadyEvent: DeferredReadyEvent | null = null
   private _ro?: ResizeObserver
   private _worker: Worker
   private _pendingDemandTimes: DemandMetadata[] = []
@@ -223,6 +229,7 @@ export default class AkariSub extends EventTarget {
   private _prepareRequests = new Map<number, PrepareRequest>()
   private _nextPrepareId: number = 1
   private _prepareForce: boolean = true
+  private _prepareFailureEpoch: number = -1
   private _timingCompensationSeconds: number = 0
   private _rvfcHandle: number | null = null
   private _rvfcGeneration: number = 0
@@ -991,6 +998,17 @@ export default class AkariSub extends EventTarget {
   }
 
   /** @internal */
+  private _requiresCanvasColorConversion(): boolean {
+    const target = this._videoColorProfile?.matrix ?? this._videoColorSpace
+    return (
+      !this._gpuRenderer &&
+      !!this._lastSubtitleColorSpace &&
+      !!target &&
+      this._lastSubtitleColorSpace !== target
+    )
+  }
+
+  /** @internal */
   private _showGPURecoveryFrame(): void {
     if (!this._canvasParent || !this._canvas) return
     const snapshot = this._materializeGPUSnapshot(this._lastGPUFrame)
@@ -1250,6 +1268,16 @@ export default class AkariSub extends EventTarget {
 
       this._canvas.style.width = videoSize.width + 'px'
       this._canvas.style.height = videoSize.height + 'px'
+    } else if ((!width || !height) && this._videoFrameClock) {
+      const renderSize = computeCanvasSize(
+        this._videoFrameClock.width,
+        this._videoFrameClock.height,
+        this.prescaleFactor,
+        this.prescaleHeightLimit,
+        this.maxRenderHeight
+      )
+      width = renderSize.width
+      height = renderSize.height
     }
 
     this._canvas.style.top = top + 'px'
@@ -1392,6 +1420,7 @@ export default class AkariSub extends EventTarget {
 
   /** Fetch and load an ASS/SSA track from `url`. */
   setTrackByUrl(url: string): void {
+    this._supersedePendingTrackActivation()
     this._bumpRenderEpoch()
     this.sendMessage('setTrackByUrl', { url })
     this._reAttachOffscreen()
@@ -1400,6 +1429,7 @@ export default class AkariSub extends EventTarget {
 
   /** Replace the current track with ASS/SSA text or bytes. */
   setTrack(content: string | Uint8Array | ArrayBuffer): void {
+    this._supersedePendingTrackActivation()
     this._bumpRenderEpoch()
     this.sendMessage('setTrack', { content }, AkariSub._getSubtitleTransfers(content))
     this._reAttachOffscreen()
@@ -1412,6 +1442,7 @@ export default class AkariSub extends EventTarget {
    * materialized in the main thread.
    */
   setEncryptedTrack(content: EncryptedSubtitleContent): void {
+    this._supersedePendingTrackActivation()
     this._bumpRenderEpoch()
     this.sendMessage('setEncryptedTrack', { content }, AkariSub._getSubtitleTransfers(undefined, content))
     this._reAttachOffscreen()
@@ -1420,6 +1451,7 @@ export default class AkariSub extends EventTarget {
 
   /** Unload the current track without destroying the renderer. */
   freeTrack(): void {
+    this._supersedePendingTrackActivation()
     this._sendMutatingMessage('freeTrack')
   }
 
@@ -1431,6 +1463,7 @@ export default class AkariSub extends EventTarget {
    */
   initStreamingTrack(options?: StreamingTrackOptions | string | Uint8Array | ArrayBuffer): void {
     const parsed = parseStreamingTrackOptions(options)
+    this._supersedePendingTrackActivation()
     this._bumpRenderEpoch()
     this.sendMessage(
       'initStreamingTrack',
@@ -1527,8 +1560,9 @@ export default class AkariSub extends EventTarget {
   }
 
   /**
-   * Replace the visible track with a previously preloaded one. The last
-   * painted frame stays on screen until the new track's first frame is ready.
+   * Replace the visible track with a previously preloaded one. The returned
+   * promise waits for the matching readiness cycle; paused exact-timeline
+   * renderers also finish their configured frame-prefetch runway.
    */
   async activatePreloadedTrack(id: number = this._preloadedTrackId ?? -1): Promise<PreloadedTrack> {
     const ready =
@@ -1539,20 +1573,35 @@ export default class AkariSub extends EventTarget {
 
     this._bumpRenderEpoch()
     const requestId = this._nextTrackRequestId++
-    const result = await this._fetchFromWorker<{ success: boolean; id?: number; error?: string }>({
-      target: 'activatePreloadedTrack',
-      requestId,
-      id,
-      timeoutMs: null
-    })
-    if (!result.success || result.id == null) {
-      throw new Error(result.error || 'The preloaded track could not be activated')
+    const readiness = this._waitForTrackReady(requestId)
+
+    try {
+      const result = await this._fetchFromWorker<{ success: boolean; id?: number; error?: string }>({
+        target: 'activatePreloadedTrack',
+        requestId,
+        id,
+        timeoutMs: null
+      })
+      if (!result.success || result.id == null) {
+        throw new Error(result.error || 'The preloaded track could not be activated')
+      }
+      if (this._preloadedTrackId === result.id) this._preloadedTrackId = null
+      const requiresCanvasColorConversion = this._requiresCanvasColorConversion()
+      const reattachedOffscreen = !requiresCanvasColorConversion && this._offscreenRender && !!this._ctx
+      if (!requiresCanvasColorConversion) {
+        this._reAttachOffscreen()
+        if (this._ctx) this._ctx.filter = 'none'
+      }
+      // The matching trackReady already synchronized the clock. Repeat it only
+      // when reattachment replaced the canvas that received that first render.
+      if (reattachedOffscreen) this._syncVideoClock()
+
+      const readinessError = await readiness.promise
+      if (readinessError) throw readinessError
+      return { id: result.id }
+    } finally {
+      readiness.cancel()
     }
-    if (this._preloadedTrackId === result.id) this._preloadedTrackId = null
-    this._reAttachOffscreen()
-    if (this._ctx) this._ctx.filter = 'none'
-    this._syncVideoClock()
-    return { id: result.id }
   }
 
   /** Tell the worker whether playback is paused. Ignored when a video element is attached. */
@@ -1880,7 +1929,9 @@ export default class AkariSub extends EventTarget {
 
     const event = this._frameBufferReadyEvent
     this._frameBufferReadyEvent = null
-    this.dispatchEvent(new CustomEvent(event))
+    this.dispatchEvent(
+      new CustomEvent(event.type, event.requestId == null ? undefined : { detail: { requestId: event.requestId } })
+    )
   }
 
   /** @internal */
@@ -2399,7 +2450,13 @@ export default class AkariSub extends EventTarget {
   /** @internal */
   private _primePreparedFrames(mediaTime: number): void {
     const timeline = this._frameTimeline
-    if (!timeline || timeline.length === 0 || this.framePrefetch <= 0 || this._destroyed) {
+    if (
+      !timeline ||
+      timeline.length === 0 ||
+      this.framePrefetch <= 0 ||
+      this._destroyed ||
+      (this._prepareFailureEpoch ?? -1) >= 0 && this._prepareFailureEpoch === this._renderEpoch
+    ) {
       return
     }
 
@@ -2436,7 +2493,15 @@ export default class AkariSub extends EventTarget {
 
   /** @internal */
   private _dispatchNextPreparation(): void {
-    if (this.busy || !this._workerReady || !this._frameTimeline || this.framePrefetch <= 0) return
+    if (
+      this.busy ||
+      !this._workerReady ||
+      !this._frameTimeline ||
+      this.framePrefetch <= 0 ||
+      (this._prepareFailureEpoch ?? -1) >= 0 && this._prepareFailureEpoch === this._renderEpoch
+    ) {
+      return
+    }
 
     let index: number | undefined
     while ((index = this._prepareQueue.shift()) != null) {
@@ -2468,13 +2533,22 @@ export default class AkariSub extends EventTarget {
     width?: number
     height?: number
     bitmap?: ImageBitmap
+    failed?: boolean
   }): void {
     const request = this._prepareRequests.get(data.prepareId)
     this._prepareRequests.delete(data.prepareId)
 
+    const validEpoch =
+      request != null && request.renderEpoch === this._renderEpoch && data.renderEpoch === this._renderEpoch
+    if (data.failed && validEpoch) {
+      // A snapshot failure must not immediately enqueue the same frame again.
+      // Fall back to demand rendering for this epoch and let a later epoch retry.
+      this._prepareFailureEpoch = this._renderEpoch
+      this._prepareQueue.length = 0
+    }
+
     if (request?.presentation) {
       const presentation = request.presentation
-      const validEpoch = request.renderEpoch === this._renderEpoch && data.renderEpoch === this._renderEpoch
       const currentIndex = this._currentExactFrameIndex()
       const obsolete = currentIndex != null && request.index < currentIndex
 
@@ -2645,6 +2719,7 @@ export default class AkariSub extends EventTarget {
   /** @internal */
   private _bumpRenderEpoch(): void {
     this._renderEpoch++
+    this._prepareFailureEpoch = -1
     this._pendingDemandTimes.length = 0
     this._demandTimings.clear()
     this._clearPreparedFrames()
@@ -3085,6 +3160,7 @@ export default class AkariSub extends EventTarget {
   private _render(data: {
     images: RenderImage[]
     asyncRender: boolean
+    preblended?: boolean
     times: RenderTimes
     width: number
     height: number
@@ -3150,6 +3226,7 @@ export default class AkariSub extends EventTarget {
         const hasAlphaBug = AkariSub._hasAlphaBug ?? false
         const bufferCanvas = this._bufferCanvas
         const bufferCtx = this._bufferCtx
+        const canWritePreblendedDirectly = data.preblended === true && ctx.filter === 'none'
 
         for (let i = 0; i < imageCount; i++) {
           const image = images[i]
@@ -3165,11 +3242,22 @@ export default class AkariSub extends EventTarget {
                   ? new Uint8ClampedArray(rawImage.buffer, rawImage.byteOffset, rawImage.byteLength)
                   : new Uint8ClampedArray(rawImage as ArrayBuffer)
             const fixedData = fixAlpha(rawData, hasAlphaBug)
+            const imageData = createSubtitleImageData(fixedData as Uint8ClampedArray, imgW, imgH)
+
+            if (canWritePreblendedDirectly) {
+              // renderBlendCollect guarantees these rectangles are already
+              // source-over flattened and mutually disjoint. The render target
+              // is cleared above, so a direct write preserves the same frame
+              // while avoiding one upload and draw per plane.
+              ctx.putImageData(imageData, image.x, image.y)
+              continue
+            }
+
             if (bufferCanvas.width !== imgW || bufferCanvas.height !== imgH) {
               bufferCanvas.width = imgW
               bufferCanvas.height = imgH
             }
-            bufferCtx.putImageData(createSubtitleImageData(fixedData as Uint8ClampedArray, imgW, imgH), 0, 0)
+            bufferCtx.putImageData(imageData, 0, 0)
             ctx.drawImage(bufferCanvas, image.x, image.y)
           }
         }
@@ -3308,7 +3396,7 @@ export default class AkariSub extends EventTarget {
       const isPaused = this._isVideoPausedForWorker()
       const bufferExactFrames =
         isPaused && this._onDemandRender && !!this._frameTimeline?.length && this.framePrefetch > 0
-      this._frameBufferReadyEvent = bufferExactFrames ? 'ready' : null
+      this._frameBufferReadyEvent = bufferExactFrames ? { type: 'ready' } : null
       this.setCurrentTime(isPaused, currentTime + this.timeOffset, this._videoPlaybackRateForWorker())
 
       if (!this._onDemandRender) {
@@ -3342,21 +3430,46 @@ export default class AkariSub extends EventTarget {
   }
 
   /** @internal */
-  private _trackReady(): void {
+  private _trackReady(data: { requestId?: number } = {}): void {
+    this._supersedePendingTrackActivation(data.requestId)
+
     const bufferExactFrames =
       this._workerReady &&
       this._isVideoPausedForWorker() &&
       this._onDemandRender &&
       !!this._frameTimeline?.length &&
       this.framePrefetch > 0
-    this._frameBufferReadyEvent = bufferExactFrames ? 'trackReady' : null
+    this._frameBufferReadyEvent = bufferExactFrames
+      ? { type: 'trackReady', requestId: data.requestId }
+      : null
     this._syncVideoClock()
     if (bufferExactFrames) {
       this._primePreparedFrames(this._currentExactFrameMediaTime())
       this._dispatchNextPreparation()
       return
     }
-    this.dispatchEvent(new CustomEvent('trackReady'))
+    this.dispatchEvent(
+      new CustomEvent('trackReady', data.requestId == null ? undefined : { detail: { requestId: data.requestId } })
+    )
+  }
+
+  /** @internal */
+  private _supersedePendingTrackActivation(nextRequestId?: number): void {
+    const supersededRequestIds = new Set<number>()
+    for (const [requestId, supersede] of [...(this._pendingTrackReadyWaiters ?? [])]) {
+      if (requestId === nextRequestId) continue
+      supersededRequestIds.add(requestId)
+      supersede(new Error('Track activation was superseded by a newer track change'))
+    }
+
+    const pending = this._frameBufferReadyEvent
+    if (
+      pending?.type === 'trackReady' &&
+      pending.requestId != null &&
+      supersededRequestIds.has(pending.requestId)
+    ) {
+      this._frameBufferReadyEvent = null
+    }
   }
 
   /** Send a raw message to the worker. Prefer the typed methods above. */
@@ -3407,6 +3520,19 @@ export default class AkariSub extends EventTarget {
               }, timeoutMs)
 
         const handleMessage = (event: MessageEvent) => {
+          if (event.data.target === 'error') {
+            const workerError = event.data.error
+            handleError(
+              workerError instanceof Error
+                ? workerError
+                : new Error(
+                    typeof workerError === 'string'
+                      ? workerError
+                      : workerError?.message || 'Unknown worker error'
+                  )
+            )
+            return
+          }
           if (
             event.data.target === target &&
             (workerMessage.requestId === undefined || event.data.requestId === workerMessage.requestId)
@@ -3446,6 +3572,50 @@ export default class AkariSub extends EventTarget {
         reject(error)
       }
     })
+  }
+
+  /** @internal */
+  private _waitForTrackReady(requestId: number): {
+    promise: Promise<Error | null>
+    cancel: () => void
+  } {
+    let cancel = (): void => {}
+    const promise = new Promise<Error | null>((resolve) => {
+      let settled = false
+
+      const cleanup = (): void => {
+        this.removeEventListener('trackReady', handleTrackReady)
+        this.removeEventListener('error', handleError)
+        this._pendingWorkerRejectors.delete(handleDestroyed)
+        if (this._pendingTrackReadyWaiters.get(requestId) === handleSuperseded) {
+          this._pendingTrackReadyWaiters.delete(requestId)
+        }
+      }
+      const settle = (error: Error | null): void => {
+        if (settled) return
+        settled = true
+        cleanup()
+        resolve(error)
+      }
+      const handleTrackReady = (event: Event): void => {
+        if ((event as CustomEvent<{ requestId?: number }>).detail?.requestId !== requestId) return
+        settle(null)
+      }
+      const handleError = (event: Event): void => {
+        const errorEvent = event as ErrorEvent
+        settle(errorEvent.error instanceof Error ? errorEvent.error : new Error(errorEvent.message || 'Renderer error'))
+      }
+      const handleDestroyed = (error: Error): void => settle(error)
+      const handleSuperseded = (error: Error): void => settle(error)
+
+      cancel = () => settle(null)
+      this.addEventListener('trackReady', handleTrackReady)
+      this.addEventListener('error', handleError)
+      this._pendingWorkerRejectors.add(handleDestroyed)
+      this._pendingTrackReadyWaiters.set(requestId, handleSuperseded)
+    })
+
+    return { promise, cancel: () => cancel() }
   }
 
   /** @internal */

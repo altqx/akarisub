@@ -1402,7 +1402,7 @@ describe('subtitle timing compensation', () => {
     let ready = 0
 
     Object.assign(renderer, {
-      _frameBufferReadyEvent: 'ready',
+      _frameBufferReadyEvent: { type: 'ready' },
       _frameTimeline: new Float64Array([0, 0.042, 0.083]),
       _video: { paused: true, ended: false, currentTime: 0, playbackRate: 1 },
       _playstate: true,
@@ -1435,6 +1435,7 @@ describe('subtitle timing compensation', () => {
     const renderer = Object.create(AkariSub.prototype) as any
     let syncs = 0
     let trackReady = 0
+    let readyRequestId: number | undefined
 
     Object.assign(renderer, {
       _workerReady: true,
@@ -1442,22 +1443,75 @@ describe('subtitle timing compensation', () => {
       _playstate: true,
       _onDemandRender: true,
       _frameTimeline: new Float64Array([41.958, 42, 42.042, 42.083]),
+      _pendingDemandTimes: [],
+      _prepareQueue: [2],
+      _prepareRequests: new Map([[1, { index: 2, renderEpoch: 1 }]]),
       framePrefetch: 2,
+      busy: true,
       _syncVideoClock: () => syncs++,
       _currentExactFrameMediaTime: () => 42,
       _primePreparedFrames: () => {},
       _dispatchNextPreparation: () => {},
       dispatchEvent: (event: Event) => {
-        if (event.type === 'trackReady') trackReady++
+        if (event.type === 'trackReady') {
+          trackReady++
+          readyRequestId = (event as CustomEvent<{ requestId?: number }>).detail?.requestId
+        }
         return true
       }
     })
 
-    renderer._trackReady()
+    renderer._trackReady({ requestId: 37 })
 
     expect(syncs).toBe(1)
     expect(trackReady).toBe(0)
-    expect(renderer._frameBufferReadyEvent).toBe('trackReady')
+    expect(renderer._frameBufferReadyEvent).toEqual({ type: 'trackReady', requestId: 37 })
+
+    renderer._dispatchReadyWhenFrameBufferFilled()
+    expect(trackReady).toBe(0)
+
+    renderer.busy = false
+    renderer._prepareQueue.length = 0
+    renderer._prepareRequests.clear()
+    renderer._dispatchReadyWhenFrameBufferFilled()
+    expect(trackReady).toBe(1)
+    expect(readyRequestId).toBe(37)
+    expect(renderer._frameBufferReadyEvent).toBe(null)
+  })
+
+  test('contains a prepared snapshot failure and releases deferred readiness', () => {
+    let trackReady = 0
+    const renderer = Object.create(AkariSub.prototype) as any
+    Object.assign(renderer, {
+      _renderEpoch: 7,
+      _prepareFailureEpoch: -1,
+      _frameTimeline: new Float64Array([0, 0.04, 0.08]),
+      framePrefetch: 2,
+      _destroyed: false,
+      _workerReady: true,
+      _frameBufferReadyEvent: { type: 'trackReady', requestId: 51 },
+      _pendingDemandTimes: [],
+      _prepareQueue: [2],
+      _prepareRequests: new Map([[9, { index: 1, renderEpoch: 7 }]]),
+      _preparedFrames: new Map(),
+      _currentExactFrameIndex: () => 0,
+      _currentExactFrameMediaTime: () => 0,
+      _dispatchNextPreparation: AkariSub.prototype['_dispatchNextPreparation'],
+      dispatchEvent: (event: Event) => {
+        if (event.type === 'trackReady') trackReady++
+        return true
+      },
+      busy: true
+    })
+
+    renderer._preparedFrame({ prepareId: 9, renderEpoch: 7, time: 0.04, failed: true })
+
+    expect(renderer._prepareFailureEpoch).toBe(7)
+    expect(renderer._prepareQueue).toEqual([])
+    expect(renderer._prepareRequests.size).toBe(0)
+    expect(renderer.busy).toBe(false)
+    expect(trackReady).toBe(1)
+    expect(renderer._frameBufferReadyEvent).toBe(null)
   })
 
   test('retires consumed compositor predictions during long playback', () => {
@@ -1537,5 +1591,70 @@ describe('subtitle timing compensation', () => {
     }
 
     expect(maxPredictionError).toBeLessThan(0.1)
+  })
+
+  test('writes flattened disjoint planes directly and preserves the source-over fallback', () => {
+    const previousImageData = (globalThis as any).ImageData
+    class FakeImageData {
+      constructor(
+        public readonly data: Uint8ClampedArray,
+        public readonly width: number,
+        public readonly height: number
+      ) {}
+    }
+    ;(globalThis as any).ImageData = FakeImageData
+
+    const render = (preblended: boolean, filter: string = 'none') => {
+      const calls: string[] = []
+      const renderer = Object.create(AkariSub.prototype) as any
+      const context = {
+        filter,
+        clearRect: () => calls.push('clear'),
+        drawImage: (_source: unknown, x: number, y: number) => calls.push(`draw:${x},${y}`),
+        putImageData: (_image: unknown, x: number, y: number) => calls.push(`target-put:${x},${y}`)
+      }
+      Object.assign(renderer, {
+        debug: false,
+        _destroyed: false,
+        _gpuRenderer: null,
+        _ctx: context,
+        _canvasctrl: { width: 8, height: 8 },
+        _bufferCanvas: { width: 1, height: 1 },
+        _bufferCtx: { putImageData: () => calls.push('buffer-put') },
+        _ensureMainThreadCanvas2d: () => {},
+        _activateBaseCanvas: () => calls.push('activate'),
+        _unbusy: () => calls.push('unbusy')
+      })
+
+      renderer._render({
+        images: [
+          { x: 0, y: 1, w: 2, h: 2, image: new Uint8ClampedArray(16).fill(255) },
+          { x: 4, y: 5, w: 1, h: 1, image: new Uint8ClampedArray(4).fill(128) }
+        ],
+        asyncRender: false,
+        preblended,
+        times: {},
+        width: 8,
+        height: 8,
+        colorSpace: null
+      })
+      return calls
+    }
+
+    try {
+      expect(render(true)).toEqual(['clear', 'target-put:0,1', 'target-put:4,5', 'activate', 'unbusy'])
+      expect(render(false)).toEqual(['clear', 'buffer-put', 'draw:0,1', 'buffer-put', 'draw:4,5', 'activate', 'unbusy'])
+      expect(render(true, 'url(#color-conversion)')).toEqual([
+        'clear',
+        'buffer-put',
+        'draw:0,1',
+        'buffer-put',
+        'draw:4,5',
+        'activate',
+        'unbusy'
+      ])
+    } finally {
+      ;(globalThis as any).ImageData = previousImageData
+    }
   })
 })

@@ -404,7 +404,7 @@ The default options are best, and automatically fallback to the next fastest opt
 | `flushEvents()`               | -                                              | Drop every event and keep styles / script info                                   |
 | `configurePrune(delay)`       | `delay: number`                                | Auto-drop events that ended more than `delay` seconds before the last render     |
 | `preloadTrack(source)`        | `PreloadTrackSource \| string \| bytes`        | Parse a track and load its fonts without replacing the visible one               |
-| `activatePreloadedTrack(id?)` | `id?: number`                                  | Atomically swap to a preloaded track; last frame stays until the first new paint |
+| `activatePreloadedTrack(id?)` | `id?: number`                                  | Atomically swap to a preloaded track and await its matching readiness cycle |
 
 ### Playback Control
 
