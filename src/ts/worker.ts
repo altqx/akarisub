@@ -31,7 +31,7 @@ import {
   hasRenderableAssPrefix,
   isAbortError
 } from './asset-loader'
-import { diffActiveCues, isCueActiveAt, toLibassTimestampMs } from './cue-events'
+import { diffActiveCues, isCueActiveAt, resolveCueTracking, toLibassTimestampMs } from './cue-events'
 import { collectNeededScripts, matchFontSubsets, normalizeFontFamilySource } from './font-subsets'
 import { parseStreamingTrackOptions } from './streaming'
 
@@ -102,7 +102,9 @@ let preloadedTrack: {
   content: string | Uint8Array
   encrypted: boolean
 } | null = null
-let cueTimes = new Int32Array(0)
+const EMPTY_CUE_TIMES = new Int32Array(0)
+let cueTracking = true
+let cueTimes = EMPTY_CUE_TIMES
 let lastActiveCues = new Map<number, CueEvent>()
 let lastReportedDroppedFrames = 0
 let demandRenderTime: number | undefined
@@ -1577,8 +1579,12 @@ const scanAssFonts = (fragment: string): void => {
 }
 
 const rebuildCueTimes = (): void => {
+  if (!cueTracking) {
+    cueTimes = EMPTY_CUE_TIMES
+    return
+  }
   if (!akariSubHandle) {
-    cueTimes = new Int32Array(0)
+    cueTimes = EMPTY_CUE_TIMES
     return
   }
 
@@ -1617,6 +1623,7 @@ const readCueEvent = (index: number): CueEvent => {
 }
 
 const emitCueChanges = (time: number): void => {
+  if (!cueTracking) return
   const nowMs = toLibassTimestampMs(time)
   const next = new Map<number, CueEvent>()
   for (let i = 0; i < cueTimes.length; i += 2) {
@@ -1632,6 +1639,11 @@ const emitCueChanges = (time: number): void => {
 }
 
 const resetCueState = (time: number): void => {
+  if (!cueTracking) {
+    lastActiveCues.clear()
+    cueTimes = EMPTY_CUE_TIMES
+    return
+  }
   if (lastActiveCues.size > 0) {
     postMessage({
       target: 'cues',
@@ -1641,7 +1653,7 @@ const resetCueState = (time: number): void => {
     })
   }
   lastActiveCues = new Map()
-  cueTimes = new Int32Array(0)
+  cueTimes = EMPTY_CUE_TIMES
 }
 
 const loadSubtitleUrl = async (
@@ -2779,6 +2791,7 @@ const cancelAnimationFrame = self.cancelAnimationFrame ? self.cancelAnimationFra
 
 self.init = async (data: any): Promise<void> => {
   hasBitmapBug = data.hasBitmapBug
+  cueTracking = resolveCueTracking(data.cueTracking)
   applyCanvasColorSpace(data.canvasColorSpace, data.hdr)
   wasmSimd = !!data.wasmSimd
   wasmThreads = !!data.wasmThreads

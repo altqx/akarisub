@@ -398,6 +398,8 @@ export interface AkariSubOptions {
   fullTrackWarmupStep?: number
   /** Allow adaptive CPU preblend layouts for text-heavy frames (default: false) */
   adaptiveBlendLayouts?: boolean
+  /** Track active cues and emit cue enter/exit events (default: true). */
+  cueTracking?: boolean
   /** Fired when a Dialogue event becomes active at the sampled media time. */
   onCueEnter?: (cue: CueEvent) => void
   /** Fired when a Dialogue event is no longer active at the sampled media time. */
@@ -558,6 +560,7 @@ export interface WorkerInitMessage {
   renderAhead: number
   adaptiveTiming: boolean
   frameTimelineMode: boolean
+  cueTracking?: boolean
   dropAllAnimations?: boolean
   dropAllBlur?: boolean
   clampPos?: boolean

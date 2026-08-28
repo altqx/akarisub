@@ -5,6 +5,7 @@ import {
   diffActiveCues,
   isCueActiveAt,
   parsePreloadTrackSource,
+  resolveCueTracking,
   SLOW_FRAME_MS,
   toLibassTimestampMs
 } from '../src/ts/cue-events'
@@ -49,6 +50,12 @@ const installEventTargetMock = (renderer: any) => {
 }
 
 describe('libass cue timestamps', () => {
+  test('keeps cue tracking enabled unless explicitly disabled', () => {
+    expect(resolveCueTracking(undefined)).toBe(true)
+    expect(resolveCueTracking(true)).toBe(true)
+    expect(resolveCueTracking(false)).toBe(false)
+  })
+
   test('floors fractional milliseconds and snaps exact millisecond round-off', () => {
     expect(toLibassTimestampMs(1.001)).toBe(1001)
     expect(toLibassTimestampMs(1.0016)).toBe(1001)

@@ -7,6 +7,9 @@ export const isCueActiveAt = (startMs: number, durationMs: number, nowMs: number
   return startMs <= nowMs && nowMs < startMs + durationMs
 }
 
+/** Preserve cue events unless a caller explicitly opts out of active-cue tracking. */
+export const resolveCueTracking = (value: boolean | undefined): boolean => value !== false
+
 /**
  * Snap a media time to the integer millisecond libass uses for
  * `Start <= now < Start + Duration`.

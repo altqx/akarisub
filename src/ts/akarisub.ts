@@ -22,7 +22,7 @@ import type {
   VideoFrameLike
 } from './types'
 import type { EncryptedSubtitleContent } from './types'
-import { classifyPerformanceWarnings, parsePreloadTrackSource } from './cue-events'
+import { classifyPerformanceWarnings, parsePreloadTrackSource, resolveCueTracking } from './cue-events'
 import { parseStreamingTrackOptions } from './streaming'
 import { normalizeFontFamilySource } from './font-subsets'
 import { computeCanvasSize, getVideoPosition, fixAlpha, getAlphaBug, getBitmapBug } from './utils'
@@ -467,6 +467,7 @@ export default class AkariSub extends EventTarget {
         blockingFullTrackWarmup: options.blockingFullTrackWarmup ?? false,
         fullTrackWarmupStep: options.fullTrackWarmupStep ?? 1,
         adaptiveBlendLayouts: options.adaptiveBlendLayouts ?? false,
+        cueTracking: resolveCueTracking(options.cueTracking),
         rawAssImageGpu,
         onDemandRender: this._onDemandRender,
         initialTime,
