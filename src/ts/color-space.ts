@@ -332,13 +332,25 @@ export function subtitleImageDataSettings(): ImageDataSettings | undefined {
 }
 
 /** Create sRGB-tagged ImageData so WCG canvases convert from authored ASS RGB. */
+export function imageDataCompatiblePixels(
+  data: Uint8ClampedArray
+): Uint8ClampedArray<ArrayBuffer> {
+  // The threaded WASM heap is SharedArrayBuffer-backed, but the ImageData
+  // constructor requires an owned ArrayBuffer. Copy only that path; regular
+  // decoded planes retain their existing zero-copy behavior.
+  return typeof SharedArrayBuffer !== 'undefined' && data.buffer instanceof SharedArrayBuffer
+    ? data.slice()
+    : data as Uint8ClampedArray<ArrayBuffer>
+}
+
 export function createSubtitleImageData(
   data: Uint8ClampedArray,
   width: number,
   height: number
 ): ImageData {
   const settings = subtitleImageDataSettings()
-  return settings ? new ImageData(data as Uint8ClampedArray<ArrayBuffer>, width, height, settings) : new ImageData(data as Uint8ClampedArray<ArrayBuffer>, width, height)
+  const pixels = imageDataCompatiblePixels(data)
+  return settings ? new ImageData(pixels, width, height, settings) : new ImageData(pixels, width, height)
 }
 
 /** WebGPU canvas configuration extras for WCG / HDR swap chains. */

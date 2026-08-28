@@ -5,6 +5,7 @@ import {
   colorMatrixConversionMap,
   getColorMatrix3,
   getColorSpaceFilterUrl,
+  imageDataCompatiblePixels,
   libassYCbCrMap,
   mapVideoMatrix,
   mapVideoPrimaries,
@@ -15,6 +16,22 @@ import {
 } from '../src/ts/color-space'
 
 describe('video color-space mapping', () => {
+  test('copies shared WASM pixels into ImageData-compatible owned storage', () => {
+    const shared = new SharedArrayBuffer(4)
+    const pixels = new Uint8ClampedArray(shared)
+    pixels.set([1, 2, 3, 4])
+
+    const compatible = imageDataCompatiblePixels(pixels)
+
+    expect(compatible.buffer).toBeInstanceOf(ArrayBuffer)
+    expect([...compatible]).toEqual([1, 2, 3, 4])
+  })
+
+  test('retains already owned ImageData pixel storage', () => {
+    const pixels = new Uint8ClampedArray([1, 2, 3, 4])
+    expect(imageDataCompatiblePixels(pixels)).toBe(pixels)
+  })
+
   test('maps BT.601 / BT.709 / BT.2020 matrices', () => {
     expect(mapVideoMatrix('bt709')).toBe('BT709')
     expect(mapVideoMatrix('bt470bg')).toBe('BT601')
