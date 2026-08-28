@@ -16,7 +16,7 @@ Regenerate it with `bun run license:third-party` after dependency, submodule, fo
 | FriBidi | v1.0.16-5-g069a7e3 (lib/fribidi) | LGPL-2.1-or-later | Compiled into the WebAssembly worker for bidirectional text support. |
 | fontconfig | 2.18.3 (lib/fontconfig) | HPND-style license with additional notices | Compiled into the WebAssembly worker for font fallback and matching. |
 | HarfBuzz | 14.3.0 (lib/harfbuzz) | Old MIT | Compiled into the WebAssembly worker for text shaping. |
-| libass | d3941ab (lib/libass) | ISC | Compiled into the WebAssembly worker for ASS/SSA subtitle rendering. |
+| libass | 3fef2c1 (lib/libass) | ISC | Compiled into the WebAssembly worker for ASS/SSA subtitle rendering. |
 | Liberation Sans | assets/default.woff2 (assets/default.woff2) | OFL-1.1 | Bundled fallback font asset used by default renderer options. |
 | Emscripten runtime | 6.0.6 (pkg/akarisub.js) | MIT OR NCSA | Generated JavaScript runtime wrapper used by the WebAssembly worker. |
 
