@@ -34,6 +34,7 @@ import {
 import { diffActiveCues, isCueActiveAt, resolveCueTracking, toLibassTimestampMs } from './cue-events'
 import { collectNeededScripts, matchFontSubsets, normalizeFontFamilySource } from './font-subsets'
 import { parseStreamingTrackOptions } from './streaming'
+import { bitmapFailureAction, collectSettledBitmaps } from './bitmap-settlements'
 
 interface WorkerMetrics {
   framesRendered: number
@@ -2335,6 +2336,7 @@ const render = (
     if (useAsyncBitmapPath) {
       const promises = frameBitmapPromises
       promises.length = written
+      const bitmapOptionsEnabled = asyncRenderOptions
 
       for (let i = 0; i < written; ++i) {
         const metaOffset = i * RRC_IMG_STRIDE
@@ -2356,37 +2358,46 @@ const render = (
 
         const imageData = createSubtitleImageData(rawData, item.w, item.h)
 
-        promises[i] = asyncRenderOptions
+        promises[i] = bitmapOptionsEnabled
           ? createImageBitmap(imageData, { premultiplyAlpha: 'none', colorSpaceConversion: 'none' })
           : createImageBitmap(imageData)
         images[i] = item
       }
 
-      Promise.all(promises)
-        .then((bitmaps) => {
+      Promise.allSettled(promises).then((results) => {
+        const bitmaps = collectSettledBitmaps(results)
+        if (bitmaps) {
           for (let i = 0; i < written; i++) {
             images[i].image = bitmaps[i]
           }
           if (debug) times.JSBitmapGenerationTime = Date.now() - (times.JSRenderTime || 0)
           paintImages({ images, buffers: bitmaps, times, requestId, renderEpoch, prepareId, time, presentationId })
-        })
-        .catch(() => {
-          if (asyncRenderOptions) {
-            asyncRenderOptions = false
-            console.warn('[AkariSub] createImageBitmap options not supported, disabling')
-            metrics.pendingRenders--
-            completeRenderCycle()
-            render(time, force, requestId, renderEpoch, prepareId, presentationId)
+          return
+        }
+
+        const failureAction = bitmapFailureAction(bitmapOptionsEnabled, prepareId)
+        if (failureAction.kind === 'retryWithoutOptions') {
+          asyncRenderOptions = false
+          console.warn('[AkariSub] createImageBitmap options not supported, disabling')
+          metrics.pendingRenders--
+          completeRenderCycle()
+          render(time, force, requestId, renderEpoch, prepareId, presentationId)
+        } else {
+          metrics.pendingRenders--
+          if (failureAction.kind === 'finishDemand') {
+            postMessage({ target: 'unbusy', requestId, renderEpoch })
           } else {
-            metrics.pendingRenders--
-            if (prepareId == null) {
-              postMessage({ target: 'unbusy', requestId, renderEpoch })
-              completeRenderCycle()
-            } else {
-              void postPreparedSnapshot(prepareId, renderEpoch, time).finally(() => completeRenderCycle())
-            }
+            postMessage({
+              target: 'preparedFrame',
+              prepareId: failureAction.prepareId,
+              renderEpoch,
+              time,
+              failed: true
+            })
           }
-        })
+          completeRenderCycle()
+        }
+      })
     } else {
       // When posting to the main thread, copy all image pixels into one
       // transferable buffer instead of allocating/transferring one per image.
