@@ -39,7 +39,9 @@ export function computeCanvasSize(
   width *= newH / height
   height = newH
 
-  return { width, height }
+  // Canvas backing dimensions truncate fractions. Send the same integers to
+  // the worker so checking a prepared canvas does not resize (and clear) it.
+  return { width: Math.floor(width), height: Math.floor(height) }
 }
 
 /** Letterboxed video rectangle inside the element's layout box. */

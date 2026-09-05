@@ -1285,6 +1285,11 @@ export default class AkariSub extends EventTarget {
     this._canvas.style.left = left + 'px'
     for (const stage of this._stagedCanvases) this._syncStagedCanvasLayout(stage)
 
+    // Explicit resize calls can also supply fractional CSS/DPR dimensions.
+    // Keep canvas storage, GPU uploads and worker snapshots on the same size.
+    width = Math.max(0, Math.floor(width))
+    height = Math.max(0, Math.floor(height))
+
     if (width > 0 && height > 0 && (this._canvasctrl.width !== width || this._canvasctrl.height !== height)) {
       this._bumpRenderEpoch()
       this._canvasctrl.width = width
