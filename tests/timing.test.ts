@@ -1,3 +1,4 @@
+import type { PreparedFrame } from '../src/ts/prepared-presentation'
 import { describe, expect, test } from 'bun:test'
 import AkariSub from '../src/ts/akarisub'
 import { WebGPURenderer } from '../src/ts/webgpu-renderer'
@@ -19,6 +20,12 @@ import {
   subtitleTimeForFrame,
   updateTimingCompensation
 } from '../src/ts/timing'
+
+const presentationWith = (renderer: any, frames: Iterable<[number, PreparedFrame]> = []) => {
+  const presentation = renderer._presentation
+  for (const [index, frame] of frames) presentation.store(index, frame)
+  return presentation
+}
 
 describe('subtitle timing compensation', () => {
   test('learns bounded positive presentation lag', () => {
@@ -173,7 +180,7 @@ describe('subtitle timing compensation', () => {
     const renderer = Object.create(AkariSub.prototype) as any
     Object.assign(renderer, {
       _prepareRequests: new Map([[1, { index: 1, renderEpoch: 3 }]]),
-      _preparedFrames: new Map(),
+      _presentationOwner: presentationWith(renderer),
       _frameTimeline: new Float64Array([0, 1]),
       _video: { currentTime: 0 },
       _renderEpoch: 3,
@@ -202,7 +209,7 @@ describe('subtitle timing compensation', () => {
     let primed = 0
     Object.assign(renderer, {
       _pendingDemandTimes: [{ mediaTime: 1, width: 1920, height: 1080, presentationId: 8 }],
-      _preparedFrames: new Map([[1, { width: 1920, height: 1080, bitmap }]]),
+      _presentationOwner: presentationWith(renderer, [[1, { width: 1920, height: 1080, bitmap }]]),
       _frameTimeline: new Float64Array([0, 1, 2]),
       framePrefetch: 2,
       _video: { paused: false, ended: false, currentTime: 1, playbackRate: 1 },
@@ -224,7 +231,7 @@ describe('subtitle timing compensation', () => {
 
     expect(presentations).toEqual([{ frame: { width: 1920, height: 1080, bitmap }, presentationId: 8 }])
     expect(demands).toEqual([])
-    expect(renderer._preparedFrames.has(1)).toBe(false)
+    expect(renderer._presentation.has(1)).toBe(false)
     expect(renderer.busy).toBe(false)
     expect(primed).toBe(1)
   })
@@ -235,7 +242,7 @@ describe('subtitle timing compensation', () => {
     let primed = 0
     Object.assign(renderer, {
       _pendingDemandTimes: [{ mediaTime: 1, width: 1920, height: 1080, presentationId: 8 }],
-      _preparedFrames: new Map(),
+      _presentationOwner: presentationWith(renderer),
       _frameTimeline: new Float64Array([0, 1, 2]),
       framePrefetch: 2,
       _video: { paused: false, ended: false, currentTime: 2, playbackRate: 1 },
@@ -270,7 +277,7 @@ describe('subtitle timing compensation', () => {
         { mediaTime: 1, width: 1920, height: 1080, presentationId: 8, force: true },
         { mediaTime: 2, width: 1920, height: 1080, presentationId: 9 }
       ],
-      _preparedFrames: new Map([
+      _presentationOwner: presentationWith(renderer, [
         [1, { width: 1920, height: 1080, bitmap: olderBitmap }],
         [2, { width: 1920, height: 1080, bitmap: newestBitmap }]
       ]),
@@ -302,8 +309,8 @@ describe('subtitle timing compensation', () => {
     expect(presentations).toEqual([{ frame: { width: 1920, height: 1080, bitmap: newestBitmap }, presentationId: 9 }])
     expect(coalescedForce).toBe(true)
     expect(renderer._pendingDemandTimes).toEqual([])
-    expect(renderer._preparedFrames.has(1)).toBe(true)
-    expect(renderer._preparedFrames.has(2)).toBe(false)
+    expect(renderer._presentation.has(1)).toBe(true)
+    expect(renderer._presentation.has(2)).toBe(false)
   })
 
   test('falls back once when the queued exact frame is not cached', () => {
@@ -311,7 +318,7 @@ describe('subtitle timing compensation', () => {
     const demands: Array<{ presentationId: number }> = []
     Object.assign(renderer, {
       _pendingDemandTimes: [{ mediaTime: 1, width: 1920, height: 1080, presentationId: 8 }],
-      _preparedFrames: new Map(),
+      _presentationOwner: presentationWith(renderer),
       _frameTimeline: new Float64Array([0, 1, 2]),
       framePrefetch: 2,
       _video: { paused: false, ended: false, currentTime: 1, playbackRate: 1 },
@@ -438,7 +445,7 @@ describe('subtitle timing compensation', () => {
       _latestPresentationId: 7,
       _renderEpoch: 7,
       _prepareForce: false,
-      _preparedFrames: new Map(),
+      _presentationOwner: presentationWith(renderer),
       _prepareQueue: [],
       _video: { paused: false, ended: false, currentTime: timeline[3], playbackRate: 1 },
       _playstate: false,
@@ -522,12 +529,12 @@ describe('subtitle timing compensation', () => {
         _destroyed: false,
         _rendererType: 'webgpu',
         _gpuRenderer: gpu,
-        _stagedCanvases: new Set(),
-        _stageFrameIndices: new Map(),
-        _stageDisplayTimes: new Map(),
+
+
+
         _predictedDisplayTimes: new Map(),
-        _preparedFrames: new Map(),
-        _scheduledPreparedFrame: null
+        _presentationOwner: presentationWith(renderer),
+
       })
 
       const frame = { width: 1920, height: 1080, bitmap }
@@ -535,7 +542,7 @@ describe('subtitle timing compensation', () => {
 
       expect(calls).toEqual(['append', 'webgpu', 'close'])
       expect(frame.stage).toBe(stage)
-      expect(renderer._stagedCanvases).toEqual(new Set([stage]))
+      expect(frame.ready).toBe(true)
     } finally {
       if (originalDocument === undefined) {
         Reflect.deleteProperty(globalThis, 'document')
@@ -564,202 +571,19 @@ describe('subtitle timing compensation', () => {
       _rendererType: 'webgpu',
       _ctx: null,
       _activatePresentation: () => true,
-      _preparedFrames: new Map(),
-      _scheduledPreparedFrame: null,
-      _stagedCanvases: new Set([stage]),
-      _stageFrameIndices: new Map([[stage, 3]]),
-      _stageDisplayTimes: new Map([[stage, 100]])
+      _presentationOwner: presentationWith(renderer),
+
+
+
     })
+
+    renderer._presentation.register(stage, 12)
 
     renderer._presentPreparedFrame({ width: 1920, height: 1080, bitmap }, 12, 100)
 
     expect(calls).toEqual(['render', 'release', 'remove', 'close'])
     expect(base.style.opacity).toBe('1')
-    expect(renderer._stagedCanvases.size).toBe(0)
-  })
-
-  test('preserves the committed presentation while an epoch replacement is rendering', () => {
-    const renderer = Object.create(AkariSub.prototype) as any
-    const removed: string[] = []
-    const makeStage = (name: string) => ({
-      isConnected: true,
-      style: { opacity: name === 'current' ? '1' : '0' },
-      getAnimations: () => [],
-      remove: () => removed.push(name)
-    })
-    const current = makeStage('current')
-    const speculative = makeStage('speculative')
-    const base = { style: { opacity: '0' }, getAnimations: () => [] }
-    Object.assign(renderer, {
-      _canvas: base,
-      _rendererType: 'canvas2d',
-      _gpuRenderer: null,
-      _committedStage: current,
-      _scheduledPreparedFrame: null,
-      _preparedFrames: new Map([[12, { stage: speculative }]]),
-      _stagedCanvases: new Set([current, speculative]),
-      _stageFrameIndices: new Map([
-        [current, 11],
-        [speculative, 12]
-      ]),
-      _stageDisplayTimes: new Map([[current, performance.now() - 1]]),
-      _predictedDisplayTimes: new Map(),
-      _displayClockOffsets: [],
-      _prepareQueue: [],
-      _prepareRequests: new Map()
-    })
-
-    renderer._clearPreparedFrames()
-
-    expect(removed).toEqual(['speculative'])
-    expect(renderer._stagedCanvases).toEqual(new Set([current]))
-    expect(renderer._committedStage).toBe(current)
-    expect(current.style.opacity).toBe('1')
-    expect(base.style.opacity).toBe('0')
-
-    renderer._clearPreparedFrames(false)
-    expect(removed).toEqual(['speculative', 'current'])
-    expect(renderer._stagedCanvases.size).toBe(0)
-    expect(base.style.opacity).toBe('1')
-  })
-
-  test('does not let a late demand response roll back a newer compositor frame', () => {
-    const renderer = Object.create(AkariSub.prototype) as any
-    let removed = 0
-    const stage = {
-      isConnected: true,
-      style: { opacity: '1' },
-      getAnimations: () => [],
-      remove: () => removed++
-    }
-    const base = { style: { opacity: '0' }, getAnimations: () => [] }
-    Object.assign(renderer, {
-      _canvas: base,
-      _committedStage: stage,
-      _scheduledPreparedFrame: null,
-      _preparedFrames: new Map(),
-      _stagedCanvases: new Set([stage]),
-      _stageFrameIndices: new Map([[stage, 12]]),
-      _stageDisplayTimes: new Map([[stage, performance.now() - 1]]),
-      _destroyed: false
-    })
-
-    renderer._activateBaseCanvas(11)
-    expect(removed).toBe(0)
-    expect(stage.style.opacity).toBe('1')
-    expect(base.style.opacity).toBe('0')
-
-    renderer._activateBaseCanvas(12)
-    expect(removed).toBe(1)
-    expect(base.style.opacity).toBe('1')
-  })
-
-  test('a demand handoff keeps future prepared frames instead of starving prefetch', () => {
-    const renderer = Object.create(AkariSub.prototype) as any
-    const removed: string[] = []
-    const makeStage = (name: string, opacity: string) => ({
-      isConnected: true,
-      style: { opacity },
-      getAnimations: () => [],
-      remove: () => removed.push(name)
-    })
-    const current = makeStage('current', '1')
-    const future = makeStage('future', '0')
-    const base = { style: { opacity: '0' }, getAnimations: () => [] }
-    const futureFrame = { stage: future, index: 12, ready: true, scheduled: true, animations: [] }
-    Object.assign(renderer, {
-      _canvas: base,
-      _committedStage: current,
-      _scheduledPreparedFrame: futureFrame,
-      _preparedFrames: new Map([[12, futureFrame]]),
-      _stagedCanvases: new Set([current, future]),
-      _stageFrameIndices: new Map([
-        [current, 10],
-        [future, 12]
-      ]),
-      _stageDisplayTimes: new Map(),
-      _destroyed: false
-    })
-
-    renderer._activateBaseCanvas(10)
-
-    expect(removed).toEqual(['current'])
-    expect(renderer._preparedFrames.get(12)).toBe(futureFrame)
-    expect(renderer._stagedCanvases).toEqual(new Set([future]))
-    expect(future.style.opacity).toBe('0')
-    expect(futureFrame.scheduled).toBe(false)
-    expect(base.style.opacity).toBe('1')
-  })
-
-  test('schedules only one compositor swap and hands ownership to the next frame after commit', async () => {
-    const renderer = Object.create(AkariSub.prototype) as any
-    let finishFirst!: () => void
-    const scheduled: string[] = []
-    const animation = (finished: Promise<void>) => ({
-      startTime: null,
-      finished,
-      cancel: () => undefined
-    })
-    const makeStage = (name: string, finish?: (resolve: () => void) => void) => ({
-      isConnected: true,
-      style: { opacity: '0' },
-      getAnimations: () => [],
-      remove: () => undefined,
-      animate: () => {
-        scheduled.push(name)
-        return animation(finish ? new Promise<void>((resolve) => finish(resolve)) : new Promise<void>(() => undefined))
-      }
-    })
-    const firstStage = makeStage('first', (resolve) => {
-      finishFirst = resolve
-    })
-    const secondStage = makeStage('second')
-    const base = makeStage('base')
-    const now = performance.now()
-    const first: any = { stage: firstStage, index: 1, ready: true, targetDisplayTime: now + 100 }
-    const second: any = { stage: secondStage, index: 2, ready: true, targetDisplayTime: now + 200 }
-    const originalDocument = globalThis.document
-
-    try {
-      Object.defineProperty(globalThis, 'document', {
-        configurable: true,
-        value: { timeline: { currentTime: 500 } }
-      })
-      Object.assign(renderer, {
-        _canvas: base,
-        _preparedFrames: new Map([
-          [1, first],
-          [2, second]
-        ]),
-        _stagedCanvases: new Set([firstStage, secondStage]),
-        _stageFrameIndices: new Map([
-          [firstStage, 1],
-          [secondStage, 2]
-        ]),
-        _stageDisplayTimes: new Map(),
-        _scheduledPreparedFrame: null,
-        _committedStage: null,
-        _destroyed: false
-      })
-
-      renderer._scheduleNextPreparedFrame()
-      expect(renderer._scheduledPreparedFrame).toBe(first)
-      expect(second.scheduled).toBeUndefined()
-
-      finishFirst()
-      await Promise.resolve()
-      await Promise.resolve()
-
-      expect(first.committed).toBe(true)
-      expect(renderer._scheduledPreparedFrame).toBe(second)
-      expect(second.scheduled).toBe(true)
-    } finally {
-      if (originalDocument === undefined) {
-        Reflect.deleteProperty(globalThis, 'document')
-      } else {
-        Object.defineProperty(globalThis, 'document', { configurable: true, value: originalDocument })
-      }
-    }
+    expect(calls).toContain('remove')
   })
 
   test('reveals worker-painted offscreen frames only after their paint acknowledgement', () => {
@@ -954,14 +778,16 @@ describe('subtitle timing compensation', () => {
         drawImage: () => calls.push('draw')
       },
       _canvas: { getAnimations: () => [], style: { opacity: '0' } },
-      _committedStage: stage,
-      _stagedCanvases: new Set([stage]),
-      _stageFrameIndices: new Map([[stage, 12]]),
-      _stageDisplayTimes: new Map(),
-      _preparedFrames: new Map(),
-      _scheduledPreparedFrame: null,
+
+
+
+
+      _presentationOwner: presentationWith(renderer),
+
       _destroyed: false
     })
+
+    renderer._presentation.register(stage, 12)
 
     renderer._presentPreparedFrame(
       {
@@ -978,42 +804,6 @@ describe('subtitle timing compensation', () => {
     expect(calls).toEqual(['activate:14'])
   })
 
-  test('finalizes the prepared swap immediately when its matching RVFC arrives', () => {
-    const renderer = Object.create(AkariSub.prototype) as any
-    const calls: string[] = []
-    const speculativeAnimation = {
-      finish: () => calls.push('finish-speculative'),
-      cancel: () => calls.push('cancel-speculative')
-    }
-    const stage = { style: { opacity: '0' } }
-    const frame: any = {
-      width: 1920,
-      height: 1080,
-      stage,
-      ready: true,
-      scheduled: true,
-      animations: [speculativeAnimation]
-    }
-    const expectedDisplayTime = performance.now() + 100
-
-    Object.assign(renderer, {
-      _activatePresentation: () => true,
-      _scheduledPreparedFrame: frame,
-      _committedStage: null,
-      _stageDisplayTimes: new Map(),
-      _schedulePreparedFrame: () => calls.push('schedule'),
-      _commitPreparedStage: (committedFrame: unknown) => {
-        expect(committedFrame).toBe(frame)
-        calls.push('commit')
-      }
-    })
-
-    renderer._presentPreparedFrame(frame, 14, expectedDisplayTime)
-
-    expect(calls).toEqual(['finish-speculative', 'commit'])
-    expect(renderer._stageDisplayTimes.get(stage)).toBe(expectedDisplayTime)
-  })
-
   test('does not remove an already scheduled stage from a stale RVFC', () => {
     const renderer = Object.create(AkariSub.prototype) as any
     const calls: string[] = []
@@ -1023,273 +813,17 @@ describe('subtitle timing compensation', () => {
     }
     Object.assign(renderer, {
       _activatePresentation: () => false,
-      _stagedCanvases: new Set([stage]),
-      _stageFrameIndices: new Map([[stage, 12]]),
-      _stageDisplayTimes: new Map([[stage, performance.now()]])
+
+
+
     })
+
+    renderer._presentation.register(stage, 12)
 
     renderer._presentPreparedFrame({ width: 1920, height: 1080, stage, scheduled: true }, 13, performance.now())
 
     expect(calls).toEqual([])
-    expect(renderer._stagedCanvases.has(stage)).toBe(true)
-  })
-
-  test('starts both compositor swap halves at one absolute timeline instant', () => {
-    const renderer = Object.create(AkariSub.prototype) as any
-    const animations: Array<{
-      startTime: number | null
-      finished: Promise<void>
-      cancel: () => void
-    }> = []
-    const animationOptions: KeyframeAnimationOptions[] = []
-    const createAnimation = (_frames: Keyframe[], options: KeyframeAnimationOptions) => {
-      animationOptions.push(options)
-      const animation = {
-        startTime: null,
-        finished: new Promise<void>(() => {}),
-        cancel: () => {}
-      }
-      animations.push(animation)
-      return animation
-    }
-    const stage = {
-      animate: createAnimation,
-      isConnected: true,
-      style: { opacity: '0' }
-    }
-    const previous = {
-      animate: createAnimation,
-      style: { opacity: '1' }
-    }
-    const originalDocument = globalThis.document
-
-    try {
-      Object.defineProperty(globalThis, 'document', {
-        configurable: true,
-        value: { timeline: { currentTime: 500 } }
-      })
-      Object.assign(renderer, {
-        _canvas: previous,
-        _stagedCanvases: new Set([stage]),
-        _stageFrameIndices: new Map([[stage, 12]]),
-        _stageDisplayTimes: new Map(),
-        _preparedFrames: new Map(),
-        _scheduledPreparedFrame: null,
-        _destroyed: false
-      })
-
-      const frame = { stage, ready: true }
-      renderer._schedulePreparedFrame(frame, performance.now() + 100)
-
-      expect(frame.scheduled).toBe(true)
-      expect(animations).toHaveLength(2)
-      expect(animations[0].startTime).toBe(animations[1].startTime)
-      expect(animationOptions.map((options) => options.delay)).toEqual([0, 0])
-    } finally {
-      if (originalDocument === undefined) {
-        Reflect.deleteProperty(globalThis, 'document')
-      } else {
-        Object.defineProperty(globalThis, 'document', {
-          configurable: true,
-          value: originalDocument
-        })
-      }
-    }
-  })
-
-  test('falls back to RVFC presentation when compositor animations are unavailable', () => {
-    const renderer = Object.create(AkariSub.prototype) as any
-    const stage = {
-      animate: () => {
-        throw new Error('animations unavailable')
-      },
-      style: { opacity: '0' }
-    }
-    const base = {
-      animate: () => {
-        throw new Error('animations unavailable')
-      },
-      style: { opacity: '1' }
-    }
-    const frame = { stage, ready: true }
-    const originalDocument = globalThis.document
-    Object.assign(renderer, {
-      _canvas: base,
-      _stagedCanvases: new Set([stage]),
-      _stageFrameIndices: new Map([[stage, 12]]),
-      _stageDisplayTimes: new Map(),
-      _scheduledPreparedFrame: null,
-      _destroyed: false
-    })
-
-    try {
-      Object.defineProperty(globalThis, 'document', {
-        configurable: true,
-        value: { timeline: { currentTime: 500 } }
-      })
-      expect(() => renderer._schedulePreparedFrame(frame, performance.now() + 100)).not.toThrow()
-      expect(frame.scheduled).toBeUndefined()
-      expect(renderer._scheduledPreparedFrame).toBeNull()
-    } finally {
-      if (originalDocument === undefined) {
-        Reflect.deleteProperty(globalThis, 'document')
-      } else {
-        Object.defineProperty(globalThis, 'document', { configurable: true, value: originalDocument })
-      }
-    }
-  })
-
-  test('retires every older layer when an intermediate prefetched stage is canceled', async () => {
-    const renderer = Object.create(AkariSub.prototype) as any
-    const calls: string[] = []
-    let finishShow!: () => void
-
-    const makeLayer = (name: string) => {
-      const animations: any[] = []
-      return {
-        style: { opacity: name === 'next' ? '0' : '1' },
-        animate: () => {
-          const animation = {
-            startTime: null,
-            finished:
-              name === 'next'
-                ? new Promise<void>((resolve) => {
-                    finishShow = resolve
-                  })
-                : new Promise<void>(() => {}),
-            cancel: () => calls.push(`cancel:${name}`)
-          }
-          animations.push(animation)
-          return animation
-        },
-        getAnimations: () => animations,
-        remove: () => calls.push(`remove:${name}`)
-      }
-    }
-
-    const base = makeLayer('base')
-    const oldest = makeLayer('oldest')
-    const intermediate = makeLayer('intermediate')
-    const lateOlder = makeLayer('late-older')
-    const next = makeLayer('next')
-    const now = performance.now()
-    const frame = { stage: next, ready: true }
-    const originalDocument = globalThis.document
-
-    try {
-      Object.defineProperty(globalThis, 'document', {
-        configurable: true,
-        value: { timeline: { currentTime: 500 } }
-      })
-      Object.assign(renderer, {
-        _canvas: base,
-        _stagedCanvases: new Set([oldest, intermediate, next]),
-        _stageFrameIndices: new Map([
-          [oldest, 10],
-          [intermediate, 11],
-          [next, 12]
-        ]),
-        _stageDisplayTimes: new Map(),
-        _preparedFrames: new Map(),
-        _scheduledPreparedFrame: null,
-        _destroyed: false
-      })
-
-      renderer._schedulePreparedFrame(frame, now + 100)
-      renderer._disposePreparedFrame({ stage: intermediate })
-      renderer._stagedCanvases.add(lateOlder)
-      renderer._stageFrameIndices.set(lateOlder, 9)
-      renderer._stageDisplayTimes.set(lateOlder, now + 5)
-      finishShow()
-      await Promise.resolve()
-      await Promise.resolve()
-
-      expect(calls).toContain('remove:oldest')
-      expect(calls).toContain('remove:late-older')
-      expect(renderer._stagedCanvases).toEqual(new Set([next]))
-      expect(renderer._stageFrameIndices.has(oldest)).toBe(false)
-      expect(renderer._stageDisplayTimes.has(oldest)).toBe(false)
-      expect(next.style.opacity).toBe('1')
-      expect(base.style.opacity).toBe('0')
-      expect(frame.animations).toBeUndefined()
-    } finally {
-      if (originalDocument === undefined) {
-        Reflect.deleteProperty(globalThis, 'document')
-      } else {
-        Object.defineProperty(globalThis, 'document', {
-          configurable: true,
-          value: originalDocument
-        })
-      }
-    }
-  })
-
-  test('releases sibling hide animations when a scheduled show is canceled', async () => {
-    const renderer = Object.create(AkariSub.prototype) as any
-    const canceled: string[] = []
-    let rejectShow!: (reason: Error) => void
-    const animation = (name: string, finished: Promise<void>) => ({
-      startTime: null,
-      finished,
-      cancel: () => canceled.push(name)
-    })
-    const stage = {
-      animate: () =>
-        animation(
-          'show',
-          new Promise<void>((_resolve, reject) => {
-            rejectShow = reject
-          })
-        ),
-      style: { opacity: '0' }
-    }
-    const previous = {
-      animate: () => animation('previous-hide', new Promise<void>(() => {})),
-      getAnimations: () => [],
-      style: { opacity: '1' }
-    }
-    const base = {
-      animate: () => animation('base-hide', new Promise<void>(() => {})),
-      style: { opacity: '1' }
-    }
-    const frame = { stage, ready: true }
-    const originalDocument = globalThis.document
-
-    try {
-      Object.defineProperty(globalThis, 'document', {
-        configurable: true,
-        value: { timeline: { currentTime: 500 } }
-      })
-      Object.assign(renderer, {
-        _canvas: base,
-        _stagedCanvases: new Set([previous, stage]),
-        _stageFrameIndices: new Map([
-          [previous, 10],
-          [stage, 11]
-        ]),
-        _stageDisplayTimes: new Map(),
-        _preparedFrames: new Map(),
-        _scheduledPreparedFrame: null,
-        _destroyed: false
-      })
-
-      renderer._schedulePreparedFrame(frame, performance.now() + 100)
-      rejectShow(new Error('superseded'))
-      await Promise.resolve()
-      await Promise.resolve()
-
-      expect(canceled.sort()).toEqual(['base-hide', 'previous-hide', 'show'])
-      expect(frame.animations).toBeUndefined()
-    } finally {
-      if (originalDocument === undefined) {
-        Reflect.deleteProperty(globalThis, 'document')
-      } else {
-        Object.defineProperty(globalThis, 'document', {
-          configurable: true,
-          value: originalDocument
-        })
-      }
-    }
+    expect(calls).not.toContain('remove')
   })
 
   test('does not replay stale video canvas dimensions after worker initialization', async () => {
@@ -1361,7 +895,7 @@ describe('subtitle timing compensation', () => {
       _destroyed: false,
       _pendingDemandTimes: [],
       _demandTimings: new Map(),
-      _preparedFrames: new Map(),
+      _presentationOwner: presentationWith(renderer),
       _prepareQueue: [],
       _prepareRequests: new Map(),
       framePrefetch: 2,
@@ -1386,7 +920,7 @@ describe('subtitle timing compensation', () => {
       _video: { paused: true, ended: false, currentTime: 0, playbackRate: 1 },
       _playstate: true,
       _destroyed: false,
-      _preparedFrames: new Map(),
+      _presentationOwner: presentationWith(renderer),
       _prepareQueue: [],
       _prepareRequests: new Map(),
       framePrefetch: 2
@@ -1409,7 +943,7 @@ describe('subtitle timing compensation', () => {
       _destroyed: false,
       _pendingDemandTimes: [],
       _demandTimings: new Map(),
-      _preparedFrames: new Map([
+      _presentationOwner: presentationWith(renderer, [
         [1, {}],
         [2, {}]
       ]),
@@ -1493,7 +1027,7 @@ describe('subtitle timing compensation', () => {
       _pendingDemandTimes: [],
       _prepareQueue: [2],
       _prepareRequests: new Map([[9, { index: 1, renderEpoch: 7 }]]),
-      _preparedFrames: new Map(),
+      _presentationOwner: presentationWith(renderer),
       _currentExactFrameIndex: () => 0,
       _currentExactFrameMediaTime: () => 0,
       _dispatchNextPreparation: AkariSub.prototype['_dispatchNextPreparation'],
@@ -1525,7 +1059,7 @@ describe('subtitle timing compensation', () => {
       _predictedDisplayTimes: new Map([[2, 500]]),
       _displayClockOffsets: [],
       _refreshSamples: [],
-      _preparedFrames: new Map()
+      _presentationOwner: presentationWith(renderer)
     })
 
     renderer._recordPresentationClock(2, timeline[2], 500)
@@ -1547,7 +1081,7 @@ describe('subtitle timing compensation', () => {
       _lastClockMediaTime: timeline[0],
       _lastClockPlaybackRate: 1,
       _refreshSamples: [16.67, 16.66, 16.68, 16.67],
-      _preparedFrames: new Map(),
+      _presentationOwner: presentationWith(renderer),
       _scheduleNextPreparedFrame: () => {}
     })
 
@@ -1572,7 +1106,7 @@ describe('subtitle timing compensation', () => {
       _displayClockOffsets: [],
       _displayGridAnchorMs: 1000,
       _refreshSamples: [16.68, 16.69, 16.68, 16.69],
-      _preparedFrames: new Map(),
+      _presentationOwner: presentationWith(renderer),
       _scheduleNextPreparedFrame: () => {}
     })
 

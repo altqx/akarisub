@@ -104,7 +104,7 @@ describe('presentVideoFrame', () => {
       _videoHeight: 1080,
       _canvas: { style: {} },
       _canvasctrl: canvas,
-      _stagedCanvases: new Set(),
+
       _gpuRenderer: null,
       prescaleFactor: 1,
       prescaleHeightLimit: 1080,
@@ -337,7 +337,7 @@ describe('presentVideoFrame', () => {
       _renderEpoch: 0,
       _pendingDemandTimes: [],
       _demandTimings: new Map(),
-      _preparedFrames: new Map(),
+
       _prepareForce: false,
       _videoColorSpace: 'BT709',
       renderAhead: 0,

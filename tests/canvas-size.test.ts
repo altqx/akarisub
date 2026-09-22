@@ -53,7 +53,7 @@ describe('subtitle canvas pixel dimensions', () => {
     Object.assign(renderer, {
       _canvas: canvas,
       _canvasctrl: canvas,
-      _stagedCanvases: new Set(),
+
       _gpuRenderer: { updateSize: (w: number, h: number) => gpuSizes.push([w, h]) },
       _videoWidth: 1920,
       _videoHeight: 1080,
