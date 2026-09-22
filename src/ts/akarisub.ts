@@ -1,3 +1,4 @@
+import { GPURecovery, type GPUFrameSnapshot, type GPUCanvasFrameSnapshot } from './gpu-recovery'
 import { PreparedPresentation, type PreparedFrame } from './prepared-presentation'
 import type {
   AkariSubOptions,
@@ -86,22 +87,6 @@ interface DemandTiming {
   renderEpoch: number
 }
 
-interface GPUCanvasFrameSnapshot {
-  canvas: HTMLCanvasElement
-  sequence: number
-  colorManaged: boolean
-}
-
-interface GPURawFrameSnapshot {
-  images: RenderImage[]
-  width: number
-  height: number
-  sequence: number
-  colorManaged: false
-}
-
-type GPUFrameSnapshot = GPUCanvasFrameSnapshot | GPURawFrameSnapshot
-
 interface PrepareRequest {
   index: number
   renderEpoch: number
@@ -151,7 +136,6 @@ const isLikelyWebKit = (): boolean => {
 export default class AkariSub extends EventTarget {
   private static readonly MAX_PENDING_DEMANDS = 3
   private static readonly MAX_FONT_BYTES = 32 * 1024 * 1024
-  private static readonly WEBGL_RESTORE_TIMEOUT_MS = 3000
 
   private static _hasAlphaBug: boolean | null = null
   private static _hasBitmapBug: boolean | null = null
@@ -199,7 +183,7 @@ export default class AkariSub extends EventTarget {
     return this._presentationOwner ??= new PreparedPresentation({
       canvas: () => this._canvas,
       release: stage => this._releaseGPUStage(stage),
-      committed: frame => this._commitGPUSnapshot(this._snapshotRenderedCanvas(frame.stage!, frame.gpuStage === true)),
+      committed: frame => this._gpuRecovery.commit(this._snapshotRenderedCanvas(frame.stage!, frame.gpuStage === true)),
       refreshInterval: () => estimateRefreshIntervalMs(this._refreshSamples ?? []),
       now: () => performance.now(),
       documentTime: () => Number(document.timeline?.currentTime)
@@ -237,14 +221,46 @@ export default class AkariSub extends EventTarget {
 
   private _gpuRenderer: AnyGPURenderer | null = null
   private _rendererType: RendererType = 'canvas2d'
-  private _gpuRecovering: AnyGPURenderer | null = null
-  private _gpuRecoveryGeneration = 0
-  private _gpuRecoveryTimer: ReturnType<typeof setTimeout> | null = null
+  private _gpuRecoveryOwner?: GPURecovery
+  private get _gpuRecovery(): GPURecovery {
+    return this._gpuRecoveryOwner ??= new GPURecovery({
+      current: () => this._gpuRenderer,
+      use: renderer => { this._gpuRenderer = renderer },
+      begin: reason => {
+        this._emitPerformanceWarning({ kind: 'renderer-recovery', reason, rendererType: this._rendererType })
+        this._renderEpoch++
+        this._pendingDemandTimes.length = 0
+        this._demandTimings.clear()
+        this._clearPreparedFrames(false)
+        this._prepareForce = true
+        this._showGPURecoveryFrame()
+      },
+      replay: async renderer => {
+        this._applyGpuColorManagement()
+        await this._restoreRetainedGPUFrame(renderer)
+      },
+      recovered: reason => {
+        this._activateBaseCanvas(this._currentExactFrameIndex())
+        this._setRendererType(this._rendererType, reason)
+        this._hideGPURecoveryFrame()
+        this._prepareForce = true
+        this._syncVideoClock()
+      },
+      fallback: (reason, error) => {
+        console.warn(`[AkariSub] GPU recovery failed after ${reason}; falling back to Canvas2D.`, error)
+        this._adoptGPURecoveryCanvas()
+        this._setRendererType('canvas2d', reason)
+        void this.sendMessage('setAsyncRender', { value: false })
+        this._onCanvasFallback?.()
+        this._prepareForce = true
+        this._syncVideoClock()
+      },
+      discard: snapshot => this._discardGPUSnapshot(snapshot)
+    })
+  }
   private _recoveryCanvas: HTMLCanvasElement | null = null
   private _recoveryCtx: CanvasRenderingContext2D | null = null
-  private _lastGPUFrame: GPUFrameSnapshot | null = null
   private _gpuSnapshotPool: HTMLCanvasElement[] = []
-  private _nextGPUSnapshotSequence = 1
   private _onCanvasFallback?: () => void
   private _onCueEnter?: (cue: CueEvent) => void
   private _onCueExit?: (cue: CueEvent) => void
@@ -676,125 +692,34 @@ export default class AkariSub extends EventTarget {
       return
     }
 
-    renderer.onContextLost = () => this._beginWebGLRecovery(renderer)
+    renderer.onContextLost = () => this._gpuRecovery.waitForRestore(renderer)
     renderer.onContextRestored = (error) => {
       if (error) {
-        this._fallbackFromGPU(renderer, 'context-lost', error)
+        this._gpuRecovery.fail(renderer, error)
       } else {
-        void this._finishGPURecovery(renderer, 'context-lost')
+        void this._gpuRecovery.restore(renderer)
       }
     }
-  }
-
-  /** @internal */
-  private _beginGPURecovery(renderer: AnyGPURenderer, reason: RendererRecoveryReason): boolean {
-    if (this._destroyed || this._gpuRenderer !== renderer || this._gpuRecovering) return false
-
-    this._gpuRecovering = renderer
-    this._gpuRecoveryGeneration++
-    this._emitPerformanceWarning({ kind: 'renderer-recovery', reason, rendererType: this._rendererType })
-
-    // GPU-backed prepared canvases cannot survive either kind of loss. Retire
-    // them without touching the retained CPU frame used by the recovery layer.
-    this._renderEpoch++
-    this._pendingDemandTimes.length = 0
-    this._demandTimings.clear()
-    this._clearPreparedFrames(false)
-    this._prepareForce = true
-    this._showGPURecoveryFrame()
-    return true
   }
 
   /** @internal */
   private async _recoverWebGPU(renderer: WebGPURenderer): Promise<void> {
-    if (!this._beginGPURecovery(renderer, 'device-lost')) return
-    const generation = this._gpuRecoveryGeneration
-    let replacement: WebGPURenderer | null = null
-
-    try {
-      renderer.destroy()
-      replacement = new WebGPURenderer()
+    await this._gpuRecovery.replace(renderer, () => {
+      const replacement = new WebGPURenderer()
       this._bindGPURecovery(replacement)
-      await replacement.init()
-      if (this._destroyed || generation !== this._gpuRecoveryGeneration || !this._canvas) {
-        replacement.destroy()
-        return
-      }
-      await replacement.setCanvas(
+      return replacement
+    }, async (replacement, isCurrent) => {
+      const gpu = replacement as WebGPURenderer
+      await gpu.init()
+      if (!isCurrent()) return
+      if (!this._canvas) throw new Error('Subtitle canvas is unavailable during GPU recovery')
+      await gpu.setCanvas(
         this._canvas,
         Math.max(1, this._canvas.width || this._lastRenderWidth || 1),
         Math.max(1, this._canvas.height || this._lastRenderHeight || 1)
       )
-      if (!replacement.initialized) throw new Error('Replacement WebGPU device was lost during initialization')
-      if (this._destroyed || generation !== this._gpuRecoveryGeneration) {
-        replacement.destroy()
-        return
-      }
-      this._gpuRenderer = replacement
-      await this._finishGPURecovery(replacement, 'device-lost')
-    } catch (error) {
-      if (replacement && this._gpuRenderer !== replacement) replacement.destroy()
-      this._fallbackFromGPU(renderer, 'device-lost', error)
-    }
-  }
-
-  /** @internal */
-  private _beginWebGLRecovery(renderer: WebGL2Renderer): void {
-    if (!this._beginGPURecovery(renderer, 'context-lost')) return
-    const generation = this._gpuRecoveryGeneration
-    this._gpuRecoveryTimer = setTimeout(() => {
-      if (generation === this._gpuRecoveryGeneration) {
-        this._fallbackFromGPU(renderer, 'context-lost', new Error('Timed out waiting for WebGL2 context restoration'))
-      }
-    }, AkariSub.WEBGL_RESTORE_TIMEOUT_MS)
-  }
-
-  /** @internal */
-  private async _finishGPURecovery(renderer: AnyGPURenderer, reason: RendererRecoveryReason): Promise<void> {
-    if (this._destroyed || this._gpuRenderer !== renderer || this._gpuRecovering == null) return
-    try {
-      this._clearGPURecoveryTimer()
-      this._applyGpuColorManagement()
-      await this._restoreRetainedGPUFrame(renderer)
-      if (this._destroyed || this._gpuRenderer !== renderer) return
-      this._gpuRecovering = null
-      this._setRendererType(this._rendererType, reason)
-      this._hideGPURecoveryFrame()
-      this._prepareForce = true
-      this._syncVideoClock()
-    } catch (error) {
-      this._fallbackFromGPU(renderer, reason, error)
-    }
-  }
-
-  /** @internal */
-  private _fallbackFromGPU(renderer: AnyGPURenderer, reason: RendererRecoveryReason, error: unknown): void {
-    if (this._destroyed || this._gpuRecovering == null) return
-    if (this._gpuRenderer !== renderer && this._gpuRecovering !== renderer) return
-
-    console.warn(`[AkariSub] GPU recovery failed after ${reason}; falling back to Canvas2D.`, error)
-    this._clearGPURecoveryTimer()
-    try {
-      renderer.destroy()
-    } catch {
-      // The failed device/context may already reject resource cleanup.
-    }
-    this._gpuRenderer = null
-    this._gpuRecovering = null
-    this._gpuRecoveryGeneration++
-    this._adoptGPURecoveryCanvas()
-    this._setRendererType('canvas2d', reason)
-    void this.sendMessage('setAsyncRender', { value: false })
-    this._onCanvasFallback?.()
-    this._prepareForce = true
-    this._syncVideoClock()
-  }
-
-  /** @internal */
-  private _clearGPURecoveryTimer(): void {
-    if (this._gpuRecoveryTimer == null) return
-    clearTimeout(this._gpuRecoveryTimer)
-    this._gpuRecoveryTimer = null
+      if (!gpu.initialized) throw new Error('Replacement WebGPU device was lost during initialization')
+    })
   }
 
   /** Active compositor: WebGPU, WebGL2, or Canvas2D. */
@@ -840,7 +765,7 @@ export default class AkariSub extends EventTarget {
   /** @internal */
   private _snapshotRenderImages(images: RenderImage[], width: number, height: number): GPUFrameSnapshot | null {
     if (!this._gpuSnapshotPool) return null
-    const sequence = this._nextGPUSnapshotSequence++
+    const sequence = this._gpuRecovery.sequence()
     const canRetainRaw = images.every(
       (image) =>
         image.image instanceof ArrayBuffer ||
@@ -924,7 +849,7 @@ export default class AkariSub extends EventTarget {
       context.filter = 'none'
       context.clearRect(0, 0, canvas.width, canvas.height)
       context.drawImage(source, 0, 0)
-      return { canvas, sequence: this._nextGPUSnapshotSequence++, colorManaged }
+      return { canvas, sequence: this._gpuRecovery.sequence(), colorManaged }
     } catch {
       this._gpuSnapshotPool.push(canvas)
       return null
@@ -933,51 +858,15 @@ export default class AkariSub extends EventTarget {
 
   /** @internal */
   private _discardGPUSnapshot(snapshot: GPUFrameSnapshot | null): void {
-    if (snapshot && 'canvas' in snapshot) this._gpuSnapshotPool.push(snapshot.canvas)
-  }
-
-  /** @internal */
-  private _commitGPUSnapshot(snapshot: GPUFrameSnapshot | null): void {
-    if (!snapshot) return
-    if (this._destroyed || (this._lastGPUFrame && snapshot.sequence < this._lastGPUFrame.sequence)) {
-      this._discardGPUSnapshot(snapshot)
-      return
-    }
-    const previous = this._lastGPUFrame
-    this._lastGPUFrame = snapshot
-    if (previous && 'canvas' in previous) this._gpuSnapshotPool.push(previous.canvas)
+    if (!this._destroyed && snapshot && 'canvas' in snapshot) this._gpuSnapshotPool.push(snapshot.canvas)
   }
 
   /** @internal */
   private _materializeGPUSnapshot(snapshot: GPUFrameSnapshot | null): GPUCanvasFrameSnapshot | null {
     if (!snapshot || 'canvas' in snapshot) return snapshot
     const materialized = this._rasterizeGPUFrame(snapshot.images, snapshot.width, snapshot.height, snapshot.sequence)
-    if (materialized && this._lastGPUFrame === snapshot) this._lastGPUFrame = materialized
+    if (materialized) this._gpuRecovery.materialize(snapshot, materialized)
     return materialized
-  }
-
-  /** @internal */
-  private _retainGPUFrameAfter(
-    completion: boolean | Promise<boolean>,
-    snapshot: GPUFrameSnapshot | null
-  ): boolean | Promise<boolean> {
-    if (!snapshot) return completion
-    if (typeof completion === 'boolean') {
-      if (completion) this._commitGPUSnapshot(snapshot)
-      else this._discardGPUSnapshot(snapshot)
-      return completion
-    }
-    return completion.then(
-      (painted) => {
-        if (painted) this._commitGPUSnapshot(snapshot)
-        else this._discardGPUSnapshot(snapshot)
-        return painted
-      },
-      (error) => {
-        this._discardGPUSnapshot(snapshot)
-        throw error
-      }
-    )
   }
 
   /** @internal */
@@ -1001,7 +890,7 @@ export default class AkariSub extends EventTarget {
   /** @internal */
   private _showGPURecoveryFrame(): void {
     if (!this._canvasParent || !this._canvas) return
-    const snapshot = this._materializeGPUSnapshot(this._lastGPUFrame)
+    const snapshot = this._materializeGPUSnapshot(this._gpuRecovery.snapshot)
     const width = snapshot?.canvas.width || this._canvas.width || this._lastRenderWidth || 1
     const height = snapshot?.canvas.height || this._canvas.height || this._lastRenderHeight || 1
     const canvas = this._recoveryCanvas ?? document.createElement('canvas')
@@ -1055,7 +944,7 @@ export default class AkariSub extends EventTarget {
 
   /** @internal */
   private async _restoreRetainedGPUFrame(renderer: AnyGPURenderer): Promise<void> {
-    const snapshot = this._lastGPUFrame
+    const snapshot = this._gpuRecovery.snapshot
     let painted: boolean | void
     if (!snapshot) {
       painted = renderer.clear()
@@ -1088,7 +977,6 @@ export default class AkariSub extends EventTarget {
     }
     if (painted === false) throw new Error('The recovered GPU renderer rejected the retained subtitle frame')
     if (renderer instanceof WebGPURenderer) await renderer.submittedWorkDone()
-    this._activateBaseCanvas(this._currentExactFrameIndex())
   }
 
   /** @internal */
@@ -2358,7 +2246,7 @@ export default class AkariSub extends EventTarget {
           return
         }
         const completion = this._activateBaseCanvasAfterGPUWork(this._renderEpoch, frame.index) ?? true
-        void this._retainGPUFrameAfter(completion, snapshot)
+        void this._gpuRecovery.retainAfter(completion, snapshot)
         return
       }
 
@@ -3001,7 +2889,7 @@ export default class AkariSub extends EventTarget {
       }
       if (painted !== false) {
         const completion = this._activateBaseCanvasAfterGPUWork(data.renderEpoch, presentedIndex) ?? true
-        return this._retainGPUFrameAfter(completion, snapshot)
+        return this._gpuRecovery.retainAfter(completion, snapshot)
       }
       this._discardGPUSnapshot(snapshot)
       return false
@@ -3048,7 +2936,7 @@ export default class AkariSub extends EventTarget {
 
     const completion =
       painted !== false ? (this._activateBaseCanvasAfterGPUWork(data.renderEpoch, presentedIndex) ?? true) : false
-    const retainedCompletion = this._retainGPUFrameAfter(completion, snapshot)
+    const retainedCompletion = this._gpuRecovery.retainAfter(completion, snapshot)
 
     if (this.debug) {
       data.times.JSRenderTime = Date.now() - (data.times.JSRenderTime || 0) - (data.times.IPCTime || 0)
@@ -3446,9 +3334,7 @@ export default class AkariSub extends EventTarget {
       cancelAnimationFrame(this._refreshRafHandle)
       this._refreshRafHandle = null
     }
-    this._clearGPURecoveryTimer()
-    this._gpuRecoveryGeneration++
-    this._gpuRecovering = null
+    this._gpuRecovery.destroy()
     this._recoveryCanvas?.remove()
     this._recoveryCanvas = null
     this._recoveryCtx = null
@@ -3465,7 +3351,6 @@ export default class AkariSub extends EventTarget {
       this._rendererType = 'canvas2d'
     }
 
-    this._lastGPUFrame = null
     this._gpuSnapshotPool.length = 0
 
     this._destroyed = true

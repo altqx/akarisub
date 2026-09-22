@@ -15,3 +15,5 @@ AkariSub presents ASS/SSA subtitles alongside video frames.
 **Preloaded track**: A subtitle track whose content and required fonts are ready without replacing the active track. Activation consumes it and starts a matching readiness cycle.
 
 **Track activation**: Replacement of the active subtitle track by a preloaded track. Its readiness includes the requested runway when exact-frame playback is paused.
+
+**Retained frame**: The last subtitle frame whose GPU presentation completed successfully. Recovery keeps it visible until replay succeeds or a software canvas takes over.

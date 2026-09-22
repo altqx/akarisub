@@ -641,13 +641,10 @@ describe('AkariSub track swap and callbacks', () => {
     Object.assign(renderer, {
       _destroyed: false,
       _gpuRenderer: gpu,
-      _gpuRecovering: null,
-      _gpuRecoveryGeneration: 0,
       _rendererType: 'webgpu',
       _renderEpoch: 4,
       _pendingDemandTimes: [{}],
       _demandTimings: new Map([[1, {}]]),
-      _lastGPUFrame: retained,
       _gpuSnapshotPool: [],
       _onPerformanceWarning: (warning: unknown) => warnings.push(warning),
       _clearPreparedFrames: () => undefined,
@@ -655,15 +652,16 @@ describe('AkariSub track swap and callbacks', () => {
       dispatchEvent: () => true
     })
 
-    expect(renderer._beginGPURecovery(gpu, 'device-lost')).toBe(true)
+    renderer._gpuRecovery.commit(retained)
+    expect(renderer._gpuRecovery.begin(gpu, 'device-lost')).toBe(true)
     expect(warnings).toEqual([{ kind: 'renderer-recovery', reason: 'device-lost', rendererType: 'webgpu' }])
     expect(renderer._pendingDemandTimes).toEqual([])
     expect(renderer._demandTimings.size).toBe(0)
 
-    expect(renderer._retainGPUFrameAfter(false, rejected)).toBe(false)
-    expect(renderer._lastGPUFrame).toBe(retained)
-    expect(renderer._retainGPUFrameAfter(true, recovered)).toBe(true)
-    expect(renderer._lastGPUFrame).toBe(recovered)
+    expect(renderer._gpuRecovery.retainAfter(false, rejected)).toBe(false)
+    expect(renderer._gpuRecovery.snapshot).toBe(retained)
+    expect(renderer._gpuRecovery.retainAfter(true, recovered)).toBe(true)
+    expect(renderer._gpuRecovery.snapshot).toBe(recovered)
   })
 
   test('downgrades to Canvas2D with the loss reason when recovery fails', () => {
@@ -674,9 +672,11 @@ describe('AkariSub track swap and callbacks', () => {
     Object.assign(renderer, {
       _destroyed: false,
       _gpuRenderer: gpu,
-      _gpuRecovering: gpu,
-      _gpuRecoveryTimer: null,
-      _gpuRecoveryGeneration: 2,
+      _renderEpoch: 0,
+      _pendingDemandTimes: [],
+      _demandTimings: new Map(),
+      _clearPreparedFrames: () => undefined,
+      _showGPURecoveryFrame: () => undefined,
       _rendererType: 'webgl2',
       _prepareForce: false,
       _onRendererChange: (event: unknown) => changes.push(event),
@@ -688,7 +688,8 @@ describe('AkariSub track swap and callbacks', () => {
 
     try {
       console.warn = () => undefined
-      renderer._fallbackFromGPU(gpu, 'context-lost', new Error('restore failed'))
+      renderer._gpuRecovery.begin(gpu, 'context-lost')
+      renderer._gpuRecovery.fail(gpu, new Error('restore failed'))
     } finally {
       console.warn = originalWarn
     }
