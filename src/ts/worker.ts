@@ -1,5 +1,7 @@
 /// <reference lib="webworker" />
 
+import { TrackLifecycle } from './track-lifecycle'
+
 import type {
   ASSEvent,
   ASSStyle,
@@ -28,8 +30,7 @@ import {
   MAX_SUBTITLE_BYTES,
   SUBTITLE_FETCH_TIMEOUT_MS,
   fetchBoundedAsset,
-  hasRenderableAssPrefix,
-  isAbortError
+  hasRenderableAssPrefix
 } from './asset-loader'
 import { diffActiveCues, isCueActiveAt, resolveCueTracking, toLibassTimestampMs } from './cue-events'
 import { collectNeededScripts, matchFontSubsets, normalizeFontFamilySource } from './font-subsets'
@@ -91,18 +92,9 @@ let fallbackFontId = 0 // For fallback fonts (lower priority)
 const MAX_FONT_BYTES = 32 * 1024 * 1024
 const FONT_FETCH_TIMEOUT_MS = 30_000
 const pendingFontFamilies = new Set<string>()
-let subtitleFetchAbort: AbortController | null = null
-let preloadFetchAbort: AbortController | null = null
 const LOCAL_FONT_WAIT_MS = 5_000
 const FONT_WAIT_TIMEOUT_MS = 30_000
 let fontWaiters: Array<() => void> = []
-let preloadGeneration = 0
-let nextPreloadId = 1
-let preloadedTrack: {
-  id: number
-  content: string | Uint8Array
-  encrypted: boolean
-} | null = null
 const EMPTY_CUE_TIMES = new Int32Array(0)
 let cueTracking = true
 let cueTimes = EMPTY_CUE_TIMES
@@ -183,7 +175,6 @@ let fullTrackWarmupEnabled = false
 let hasBitmapBug = false
 let _Module: AkariSubModule | null = null
 let forceNextRender = false
-let trackGeneration = 0
 let fullTrackWarmupGeneration = 0
 
 const TEXT_ENCODER = new TextEncoder()
@@ -761,8 +752,8 @@ const refreshRrcViews = (): void => {
   rrcViewsCapacity = rrcBufCapacity
 }
 
-const prewarmRenderer = (time: number, generation: number = trackGeneration): void => {
-  if (!akariSubHandle || generation !== trackGeneration) return
+const prewarmRenderer = (time: number, generation: number = trackLifecycle.generation): void => {
+  if (!akariSubHandle || generation !== trackLifecycle.generation) return
 
   const api = requireApi()
   const handle = requireHandle()
@@ -828,27 +819,6 @@ const consumeNextRenderForce = (): 0 | 1 => {
   return 1
 }
 
-const abortSubtitleFetch = (): void => {
-  subtitleFetchAbort?.abort()
-  subtitleFetchAbort = null
-}
-
-const beginSubtitleFetch = (): AbortSignal => {
-  abortSubtitleFetch()
-  subtitleFetchAbort = new AbortController()
-  return subtitleFetchAbort.signal
-}
-
-const advanceTrackGeneration = (): number => {
-  abortSubtitleFetch()
-  trackGeneration++
-  fullTrackWarmupGeneration = trackGeneration
-  fullTrackWarmupPromise = null
-  fullTrackWarmupStarted = false
-  markNextRenderForced()
-  return trackGeneration
-}
-
 const computeEmptyWindow = (time: number): void => {
   if (!akariSubHandle || !_Module) return
 
@@ -867,21 +837,21 @@ const computeEmptyWindow = (time: number): void => {
 }
 
 const prewarmEntireTrack = async (generation: number): Promise<void> => {
-  if (!akariSubHandle || generation !== trackGeneration) return
+  if (!akariSubHandle || generation !== trackLifecycle.generation) return
 
   const range = getTrackEventTimeRange()
-  if (!range || generation !== trackGeneration) return
+  if (!range || generation !== trackLifecycle.generation) return
 
   const cappedEnd = Math.min(range.end, range.start + FULL_WARMUP_CAP_SECONDS)
 
   let ticks = 0
 
   for (let time = range.start; time <= cappedEnd; time += fullTrackWarmupStepSeconds) {
-    if (!akariSubHandle || generation !== trackGeneration) return
+    if (!akariSubHandle || generation !== trackLifecycle.generation) return
 
     if (onDemandRenderMode && (renderInFlight || queuedRenders.length > 0 || metrics.pendingRenders > 0)) {
       await sleep(0)
-      if (generation !== trackGeneration) return
+      if (generation !== trackLifecycle.generation) return
       continue
     }
 
@@ -890,7 +860,7 @@ const prewarmEntireTrack = async (generation: number): Promise<void> => {
 
     if (onDemandRenderMode || ticks % FULL_WARMUP_YIELD_EVERY === 0) {
       await sleep(0)
-      if (generation !== trackGeneration) return
+      if (generation !== trackLifecycle.generation) return
     }
   }
 
@@ -922,12 +892,12 @@ const scheduleFullTrackWarmup = (): void => {
     return
   }
   fullTrackWarmupStarted = true
-  const generation = trackGeneration
+  const generation = trackLifecycle.generation
   fullTrackWarmupGeneration = generation
 
   fullTrackWarmupPromise = (async () => {
     await sleep(0)
-    if (generation !== trackGeneration) return
+    if (generation !== trackLifecycle.generation) return
 
     try {
       await prewarmEntireTrack(generation)
@@ -936,7 +906,7 @@ const scheduleFullTrackWarmup = (): void => {
     }
 
     try {
-      if (akariSubHandle && generation === trackGeneration) {
+      if (akariSubHandle && generation === trackLifecycle.generation) {
         prewarmRenderer(getCurrentTime(), generation)
       }
     } catch (e) {
@@ -1537,26 +1507,6 @@ const read_ = (url: string, ab?: boolean): string | ArrayBuffer => {
   return xhr.response
 }
 
-const applyPlainTrack = (content: string | Uint8Array | ArrayBuffer): void => {
-  protectedTrackContent = false
-  resetCueState(lastCurrentTime)
-
-  if (isBinaryContent(content)) {
-    createTrackFromBytes(toUint8Array(content))
-    ingestSubtitleText(contentToText(content))
-    finishTrackLoad()
-    return
-  }
-
-  ingestSubtitleText(content)
-
-  if (clampPos) content = fixPlayRes(content)
-  if (dropAllBlur) content = dropBlur(content)
-
-  createTrackFromString(content)
-  finishTrackLoad()
-}
-
 const publishPartialTrack = (text: string): boolean => {
   if (!hasRenderableAssPrefix(text)) return false
 
@@ -1659,10 +1609,9 @@ const resetCueState = (time: number): void => {
 
 const loadSubtitleUrl = async (
   url: string,
-  generation: number,
   signal: AbortSignal,
+  isCurrent: () => boolean,
   onPartialTrack?: (text: string) => void,
-  isCurrent: () => boolean = () => generation === trackGeneration,
   announcePartial = true
 ): Promise<{ content: string; emittedPartialReady: boolean }> => {
   const decoder = new AssStreamDecoder()
@@ -1717,26 +1666,10 @@ const finishTrackLoad = (requestId?: number): void => {
   postMessage({ target: 'trackReady', requestId })
 }
 
-self.setTrack = ({ content }: { content: string | Uint8Array | ArrayBuffer }): void => {
-  stopWarmup()
-  advanceTrackGeneration()
-  applyPlainTrack(content)
-}
+self.setTrack = ({ content }: { content: string | Uint8Array | ArrayBuffer }): void => trackLifecycle.set(content)
 
-self.setEncryptedTrack = async ({ content }: { content: EncryptedSubtitleContent }): Promise<void> => {
-  stopWarmup()
-  advanceTrackGeneration()
-  protectedTrackContent = true
-  resetCueState(lastCurrentTime)
-
-  const decrypted = await decryptSubtitleContent(content)
-  try {
-    createTrackFromBytes(decrypted)
-  } finally {
-    decrypted.fill(0)
-  }
-  finishTrackLoad()
-}
+self.setEncryptedTrack = ({ content }: { content: EncryptedSubtitleContent }): Promise<void> =>
+  trackLifecycle.setEncrypted(content)
 
 self.getColorSpace = (): void => {
   postMessage({ target: 'verifyColorSpace', subtitleColorSpace })
@@ -1744,7 +1677,7 @@ self.getColorSpace = (): void => {
 
 self.freeTrack = (): void => {
   stopWarmup()
-  advanceTrackGeneration()
+  trackLifecycle.invalidate()
   firstTrackEventStartTime = null
   protectedTrackContent = false
   const api = requireApi()
@@ -1774,7 +1707,7 @@ const afterStreamingMutation = (): void => {
 
 self.initStreamingTrack = ({ options }: { options: StreamingTrackOptions }): void => {
   stopWarmup()
-  advanceTrackGeneration()
+  trackLifecycle.invalidate()
   protectedTrackContent = false
   resetCueState(lastCurrentTime)
 
@@ -1850,45 +1783,7 @@ self.configurePrune = ({ delay }: { delay: number }): void => {
   requireStreamingApi().configurePrune(requireHandle(), delay < 0 ? -1 : delay * 1000)
 }
 
-self.setTrackByUrl = async ({ url }: { url: string }): Promise<void> => {
-  stopWarmup()
-  const generation = advanceTrackGeneration()
-  protectedTrackContent = false
-  const signal = beginSubtitleFetch()
-  let publishedPartial = false
-
-  try {
-    const content = await loadSubtitleUrl(url, generation, signal, (text) => {
-      if (generation !== trackGeneration) return
-      publishedPartial = publishPartialTrack(text)
-    })
-    if (generation !== trackGeneration) return
-    applyPlainTrack(content.content)
-  } catch (error) {
-    if (generation !== trackGeneration || isAbortError(error)) return
-    if (publishedPartial) {
-      requireApi().removeTrack(requireHandle())
-      syncTotalEventsMetric()
-      resetCueState(lastCurrentTime)
-      markNextRenderForced()
-    }
-    throw error
-  } finally {
-    if (subtitleFetchAbort?.signal === signal) subtitleFetchAbort = null
-  }
-}
-
-const abortPreloadFetch = (): void => {
-  preloadFetchAbort?.abort()
-  preloadFetchAbort = null
-}
-
-const clearPreloadedTrack = (): void => {
-  if (preloadedTrack && preloadedTrack.encrypted && preloadedTrack.content instanceof Uint8Array) {
-    preloadedTrack.content.fill(0)
-  }
-  preloadedTrack = null
-}
+self.setTrackByUrl = ({ url }: { url: string }): Promise<void> => trackLifecycle.setUrl(url)
 
 const scanTrackFonts = (content: string | Uint8Array): void => {
   ingestSubtitleText(typeof content === 'string' ? content : contentToText(content))
@@ -1913,107 +1808,50 @@ const applyStoredTrack = (content: string | Uint8Array, encrypted: boolean, requ
   finishTrackLoad(requestId)
 }
 
-const runPreload = async (source: PreloadTrackSource, generation: number): Promise<number> => {
-  let content: string | Uint8Array
-  let encrypted = false
-
-  if (source.kind === 'url') {
-    const controller = new AbortController()
-    preloadFetchAbort = controller
-    const loaded = await loadSubtitleUrl(
-      source.url,
-      generation,
-      controller.signal,
-      undefined,
-      () => generation === preloadGeneration,
-      false
-    )
-    if (generation !== preloadGeneration) {
-      throw new DOMException('The operation was aborted.', 'AbortError')
-    }
-    content = prepareStoredTrackContent(loaded.content)
-  } else if (source.kind === 'encrypted') {
-    encrypted = true
-    const decrypted = await decryptSubtitleContent(source.content)
-    if (generation !== preloadGeneration) {
-      decrypted.fill(0)
-      throw new DOMException('The operation was aborted.', 'AbortError')
-    }
-    content = decrypted
-  } else {
-    content = prepareStoredTrackContent(source.content)
+const trackLifecycle = new TrackLifecycle({
+  load: loadSubtitleUrl,
+  decrypt: decryptSubtitleContent,
+  prepare: prepareStoredTrackContent,
+  scanFonts: scanTrackFonts,
+  waitFonts: waitForPendingFonts,
+  flushFonts: flushFontReload,
+  changed: generation => {
+    stopWarmup()
+    fullTrackWarmupGeneration = generation
+    fullTrackWarmupPromise = null
+    fullTrackWarmupStarted = false
+    markNextRenderForced()
+  },
+  protect: encrypted => {
+    protectedTrackContent = encrypted
+    if (encrypted) resetCueState(lastCurrentTime)
+  },
+  install: applyStoredTrack,
+  partial: publishPartialTrack,
+  removePartial: () => {
+    requireApi().removeTrack(requireHandle())
+    syncTotalEventsMetric()
+    resetCueState(lastCurrentTime)
+    markNextRenderForced()
   }
+})
 
-  scanTrackFonts(content)
-  await waitForPendingFonts()
-  if (generation !== preloadGeneration) {
-    throw new DOMException('The operation was aborted.', 'AbortError')
-  }
-  flushFontReload()
-
-  clearPreloadedTrack()
-  const id = nextPreloadId++
-  preloadedTrack = { id, content, encrypted }
-  return id
-}
-
-self.preloadTrack = async ({
-  requestId,
-  source
-}: {
-  requestId: number
-  source: PreloadTrackSource
-}): Promise<void> => {
-  abortPreloadFetch()
-  preloadGeneration++
-  const generation = preloadGeneration
-
+self.preloadTrack = async ({ requestId, source }: { requestId: number; source: PreloadTrackSource }): Promise<void> => {
   try {
-    const id = await runPreload(source, generation)
+    const id = await trackLifecycle.preload(source)
     postMessage({ target: 'preloadTrack', requestId, success: true, id })
   } catch (error) {
-    if (generation === preloadGeneration) clearPreloadedTrack()
-    if (generation !== preloadGeneration || isAbortError(error)) {
-      postMessage({
-        target: 'preloadTrack',
-        requestId,
-        success: false,
-        error: 'The preload was cancelled'
-      })
-      return
-    }
-    postMessage({
-      target: 'preloadTrack',
-      requestId,
-      success: false,
-      error: error instanceof Error ? error.message : String(error)
-    })
-  } finally {
-    if (preloadGeneration === generation) preloadFetchAbort = null
+    postMessage({ target: 'preloadTrack', requestId, success: false, error: error instanceof Error ? error.message : String(error) })
   }
 }
 
 self.activatePreloadedTrack = ({ requestId, id }: { requestId: number; id?: number }): void => {
-  const pending = preloadedTrack
-  if (!pending || (id != null && pending.id !== id)) {
-    postMessage({
-      target: 'activatePreloadedTrack',
-      requestId,
-      success: false,
-      error: pending ? 'That preloaded track is no longer available' : 'No preloaded track is ready'
-    })
-    return
-  }
-
-  stopWarmup()
-  advanceTrackGeneration()
-  preloadedTrack = null
   try {
-    applyStoredTrack(pending.content, pending.encrypted, requestId)
-  } finally {
-    if (pending.encrypted && pending.content instanceof Uint8Array) pending.content.fill(0)
+    const activatedId = trackLifecycle.activate(id, requestId)
+    postMessage({ target: 'activatePreloadedTrack', requestId, success: true, id: activatedId })
+  } catch (error) {
+    postMessage({ target: 'activatePreloadedTrack', requestId, success: false, error: error instanceof Error ? error.message : String(error) })
   }
-  postMessage({ target: 'activatePreloadedTrack', requestId, success: true, id: pending.id })
 }
 
 let _isPaused = true
@@ -3114,14 +2952,9 @@ self.init = async (data: any): Promise<void> => {
     } else {
       protectedTrackContent = false
       if (!subContent && typeof data.subUrl === 'string' && data.subUrl) {
-        const signal = beginSubtitleFetch()
-        try {
-          const loaded = await loadSubtitleUrl(data.subUrl, trackGeneration, signal)
-          subContent = loaded.content
-          emittedPartialReady = loaded.emittedPartialReady
-        } finally {
-          if (subtitleFetchAbort?.signal === signal) subtitleFetchAbort = null
-        }
+        const loaded = await trackLifecycle.initialUrl(data.subUrl)
+        subContent = loaded.content
+        emittedPartialReady = loaded.emittedPartialReady
       }
     }
 
@@ -3230,7 +3063,7 @@ self.init = async (data: any): Promise<void> => {
 
     if (blockingFullTrackWarmup && fullTrackWarmupEnabled && !fullTrackWarmupStarted) {
       fullTrackWarmupStarted = true
-      const generation = trackGeneration
+      const generation = trackLifecycle.generation
       fullTrackWarmupGeneration = generation
       try {
         await prewarmEntireTrack(generation)
@@ -3399,11 +3232,8 @@ self.video = ({
 
 self.destroy = (): void => {
   stopWarmup()
-  abortPreloadFetch()
-  preloadGeneration++
-  clearPreloadedTrack()
+  trackLifecycle.destroy()
   resetCueState(lastCurrentTime)
-  advanceTrackGeneration()
   firstTrackEventStartTime = null
 
   rawAssWebGL2Renderer?.destroy()
