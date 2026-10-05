@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test'
 
 import { presentedFrameIndex, snapToFrameTimeline } from '../src/ts/timing'
 
-test('treats sub-0.05 ms RVFC/probe skew as the same encoded frame', () => {
+test('treats sub-25 us RVFC/probe skew as the same encoded frame', () => {
   const timeline = new Float64Array([6.25, 6.292, 6.333, 6.375])
 
   // Browser timestamp is 0.0003 ms below the probed frame PTS. Native players

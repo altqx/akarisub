@@ -501,7 +501,7 @@ renderer.addEventListener('rendererChange', (event) => {
 | `prescaleFactor`      | number                                   | Scale factor for subtitles                                    |
 | `prescaleHeightLimit` | number                                   | Height limit for prescaling                                   |
 | `maxRenderHeight`     | number                                   | Maximum render height                                         |
-| `timeOffset`          | number                                   | Subtitle time offset in seconds                               |
+| `timeOffset`          | number                                   | Subtitle time offset in seconds; assigning it at runtime discards prepared frames and re-renders at the new offset |
 | `renderAhead`         | number                                   | Optional extra seconds to render ahead of the video clock     |
 | `framePrefetch`       | number                                   | Number of exact subtitle frames prepared ahead                |
 | `busy`                | boolean                                  | Whether the renderer is currently busy                        |

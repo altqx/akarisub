@@ -3,7 +3,7 @@ const MAX_COMPENSATION_SECONDS = 0.1
 const COMPENSATION_RISE_ALPHA = 0.5
 const COMPENSATION_FALL_ALPHA = 0.1
 const MIN_COMPENSATION_SECONDS = 0.0005
-const FRAME_TIMESTAMP_MATCH_TOLERANCE_SECONDS = 0.0000005
+const FRAME_TIMESTAMP_MATCH_TOLERANCE_SECONDS = 0.000025
 
 /**
  * Update a render-pipeline latency estimate from one completed video-frame render.
@@ -127,23 +127,37 @@ export const predictFrameDisplayTimeMs = (
 export const normalizeFrameTimeline = (
   frameTimes: ArrayLike<number> & { mediaTimeOrigin?: number; subtitleTimeOffset?: number }
 ): Float64Array & { mediaTimeOrigin?: number; subtitleTimeOffset?: number } => {
-  const times: number[] = []
-  for (let i = 0; i < frameTimes.length; i++) {
-    const time = Number(frameTimes[i])
-    if (Number.isFinite(time) && time >= 0) times.push(time)
-  }
-  times.sort((a, b) => a - b)
-
-  let write = 0
-  for (let read = 0; read < times.length; read++) {
-    if (write === 0 || times[read] > times[write - 1]) {
-      times[write++] = times[read]
-    }
-  }
-  times.length = write
-  const normalized = Float64Array.from(times) as Float64Array & {
+  // Fast path: already finite, non-negative and strictly increasing, so no sort or de-duplication is needed.
+  let normalized = new Float64Array(frameTimes.length) as Float64Array & {
     mediaTimeOrigin?: number
     subtitleTimeOffset?: number
+  }
+  let clean = true
+  for (let i = 0; i < frameTimes.length; i++) {
+    const time = Number(frameTimes[i])
+    if (!(Number.isFinite(time) && time >= 0 && (i === 0 || time > normalized[i - 1]))) {
+      clean = false
+      break
+    }
+    normalized[i] = time
+  }
+
+  if (!clean) {
+    const times: number[] = []
+    for (let i = 0; i < frameTimes.length; i++) {
+      const time = Number(frameTimes[i])
+      if (Number.isFinite(time) && time >= 0) times.push(time)
+    }
+    times.sort((a, b) => a - b)
+
+    let write = 0
+    for (let read = 0; read < times.length; read++) {
+      if (write === 0 || times[read] > times[write - 1]) {
+        times[write++] = times[read]
+      }
+    }
+    times.length = write
+    normalized = Float64Array.from(times) as typeof normalized
   }
   if (Number.isFinite(frameTimes.mediaTimeOrigin)) normalized.mediaTimeOrigin = frameTimes.mediaTimeOrigin
   if (Number.isFinite(frameTimes.subtitleTimeOffset)) {
@@ -177,12 +191,13 @@ export const presentedFrameIndex = (frameTimes: ArrayLike<number>, mediaTime: nu
   if (next < 0) return next
   if (next === 0 || frameTimes[next] <= mediaTime) return next
 
-  // RVFC mediaTime and the probed encoded PTS describe the same frame but can
-  // differ by sub-millisecond floating-point/timescale conversion noise. A
-  // strict comparison turns a tiny underrun into selection of the previous
-  // frame, delaying libass by an entire frame. Treat only <= 0.0005 ms as the
-  // same encoded timestamp; larger gaps retain normal "currently presented"
-  // floor semantics.
+  // RVFC mediaTime and the probed encoded PTS describe the same frame but differ by timescale noise.
+  // Chromium MSE reports mediaTime as a microsecond TimeDelta that is truncated, not rounded. hls.js remuxes at a
+  // 90 kHz timescale, adding up to about 11.1 us of rounding per tick. The backend probe timeline is rounded to
+  // microseconds, and channel-shift calibration adds error on top. A strict comparison turns a tiny underrun into
+  // the previous frame, delaying libass by an entire frame. 25 us covers all of these and stays under 1% of a
+  // 240 fps frame period; real frame gaps are at least about 4 ms, so the match is never ambiguous. Larger gaps
+  // keep normal "currently presented" floor semantics.
   return frameTimes[next] - mediaTime <= FRAME_TIMESTAMP_MATCH_TOLERANCE_SECONDS ? next : next - 1
 }
 
