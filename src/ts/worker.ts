@@ -1,6 +1,7 @@
 /// <reference lib="webworker" />
 
 import { TrackLifecycle } from './track-lifecycle'
+import { createFontReloadScheduler } from './font-reload'
 
 import type {
   ASSEvent,
@@ -1341,29 +1342,15 @@ const asyncWrite = (
   }
 }
 
-let pendingFontReload: ReturnType<typeof setTimeout> | null = null
-const scheduleReloadFonts = (): void => {
-  if (pendingFontReload) return
-  pendingFontReload = setTimeout(() => {
-    pendingFontReload = null
-    if (akariSubHandle) {
-      const api = requireApi()
-      api.reloadFonts(akariSubHandle)
-      markNextRenderForced()
-    }
-  }, 16)
-}
-
-const flushFontReload = (): void => {
-  if (pendingFontReload) {
-    clearTimeout(pendingFontReload)
-    pendingFontReload = null
-  }
+const fontReload = createFontReloadScheduler(() => {
   if (akariSubHandle) {
     requireApi().reloadFonts(akariSubHandle)
     markNextRenderForced()
   }
-}
+})
+const scheduleReloadFonts = fontReload.schedule
+// Every runtime font write schedules a reload, so flushing only reloads when one is pending.
+const flushFontReload = fontReload.flush
 
 /**
  * Add a font as an embedded font via ass_add_font.
@@ -2169,7 +2156,7 @@ const render = (
       return paintImages({ images, buffers, times, requestId, renderEpoch, prepareId, time, presentationId })
     }
 
-    const useAsyncBitmapPath = asyncRender
+    const useAsyncBitmapPath = asyncRender && prepareId == null
 
     if (useAsyncBitmapPath) {
       const promises = frameBitmapPromises
@@ -2244,7 +2231,7 @@ const render = (
       // Both main-thread presentation and prepared snapshots need standalone
       // storage. In particular, Chromium cannot reliably snapshot a canvas
       // after ImageData uploads backed by the reusable WASM memory buffer.
-      if (!offCanvasCtx) {
+      if (!offCanvasCtx || prepareId != null) {
         let totalBytes = 0
         for (let i = 0; i < written; ++i) {
           const metaOffset = i * RRC_IMG_STRIDE

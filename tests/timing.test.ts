@@ -87,13 +87,63 @@ describe('subtitle timing compensation', () => {
     expect(frameIndexAtOrAfter(timeline, 0.02)).toBe(1)
     expect(snapToFrameTimeline(timeline, 0.005)).toBe(0)
     expect(snapToFrameTimeline(timeline, 0.02)).toBe(0)
-    expect(snapToFrameTimeline(timeline, 0.041707)).toBe(0)
+    expect(snapToFrameTimeline(timeline, 0.0416)).toBe(0)
     expect(snapToFrameTimeline(timeline, 0.041708)).toBeCloseTo(0.041708)
     expect(snapToFrameTimeline(timeline, 1)).toBeCloseTo(0.083417)
     expect(nearestFrameIndex(timeline, 0.039)).toBe(1)
     expect(nearestFrameIndex(timeline, 0.06)).toBe(1)
     expect(presentedFrameIndex(timeline, 0.02)).toBe(0)
-    expect(presentedFrameIndex(timeline, 0.041707)).toBe(0)
+    expect(presentedFrameIndex(timeline, 0.0416)).toBe(0)
+  })
+
+  test('keeps a sample 30 us before a frame on the previous frame', () => {
+    const timeline = new Float64Array([0, 0.041708, 0.083417])
+    expect(presentedFrameIndex(timeline, 0.041678)).toBe(0)
+    expect(presentedFrameIndex(timeline, 0.041708 - 0.00001)).toBe(1)
+  })
+
+  test('resolves a backend-style 24000/1001 timeline under us and 90 kHz truncation', () => {
+    const count = 50000
+    const timeline = new Float64Array(count)
+    for (let k = 0; k < count; k++) timeline[k] = Math.round(((k * 1001) / 24000) * 1e6) / 1e6
+    let mismatches = 0
+    for (let k = 0; k < count; k++) {
+      const t = (k * 1001) / 24000
+      if (presentedFrameIndex(timeline, Math.floor(t * 1e6) / 1e6) !== k) mismatches++
+      if (presentedFrameIndex(timeline, Math.floor((Math.round(t * 90000) * 1e6) / 90000) / 1e6) !== k) mismatches++
+    }
+    expect(mismatches).toBe(0)
+  })
+
+  test('normalizeFrameTimeline matches expected values and properties for all input shapes', () => {
+    const meta = { mediaTimeOrigin: 1.5, subtitleTimeOffset: 0.25 }
+    const cases: Array<[ArrayLike<number>, number[]]> = [
+      [Object.assign(new Float64Array([0, 0.02, 0.04]), meta), [0, 0.02, 0.04]],
+      [Object.assign([0, 0.02, 0.04], meta), [0, 0.02, 0.04]],
+      [Object.assign([0.04, 0, 0.02], meta), [0, 0.02, 0.04]],
+      [Object.assign([0, 0.02, 0.02, 0.04, 0.04], meta), [0, 0.02, 0.04]],
+      [Object.assign([0, Number.NaN, 0.02], meta), [0, 0.02]],
+      [Object.assign([-1, 0, 0.02], meta), [0, 0.02]],
+      [Object.assign([], meta), []],
+      [Object.assign([0.5], meta), [0.5]]
+    ]
+    for (const [input, expected] of cases) {
+      const result = normalizeFrameTimeline(input)
+      expect([...result]).toEqual(expected)
+      expect(result.mediaTimeOrigin).toBe(1.5)
+      expect(result.subtitleTimeOffset).toBe(0.25)
+    }
+    const bare = normalizeFrameTimeline([0.1, 0.2])
+    expect(bare.mediaTimeOrigin).toBeUndefined()
+    expect(bare.subtitleTimeOffset).toBeUndefined()
+  })
+
+  test('normalizeFrameTimeline never aliases a sorted Float64Array input', () => {
+    const input = new Float64Array([0, 0.02, 0.04])
+    const result = normalizeFrameTimeline(input)
+    expect(result).not.toBe(input)
+    input[1] = 9
+    expect([...result]).toEqual([0, 0.02, 0.04])
   })
 
   test('does not extrapolate an exact timeline callback into future frames', () => {

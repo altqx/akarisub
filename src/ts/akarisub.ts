@@ -200,6 +200,7 @@ export default class AkariSub extends EventTarget {
   private _lastRefreshRafTime?: number
   private _prepareQueue: number[] = []
   private _prepareRequests = new Map<number, PrepareRequest>()
+  private _lastRvfcMediaTime: number | null = null
   private _nextPrepareId: number = 1
   private _prepareForce: boolean = true
   private _prepareFailureEpoch: number = -1
@@ -274,8 +275,7 @@ export default class AkariSub extends EventTarget {
   private _lastRenderHeight: number = 0
   private _gpuBitmapImages: Array<{ image: ImageBitmap; x: number; y: number }> = []
 
-  /** Seconds added to video time when sampling the track. */
-  public timeOffset: number
+  private _timeOffset!: number
   /** When true, the worker prints libass and renderer logs. */
   public debug: boolean
   /** Extra scale applied to the subtitle canvas before height limits. */
@@ -366,7 +366,7 @@ export default class AkariSub extends EventTarget {
     // animation-heavy custom-canvas workloads despite helping dense overlays.
     this._offscreenRender = canTransferOffscreen && !canUseGPURenderer && wantsOffscreenRender
 
-    this.timeOffset = options.timeOffset || 0
+    this._timeOffset = options.timeOffset || 0
     this._video = options.video
     this._canvas = options.canvas!
 
@@ -1207,6 +1207,7 @@ export default class AkariSub extends EventTarget {
       this._videoFrameClock = null
       this._video = video
       this._playstate = video.paused || video.ended
+      this._lastRvfcMediaTime = null
 
       if (this._onDemandRender) {
         if (!this._destroyed && this._video === video) {
@@ -1671,6 +1672,22 @@ export default class AkariSub extends EventTarget {
     void this.sendMessage('frameTimelineMode', {
       enabled: this._frameTimeline != null && this.framePrefetch > 0
     })
+    this._syncVideoClock()
+    this._primePreparedFrames(this._currentExactFrameMediaTime())
+    this._dispatchNextPreparation()
+  }
+
+  /** Subtitle time offset in seconds. Changing it discards prepared frames rendered with the previous offset. */
+  get timeOffset(): number {
+    return this._timeOffset
+  }
+
+  set timeOffset(value: number) {
+    if (!Number.isFinite(value) || value === this._timeOffset) return
+    const previous = this._timeOffset
+    this._timeOffset = value
+    if (typeof previous !== 'number' || this._destroyed) return
+    this._bumpRenderEpoch()
     this._syncVideoClock()
     this._primePreparedFrames(this._currentExactFrameMediaTime())
     this._dispatchNextPreparation()
@@ -2342,6 +2359,19 @@ export default class AkariSub extends EventTarget {
 
         if (this._destroyed || this._video !== video || generation !== this._rvfcGeneration) return
 
+        if (
+          this._playstate &&
+          !video.paused &&
+          !video.ended &&
+          !video.seeking &&
+          this._lastRvfcMediaTime != null &&
+          metadata.mediaTime > this._lastRvfcMediaTime
+        ) {
+          this._playstate = false
+          this._syncVideoClock()
+        }
+        this._lastRvfcMediaTime = metadata.mediaTime
+
         this._handleRVFC(now, metadata)
       }
     )
@@ -2386,14 +2416,12 @@ export default class AkariSub extends EventTarget {
     switch (event.type) {
       case 'play':
       case 'playing':
-      case 'canplay':
         this._playstate = false
         break
       case 'pause':
       case 'ended':
       case 'seeking':
       case 'waiting':
-      case 'stalled':
         this._playstate = true
         break
       case 'seeked':
