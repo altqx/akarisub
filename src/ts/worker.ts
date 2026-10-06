@@ -98,6 +98,7 @@ let configuredRenderAheadSeconds = 0
 let fallbackTimingCompensationSeconds = 0
 let rawAssImageGpuEnabled = false
 let useLocalFonts = false
+let maxSubtitleBytes = MAX_SUBTITLE_BYTES
 let useFontconfigProvider = true
 let blendMode: 'js' | 'wasm' = 'wasm'
 let availableFonts: Record<string, FontFamilySource> = {}
@@ -1192,11 +1193,11 @@ const decryptChunkPayload = async (
 }
 
 const decryptSubtitleContent = async (content: EncryptedSubtitleContent): Promise<Uint8Array> => {
-  assertEncryptedBudget(content)
+  assertEncryptedBudget(content, maxSubtitleBytes)
 
   if (content.encrypted) {
     const plain = await decryptV2Payload(content.encrypted, content.contentKey)
-    if (plain.byteLength > MAX_SUBTITLE_BYTES) {
+    if (plain.byteLength > maxSubtitleBytes) {
       plain.fill(0)
       throw new Error('Decrypted subtitle exceeds the size limit')
     }
@@ -1222,7 +1223,7 @@ const decryptSubtitleContent = async (content: EncryptedSubtitleContent): Promis
         const plain = await decryptChunkPayload(chunks[index], content.contentKey, index, chunks.length, keyId)
         decryptedChunks[index] = plain
         total += plain.byteLength
-        if (total > MAX_SUBTITLE_BYTES) throw new Error('Decrypted subtitle exceeds the size limit')
+        if (total > maxSubtitleBytes) throw new Error('Decrypted subtitle exceeds the size limit')
       } catch (error) {
         failure ??= error
       }
@@ -1791,7 +1792,7 @@ const loadSubtitleUrl = async (
   }
 
   const bytes = await fetchBoundedAsset(url, {
-    maxBytes: MAX_SUBTITLE_BYTES,
+    maxBytes: maxSubtitleBytes,
     timeoutMs: SUBTITLE_FETCH_TIMEOUT_MS,
     signal,
     label: 'Subtitle',
@@ -1892,7 +1893,7 @@ self.initStreamingTrack = ({ options }: { options: StreamingTrackOptions }): voi
   applyStreamingPrune(parsed)
 
   if (parsed.header != null) {
-    assertSubtitleBudget(parsed.header)
+    assertSubtitleBudget(parsed.header, maxSubtitleBytes)
     ingestSubtitleText(contentToText(parsed.header))
     withProcessBytes(parsed.header, (ptr, size) => {
       if (parsed.format === 'matroska') api.processCodecPrivate(handle, ptr, size)
@@ -1973,7 +1974,7 @@ const scanTrackFonts = (content: string | Uint8Array): void => {
 const prepareStoredTrackContent = (
   content: string | Uint8Array | ArrayBuffer
 ): string | Uint8Array => {
-  assertSubtitleBudget(content)
+  assertSubtitleBudget(content, maxSubtitleBytes)
   if (isBinaryContent(content)) return toUint8Array(content)
 
   let text = content
@@ -3038,6 +3039,7 @@ self.init = async (data: any): Promise<void> => {
     debug = data.debug
     targetFps = data.targetFps || targetFps
     useLocalFonts = data.useLocalFonts
+    maxSubtitleBytes = data.maxSubtitleBytes ?? MAX_SUBTITLE_BYTES
     useFontconfigProvider = data.useFontconfigProvider
     dropAllBlur = data.dropAllBlur
     clampPos = data.clampPos
@@ -3134,7 +3136,7 @@ self.init = async (data: any): Promise<void> => {
       subContent = decryptedSubContent
     } else {
       protectedTrackContent = false
-      if (subContent) assertSubtitleBudget(subContent)
+      if (subContent) assertSubtitleBudget(subContent, maxSubtitleBytes)
       if (!subContent && typeof data.subUrl === 'string' && data.subUrl) {
         const loaded = await trackLifecycle.initialUrl(data.subUrl)
         subContent = loaded.content

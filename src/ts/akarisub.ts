@@ -31,8 +31,10 @@ import {
   assertStreamingEventBatch,
   assertStreamingPacket,
   assertSubtitleBudget,
+  resolveSubtitleLimit,
   streamingPayloadBytes
 } from './subtitle-budget'
+import { MAX_SUBTITLE_BYTES } from './asset-loader'
 import { classifyPerformanceWarnings, parsePreloadTrackSource, resolveCueTracking } from './cue-events'
 import { parseStreamingTrackOptions } from './streaming'
 import { normalizeFontFamilySource } from './font-subsets'
@@ -279,6 +281,7 @@ export default class AkariSub extends EventTarget {
   private _onPerformanceWarning?: (warning: PerformanceWarning) => void
   private _preloadedTrackId: number | null = null
   private _nextTrackRequestId = 1
+  private _maxSubtitleBytes = MAX_SUBTITLE_BYTES
   private _localFontIndex: Promise<Map<string, any>> | null = null
   private _pendingStreamingSizes: number[] = []
   private _pendingStreamingBytes = 0
@@ -322,8 +325,9 @@ export default class AkariSub extends EventTarget {
       throw this.destroy(new Error('No options provided'))
     }
 
-    if (options.subContent) assertSubtitleBudget(options.subContent)
-    if (options.encryptedSubContent) assertEncryptedBudget(options.encryptedSubContent)
+    this._maxSubtitleBytes = resolveSubtitleLimit(options.maxSubtitleBytes)
+    if (options.subContent) assertSubtitleBudget(options.subContent, this._maxSubtitleBytes)
+    if (options.encryptedSubContent) assertEncryptedBudget(options.encryptedSubContent, this._maxSubtitleBytes)
 
     for (const [index, font] of (options.fonts ?? []).entries()) {
       if (typeof font !== 'string' && font.byteLength > AkariSub.MAX_FONT_BYTES) {
@@ -515,6 +519,7 @@ export default class AkariSub extends EventTarget {
         libassMemoryLimit: options.libassMemoryLimit ?? 128,
         libassGlyphLimit: options.libassGlyphLimit ?? 2048,
         useLocalFonts: typeof (globalThis as any).queryLocalFonts !== 'undefined' && (options.useLocalFonts ?? true),
+        maxSubtitleBytes: this._maxSubtitleBytes,
         useFontconfigProvider: options.useFontconfigProvider ?? true,
         hasBitmapBug: AkariSub._hasBitmapBug
       }
@@ -1328,7 +1333,7 @@ export default class AkariSub extends EventTarget {
 
   /** Replace the current track with ASS/SSA text or bytes. */
   setTrack(content: string | Uint8Array | ArrayBuffer): void {
-    assertSubtitleBudget(content)
+    assertSubtitleBudget(content, this._maxSubtitleBytes)
     this._supersedePendingTrackActivation()
     this._bumpRenderEpoch()
     this.sendMessage('setTrack', { content }, AkariSub._getSubtitleTransfers(content))
@@ -1342,7 +1347,7 @@ export default class AkariSub extends EventTarget {
    * materialized in the main thread.
    */
   setEncryptedTrack(content: EncryptedSubtitleContent): void {
-    assertEncryptedBudget(content)
+    assertEncryptedBudget(content, this._maxSubtitleBytes)
     this._supersedePendingTrackActivation()
     this._bumpRenderEpoch()
     this.sendMessage('setEncryptedTrack', { content }, AkariSub._getSubtitleTransfers(undefined, content))
@@ -1364,7 +1369,7 @@ export default class AkariSub extends EventTarget {
    */
   initStreamingTrack(options?: StreamingTrackOptions | string | Uint8Array | ArrayBuffer): void {
     const parsed = parseStreamingTrackOptions(options)
-    if (parsed.header) assertSubtitleBudget(parsed.header)
+    if (parsed.header) assertSubtitleBudget(parsed.header, this._maxSubtitleBytes)
     this._pendingStreamingSizes = []
     this._pendingStreamingBytes = 0
     this._supersedePendingTrackActivation()
@@ -1442,8 +1447,8 @@ export default class AkariSub extends EventTarget {
    */
   async preloadTrack(source: PreloadTrackSource | string | Uint8Array | ArrayBuffer): Promise<PreloadedTrack> {
     const parsed = parsePreloadTrackSource(source)
-    if (parsed.kind === 'content') assertSubtitleBudget(parsed.content)
-    else if (parsed.kind === 'encrypted') assertEncryptedBudget(parsed.content)
+    if (parsed.kind === 'content') assertSubtitleBudget(parsed.content, this._maxSubtitleBytes)
+    else if (parsed.kind === 'encrypted') assertEncryptedBudget(parsed.content, this._maxSubtitleBytes)
     const ready =
       this._workerReady ||
       (await Promise.race([this._loaded.then(() => true), this._destroyedSignal.then(() => false)]))

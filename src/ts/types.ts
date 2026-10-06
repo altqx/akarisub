@@ -379,6 +379,12 @@ export interface AkariSubOptions {
    * only the slices that overlap the current track. Default true.
    */
   lazyFonts?: boolean
+  /**
+   * Largest subtitle accepted from any source (URL, inline, preloaded,
+   * streaming header, decrypted), in encoded bytes. Default 32 MiB. Raising it
+   * lets larger files through at the cost of worker/WASM memory.
+   */
+  maxSubtitleBytes?: number
   /** Use Local Font Access API for OS font lookup (default: true if available) */
   useLocalFonts?: boolean
   /** Use libass fontconfig provider for virtual/packaged font lookup (default: true) */
@@ -568,6 +574,7 @@ export interface WorkerInitMessage {
   libassMemoryLimit?: number
   libassGlyphLimit?: number
   useLocalFonts: boolean
+  maxSubtitleBytes?: number
   useFontconfigProvider: boolean
   hasBitmapBug: boolean
 }

@@ -9,7 +9,8 @@ import {
   assertEncryptedBudget,
   assertStreamingEventBatch,
   assertStreamingPacket,
-  assertSubtitleBudget
+  assertSubtitleBudget,
+  resolveSubtitleLimit
 } from '../src/ts/subtitle-budget'
 import { fixPlayRes } from '../src/ts/utils'
 
@@ -20,6 +21,16 @@ describe('subtitle admission budget', () => {
     expect(() => assertSubtitleBudget(new Uint8Array(MAX_SUBTITLE_BYTES))).not.toThrow()
     expect(() => assertSubtitleBudget(new Uint8Array(MAX_SUBTITLE_BYTES + 1))).toThrow()
     expect(() => assertSubtitleBudget(new ArrayBuffer(MAX_SUBTITLE_BYTES + 1))).toThrow()
+  })
+
+  test('honors a caller-supplied limit', () => {
+    const big = new Uint8Array(MAX_SUBTITLE_BYTES + 1)
+    expect(() => assertSubtitleBudget(big, MAX_SUBTITLE_BYTES * 2)).not.toThrow()
+    expect(() => assertSubtitleBudget(new Uint8Array(11), 10)).toThrow()
+    expect(resolveSubtitleLimit(undefined)).toBe(MAX_SUBTITLE_BYTES)
+    expect(resolveSubtitleLimit(64 * 1024 * 1024)).toBe(64 * 1024 * 1024)
+    expect(() => resolveSubtitleLimit(0)).toThrow()
+    expect(() => resolveSubtitleLimit(1.5)).toThrow()
   })
 
   test('measures strings by encoded bytes', () => {
