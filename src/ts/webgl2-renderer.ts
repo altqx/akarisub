@@ -6,6 +6,7 @@ import {
   type CanvasColorSpace,
   type ColorMatrix3
 } from './color-space'
+import { textureArrayLayerCap } from './gpu-budget'
 
 const MAX_IMAGES_PER_BATCH = 256
 const MAX_TEXTURE_ARRAY_LAYERS = 256
@@ -270,7 +271,7 @@ export class WebGL2Renderer {
     const gl = this._gl!
     const w = this._roundDim(width)
     const h = this._roundDim(height)
-    const l = this._roundLayers(layers)
+    const l = Math.min(this._roundLayers(layers), textureArrayLayerCap(w, h, 4, MAX_TEXTURE_ARRAY_LAYERS))
 
     if (this._texArray) gl.deleteTexture(this._texArray)
     this._texArray = gl.createTexture()!
@@ -286,14 +287,21 @@ export class WebGL2Renderer {
     this._texLayers = l
   }
 
-  /** @internal */
-  private _ensureTextureArray(maxW: number, maxH: number, count: number): void {
-    const c = Math.min(count, MAX_TEXTURE_ARRAY_LAYERS)
-    if (maxW <= this._texWidth && maxH <= this._texHeight && c <= this._texLayers) return
+  /**
+   * Grow the array to fit `count` layers of `maxW` x `maxH`. Returns how many
+   * layers one batch may use, or 0 when a single layer exceeds the GPU budget.
+   * @internal
+   */
+  private _ensureTextureArray(maxW: number, maxH: number, count: number): number {
     const newW = Math.max(this._texWidth, maxW)
     const newH = Math.max(this._texHeight, maxH)
+    const cap = textureArrayLayerCap(newW, newH, 4, MAX_TEXTURE_ARRAY_LAYERS)
+    if (cap === 0) return 0
+    const c = Math.min(count, cap)
+    if (maxW <= this._texWidth && maxH <= this._texHeight && c <= this._texLayers) return Math.min(cap, this._texLayers)
     const newL = Math.max(c, Math.min(this._texLayers, 16))
     this._allocateTextureArray(newW, newH, newL)
+    return Math.min(cap, this._texLayers)
   }
 
   /** Bind `canvas` as the GL surface and size the viewport. */
@@ -347,7 +355,8 @@ export class WebGL2Renderer {
       if (image.height > maxH) maxH = image.height
     }
 
-    this._ensureTextureArray(maxW, maxH, Math.min(len, MAX_TEXTURE_ARRAY_LAYERS))
+    const layerCap = this._ensureTextureArray(maxW, maxH, Math.min(len, MAX_TEXTURE_ARRAY_LAYERS))
+    if (layerCap === 0) return false
 
     const gl = this._gl
     gl.clearColor(0, 0, 0, 0)
@@ -364,7 +373,7 @@ export class WebGL2Renderer {
 
     while (imageIndex < len) {
       let count = 0
-      while (imageIndex < len && count < MAX_TEXTURE_ARRAY_LAYERS) {
+      while (imageIndex < len && count < layerCap) {
         const img = images[imageIndex++]
         const w = img.image.width,
           h = img.image.height
@@ -408,7 +417,8 @@ export class WebGL2Renderer {
       if (h > maxH) maxH = h
     }
 
-    this._ensureTextureArray(maxW, maxH, Math.min(len, MAX_TEXTURE_ARRAY_LAYERS))
+    const layerCap = this._ensureTextureArray(maxW, maxH, Math.min(len, MAX_TEXTURE_ARRAY_LAYERS))
+    if (layerCap === 0) return false
 
     const gl = this._gl
     gl.clearColor(0, 0, 0, 0)
@@ -425,7 +435,7 @@ export class WebGL2Renderer {
 
     while (imageIndex < len) {
       let count = 0
-      while (imageIndex < len && count < MAX_TEXTURE_ARRAY_LAYERS) {
+      while (imageIndex < len && count < layerCap) {
         const img = images[imageIndex++]
         const w = img.w,
           h = img.h

@@ -1,6 +1,7 @@
 /// <reference types="@webgpu/types" />
 
 import type { RenderImage } from './types'
+import { textureArrayLayerCap } from './gpu-budget'
 import {
   IDENTITY_COLOR_MATRIX,
   webgpuCanvasConfiguration,
@@ -284,7 +285,7 @@ export class WebGPURenderer {
 
     const w = this.roundDim(width)
     const h = this.roundDim(height)
-    const l = this.roundLayers(layers)
+    const l = Math.min(this.roundLayers(layers), textureArrayLayerCap(w, h, 4, MAX_TEXTURE_ARRAY_LAYERS))
 
     this.textureArray = this.device!.createTexture({
       size: [w, h, l],
@@ -319,24 +320,31 @@ export class WebGPURenderer {
     this.device!.queue.submit([commandEncoder.finish()])
   }
 
-  /** @internal */
-  private ensureTextureArray(maxWidth: number, maxHeight: number, count: number): boolean {
-    const clampedCount = Math.min(count, MAX_TEXTURE_ARRAY_LAYERS)
+  /**
+   * Grow the array to fit `count` layers of `maxWidth` x `maxHeight`. Returns
+   * how many layers one batch may use, or 0 when a single layer exceeds the
+   * GPU budget.
+   * @internal
+   */
+  private ensureTextureArray(maxWidth: number, maxHeight: number, count: number): number {
+    const newWidth = Math.max(this.textureArrayWidth, maxWidth)
+    const newHeight = Math.max(this.textureArrayHeight, maxHeight)
+    const cap = textureArrayLayerCap(newWidth, newHeight, 4, MAX_TEXTURE_ARRAY_LAYERS)
+    if (cap === 0) return 0
+    const clampedCount = Math.min(count, cap)
 
     if (
       maxWidth <= this.textureArrayWidth &&
       maxHeight <= this.textureArrayHeight &&
       clampedCount <= this.textureArraySize
     ) {
-      return false
+      return Math.min(cap, this.textureArraySize)
     }
 
-    const newWidth = Math.max(this.textureArrayWidth, maxWidth)
-    const newHeight = Math.max(this.textureArrayHeight, maxHeight)
     const newLayers = Math.max(clampedCount, Math.min(this.textureArraySize, 16))
 
     this.createTextureArray(newWidth, newHeight, newLayers)
-    return true
+    return Math.min(cap, this.textureArraySize)
   }
 
   /** @internal */
@@ -546,7 +554,8 @@ export class WebGPURenderer {
     }
 
     const batchSize = Math.min(validCount, MAX_TEXTURE_ARRAY_LAYERS)
-    this.ensureTextureArray(maxW, maxH, batchSize)
+    const layerCap = this.ensureTextureArray(maxW, maxH, batchSize)
+    if (layerCap === 0) return false
     this.updateBindGroup()
 
     const device = this.device
@@ -562,7 +571,7 @@ export class WebGPURenderer {
     while (imageIndex < len) {
       let texIndex = 0
 
-      while (imageIndex < len && texIndex < MAX_TEXTURE_ARRAY_LAYERS) {
+      while (imageIndex < len && texIndex < layerCap) {
         const img = images[imageIndex++]
         const bitmap = img.image
         const w = bitmap.width,
@@ -648,7 +657,8 @@ export class WebGPURenderer {
     }
 
     const batchSize = Math.min(validCount, MAX_TEXTURE_ARRAY_LAYERS)
-    this.ensureTextureArray(maxW, maxH, batchSize)
+    const layerCap = this.ensureTextureArray(maxW, maxH, batchSize)
+    if (layerCap === 0) return false
     this.updateBindGroup()
 
     const device = this.device
@@ -664,7 +674,7 @@ export class WebGPURenderer {
     while (imageIndex < len) {
       let texIndex = 0
 
-      while (imageIndex < len && texIndex < MAX_TEXTURE_ARRAY_LAYERS) {
+      while (imageIndex < len && texIndex < layerCap) {
         const img = images[imageIndex++]
         const w = img.w,
           h = img.h

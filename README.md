@@ -178,7 +178,7 @@ const ja = await renderer.preloadTrack({ kind: 'url', url: '/subs/ja.ass' })
 await renderer.activatePreloadedTrack(ja.id)
 ```
 
-`preloadTrack()` also accepts ASS text or bytes, `{ kind: 'content', content }`, or `{ kind: 'encrypted', content }`. `activatePreloadedTrack()` without an id uses the most recently preloaded track.
+`preloadTrack()` also accepts ASS text or bytes, or `{ kind: 'content', content }`. `activatePreloadedTrack()` without an id uses the most recently preloaded track.
 
 ## Streaming and live tracks
 
@@ -217,7 +217,7 @@ renderer.initStreamingTrack({ header: codecPrivate, format: 'matroska', pruneDel
 renderer.appendSubtitleChunk(packet, startSeconds, durationSeconds)
 ```
 
-`pruneDelay` deletes events that ended more than that many seconds before the last rendered timestamp. Call `pruneEvents(video.currentTime - 30)` yourself when you want an explicit live window. `flushEvents()` drops every event and keeps the header.
+`pruneDelay` defaults to 600 seconds (pass `null` to retain everything; the track is still capped at 250,000 events, packets at 4 MiB, batches at 10,000 events, and unacknowledged appends are limited, so `append*` throws when the worker is backed up). It deletes events that ended more than that many seconds before the last rendered timestamp. Call `pruneEvents(video.currentTime - 30)` yourself when you want an explicit live window. `flushEvents()` drops every event and keeps the header.
 
 Do not mix `appendSubtitleChunk` with `appendSubtitleData` / `createEvent` on the same track. libass uses ReadOrder to drop duplicate Matroska packets, and that check breaks if the event list is edited some other way.
 
@@ -370,7 +370,6 @@ The default options are best, and automatically fallback to the next fastest opt
 | `hdr`                  | boolean \| `'auto'`                  | `'auto'`                            | Request an HDR canvas when the video transfer is PQ or HLG                                                                                                 |
 | `subUrl`               | string                               | -                                   | URL of the subtitle file to play                                                                                                                           |
 | `subContent`           | string \| Uint8Array \| ArrayBuffer  | -                                   | Content of the subtitle file to play                                                                                                                       |
-| `encryptedSubContent`  | EncryptedSubtitleContent             | -                                   | AES-GCM encrypted subtitle payload, decrypted inside the worker                                                                                            |
 | `fonts`                | (string \| Uint8Array)[]             | -                                   | Font URLs or bytes to force-load in full                                                                                                                   |
 | `availableFonts`       | Record<string, FontFamilySource>     | liberation sans from package assets | Family name (lowercase) → URL, bytes, or unicode-range / script slices. Slices load lazily from the current track                                          |
 | `lazyFonts`            | boolean                              | `true`                              | When `availableFonts` entries declare slices, fetch only the ones the current scripts need                                                                 |
@@ -394,7 +393,6 @@ The default options are best, and automatically fallback to the next fastest opt
 | ----------------------------- | ---------------------------------------------- | -------------------------------------------------------------------------------- |
 | `setTrackByUrl(url)`          | `url: string`                                  | Load subtitle from URL                                                           |
 | `setTrack(content)`           | `content: string \| Uint8Array \| ArrayBuffer` | Set subtitle from content                                                        |
-| `setEncryptedTrack(content)`  | `content: EncryptedSubtitleContent`            | Set subtitle from an encrypted payload (decrypted in the worker)                 |
 | `freeTrack()`                 | -                                              | Remove current subtitles                                                         |
 | `initStreamingTrack(options?)` | `StreamingTrackOptions \| string \| bytes`    | Create a header-only track that can accept later fragments                       |
 | `appendSubtitleData(content)` | `content: string \| Uint8Array \| ArrayBuffer` | Parse ASS text (Dialogue lines, extra styles) into the current track             |
@@ -446,7 +444,7 @@ renderer.addEventListener('rendererChange', (event) => {
 })
 ```
 
-`CueEvent.start` and `CueEvent.duration` are seconds on the subtitle clock, matching `video.currentTime` plus `timeOffset`. Encrypted tracks omit `name` and `text`.
+`CueEvent.start` and `CueEvent.duration` are seconds on the subtitle clock, matching `video.currentTime` plus `timeOffset`.
 
 ### Event Management
 

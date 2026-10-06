@@ -24,6 +24,15 @@ import type {
   VideoFrameLike
 } from './types'
 import type { EncryptedSubtitleContent } from './types'
+import {
+  MAX_STREAM_PENDING_BYTES,
+  MAX_STREAM_PENDING_MESSAGES,
+  assertEncryptedBudget,
+  assertStreamingEventBatch,
+  assertStreamingPacket,
+  assertSubtitleBudget,
+  streamingPayloadBytes
+} from './subtitle-budget'
 import { classifyPerformanceWarnings, parsePreloadTrackSource, resolveCueTracking } from './cue-events'
 import { parseStreamingTrackOptions } from './streaming'
 import { normalizeFontFamilySource } from './font-subsets'
@@ -270,6 +279,9 @@ export default class AkariSub extends EventTarget {
   private _onPerformanceWarning?: (warning: PerformanceWarning) => void
   private _preloadedTrackId: number | null = null
   private _nextTrackRequestId = 1
+  private _localFontIndex: Promise<Map<string, any>> | null = null
+  private _pendingStreamingSizes: number[] = []
+  private _pendingStreamingBytes = 0
 
   private _lastRenderWidth: number = 0
   private _lastRenderHeight: number = 0
@@ -309,6 +321,9 @@ export default class AkariSub extends EventTarget {
     if (!options) {
       throw this.destroy(new Error('No options provided'))
     }
+
+    if (options.subContent) assertSubtitleBudget(options.subContent)
+    if (options.encryptedSubContent) assertEncryptedBudget(options.encryptedSubContent)
 
     for (const [index, font] of (options.fonts ?? []).entries()) {
       if (typeof font !== 'string' && font.byteLength > AkariSub.MAX_FONT_BYTES) {
@@ -1313,6 +1328,7 @@ export default class AkariSub extends EventTarget {
 
   /** Replace the current track with ASS/SSA text or bytes. */
   setTrack(content: string | Uint8Array | ArrayBuffer): void {
+    assertSubtitleBudget(content)
     this._supersedePendingTrackActivation()
     this._bumpRenderEpoch()
     this.sendMessage('setTrack', { content }, AkariSub._getSubtitleTransfers(content))
@@ -1326,6 +1342,7 @@ export default class AkariSub extends EventTarget {
    * materialized in the main thread.
    */
   setEncryptedTrack(content: EncryptedSubtitleContent): void {
+    assertEncryptedBudget(content)
     this._supersedePendingTrackActivation()
     this._bumpRenderEpoch()
     this.sendMessage('setEncryptedTrack', { content }, AkariSub._getSubtitleTransfers(undefined, content))
@@ -1347,6 +1364,9 @@ export default class AkariSub extends EventTarget {
    */
   initStreamingTrack(options?: StreamingTrackOptions | string | Uint8Array | ArrayBuffer): void {
     const parsed = parseStreamingTrackOptions(options)
+    if (parsed.header) assertSubtitleBudget(parsed.header)
+    this._pendingStreamingSizes = []
+    this._pendingStreamingBytes = 0
     this._supersedePendingTrackActivation()
     this._bumpRenderEpoch()
     this.sendMessage(
@@ -1363,6 +1383,8 @@ export default class AkariSub extends EventTarget {
    * or HLS fragments converted to ASS.
    */
   appendSubtitleData(content: string | Uint8Array | ArrayBuffer): void {
+    assertStreamingPacket(content)
+    this._reserveStreaming(streamingPayloadBytes(content))
     this._sendMutatingMessage(
       'appendSubtitleData',
       { content },
@@ -1376,6 +1398,8 @@ export default class AkariSub extends EventTarget {
    * the source is a Matroska/WebM stream.
    */
   appendSubtitleChunk(content: string | Uint8Array | ArrayBuffer, start: number, duration: number): void {
+    assertStreamingPacket(content)
+    this._reserveStreaming(streamingPayloadBytes(content))
     this._sendMutatingMessage(
       'appendSubtitleChunk',
       { content, start, duration },
@@ -1385,6 +1409,8 @@ export default class AkariSub extends EventTarget {
 
   /** Append several Dialogue events in one worker message. */
   appendEvents(events: Partial<ASSEvent>[]): void {
+    assertStreamingEventBatch(events)
+    this._reserveStreaming(events.length * 256)
     this._sendMutatingMessage('appendEvents', { events })
   }
 
@@ -1416,6 +1442,8 @@ export default class AkariSub extends EventTarget {
    */
   async preloadTrack(source: PreloadTrackSource | string | Uint8Array | ArrayBuffer): Promise<PreloadedTrack> {
     const parsed = parsePreloadTrackSource(source)
+    if (parsed.kind === 'content') assertSubtitleBudget(parsed.content)
+    else if (parsed.kind === 'encrypted') assertEncryptedBudget(parsed.content)
     const ready =
       this._workerReady ||
       (await Promise.race([this._loaded.then(() => true), this._destroyedSignal.then(() => false)]))
@@ -1705,12 +1733,28 @@ export default class AkariSub extends EventTarget {
     return data.count
   }
 
+  /** One enumeration per renderer; retried only if it failed. @internal */
+  private _getLocalFontIndex(): Promise<Map<string, any>> {
+    this._localFontIndex ??= (async () => {
+      const fontData = await (globalThis as any).queryLocalFonts()
+      const index = new Map<string, any>()
+      for (const obj of fontData ?? []) {
+        const key = String(obj.fullName).toLowerCase()
+        if (!index.has(key)) index.set(key, obj)
+      }
+      return index
+    })().catch((error) => {
+      this._localFontIndex = null
+      throw error
+    })
+    return this._localFontIndex
+  }
+
   /** @internal */
   private async _sendLocalFont(name: string): Promise<void> {
     let success = false
     try {
-      const fontData = await (globalThis as any).queryLocalFonts()
-      const font = fontData?.find((obj: any) => obj.fullName.toLowerCase() === name)
+      const font = (await this._getLocalFontIndex()).get(name)
       if (font) {
         const blob = await font.blob()
         const buffer = await blob.arrayBuffer()
@@ -2313,6 +2357,27 @@ export default class AkariSub extends EventTarget {
     this._demandTimings.clear()
     this._clearPreparedFrames()
     this._prepareForce = true
+  }
+
+  /**
+   * Account for one unacknowledged append. Throws instead of queueing without
+   * bound; callers should retry after the worker catches up.
+   * @internal
+   */
+  private _reserveStreaming(bytes: number): void {
+    if (
+      this._pendingStreamingSizes.length >= MAX_STREAM_PENDING_MESSAGES ||
+      this._pendingStreamingBytes + bytes > MAX_STREAM_PENDING_BYTES
+    ) {
+      throw new Error('Streaming backlog: the worker has not processed earlier appends yet')
+    }
+    this._pendingStreamingSizes.push(bytes)
+    this._pendingStreamingBytes += bytes
+  }
+
+  /** @internal */
+  private _streamingAck(): void {
+    this._pendingStreamingBytes -= this._pendingStreamingSizes.shift() ?? 0
   }
 
   /** @internal */

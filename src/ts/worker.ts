@@ -1,6 +1,23 @@
 /// <reference lib="webworker" />
 
 import { TrackLifecycle } from './track-lifecycle'
+import { textureArrayLayerCap } from './gpu-budget'
+import {
+  DECRYPT_CONCURRENCY,
+  ENCRYPTED_CHUNK_AAD_SIZE,
+  ENCRYPTED_CHUNK_HEADER_SIZE,
+  ENCRYPTED_CHUNK_INDEX_SIZE,
+  ENCRYPTED_CHUNK_VERSION,
+  ENCRYPTED_KEY_ID_SIZE,
+  ENCRYPTED_TAG_SIZE,
+  ENCRYPTED_V2_HEADER_SIZE,
+  DEFAULT_STREAM_PRUNE_SECONDS,
+  MAX_STREAM_EVENTS,
+  assertEncryptedBudget,
+  assertStreamingEventBatch,
+  assertStreamingPacket,
+  assertSubtitleBudget
+} from './subtitle-budget'
 import { createFontReloadScheduler } from './font-reload'
 
 import type {
@@ -93,12 +110,25 @@ let fallbackFontId = 0 // For fallback fonts (lower priority)
 const MAX_FONT_BYTES = 32 * 1024 * 1024
 const FONT_FETCH_TIMEOUT_MS = 30_000
 const pendingFontFamilies = new Set<string>()
+// Subtitle-driven font acquisition budgets.
+const MAX_FONT_FAMILIES_PER_TRACK = 256
+const MAX_LOCAL_FONT_REQUESTS_PER_TRACK = 32
+const MAX_RUNTIME_FONT_BYTES = 256 * 1024 * 1024
+const MAX_CONCURRENT_FONT_FETCHES = 4
+const requestedFontFamilies = new Set<string>()
+const requestedLocalFonts = new Set<string>()
+const missingLocalFonts = new Set<string>()
+let runtimeFontBytes = 0
+let fontGeneration = 0
+let activeFontFetches = 0
+const queuedFontFetches: Array<() => void> = []
 const LOCAL_FONT_WAIT_MS = 5_000
 const FONT_WAIT_TIMEOUT_MS = 30_000
 let fontWaiters: Array<() => void> = []
 const EMPTY_CUE_TIMES = new Int32Array(0)
 let cueTracking = true
 let cueTimes = EMPTY_CUE_TIMES
+let cueTimeCount = 0
 let lastActiveCues = new Map<number, CueEvent>()
 let lastReportedDroppedFrames = 0
 let demandRenderTime: number | undefined
@@ -475,7 +505,7 @@ class RawASSImageWebGL2Renderer {
     gl.blendEquation(gl.FUNC_ADD)
     gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA)
     gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1)
-    this._allocateTextureArray(256, 256, RAW_ASS_MAX_TEXTURE_ARRAY_LAYERS)
+    this._allocateTextureArray(256, 256, 8)
     this.updateSize(width, height)
     return true
   }
@@ -492,7 +522,7 @@ class RawASSImageWebGL2Renderer {
     const gl = this._gl!
     const w = this._roundDim(width)
     const h = this._roundDim(height)
-    const l = this._roundLayers(layers)
+    const l = Math.min(this._roundLayers(layers), textureArrayLayerCap(w, h, 1, RAW_ASS_MAX_TEXTURE_ARRAY_LAYERS))
     if (this._maskArray) gl.deleteTexture(this._maskArray)
     this._maskArray = gl.createTexture()
     if (!this._maskArray) throw new Error('Failed to create WebGL2 mask texture array')
@@ -507,14 +537,18 @@ class RawASSImageWebGL2Renderer {
     this._texLayers = l
   }
 
-  private _ensureTextureArray(maxW: number, maxH: number, count: number): void {
-    const c = Math.min(count, RAW_ASS_MAX_TEXTURE_ARRAY_LAYERS)
-    if (maxW <= this._texWidth && maxH <= this._texHeight && c <= this._texLayers) return
-    this._allocateTextureArray(
-      Math.max(this._texWidth, maxW),
-      Math.max(this._texHeight, maxH),
-      Math.max(this._texLayers, c)
-    )
+  /** Returns the layers one batch may use; 0 when one mask layer exceeds the GPU budget. */
+  private _ensureTextureArray(maxW: number, maxH: number, count: number): number {
+    const newW = Math.max(this._texWidth, maxW)
+    const newH = Math.max(this._texHeight, maxH)
+    const cap = textureArrayLayerCap(newW, newH, 1, RAW_ASS_MAX_TEXTURE_ARRAY_LAYERS)
+    if (cap === 0) return 0
+    const c = Math.min(count, cap)
+    if (maxW <= this._texWidth && maxH <= this._texHeight && c <= this._texLayers) {
+      return Math.min(cap, this._texLayers)
+    }
+    this._allocateTextureArray(newW, newH, Math.max(this._texLayers, c))
+    return Math.min(cap, this._texLayers)
   }
 
   updateSize(width: number, height: number): void {
@@ -546,7 +580,8 @@ class RawASSImageWebGL2Renderer {
       if (img.w > maxW) maxW = img.w
       if (img.h > maxH) maxH = img.h
     }
-    this._ensureTextureArray(maxW, maxH, Math.min(images.length, RAW_ASS_MAX_TEXTURE_ARRAY_LAYERS))
+    const layerCap = this._ensureTextureArray(maxW, maxH, Math.min(images.length, RAW_ASS_MAX_TEXTURE_ARRAY_LAYERS))
+    if (layerCap === 0) throw new Error('Raw ASS masks exceed the GPU texture budget')
 
     const gl = this._gl
     gl.clearColor(0, 0, 0, 0)
@@ -561,7 +596,7 @@ class RawASSImageWebGL2Renderer {
     let imageIndex = 0
     while (imageIndex < images.length) {
       let count = 0
-      while (imageIndex < images.length && count < RAW_ASS_MAX_TEXTURE_ARRAY_LAYERS) {
+      while (imageIndex < images.length && count < layerCap) {
         const img = images[imageIndex++]
         if (img.w <= 0 || img.h <= 0 || img.bitmap <= 0) continue
         const color = img.color >>> 0
@@ -613,7 +648,8 @@ class RawASSImageWebGL2Renderer {
       validImages++
     }
 
-    this._ensureTextureArray(maxW, maxH, Math.min(validImages, RAW_ASS_MAX_TEXTURE_ARRAY_LAYERS))
+    const layerCap = this._ensureTextureArray(maxW, maxH, Math.min(validImages, RAW_ASS_MAX_TEXTURE_ARRAY_LAYERS))
+    if (layerCap === 0) throw new Error('Raw ASS masks exceed the GPU texture budget')
 
     const gl = this._gl
     gl.clearColor(0, 0, 0, 0)
@@ -630,7 +666,7 @@ class RawASSImageWebGL2Renderer {
     let pixels = 0
     while (imageIndex < imageCount) {
       let count = 0
-      while (imageIndex < imageCount && count < RAW_ASS_MAX_TEXTURE_ARRAY_LAYERS) {
+      while (imageIndex < imageCount && count < layerCap) {
         const metaOffset = imageIndex++ * RAW_RRC_IMG_STRIDE
         const w = meta[metaOffset + 2]
         const h = meta[metaOffset + 3]
@@ -1091,11 +1127,9 @@ const withProcessBytes = (
 
 const decryptV2Payload = async (encrypted: ArrayBuffer, contentKey: CryptoKey): Promise<Uint8Array> => {
   const data = new Uint8Array(encrypted)
-  const keyIdSize = 8
-  const nonceSize = 12
-  const headerSize = 1 + keyIdSize + nonceSize
+  const headerSize = ENCRYPTED_V2_HEADER_SIZE
 
-  if (data.length < headerSize + 16) {
+  if (data.length < headerSize + ENCRYPTED_TAG_SIZE) {
     throw new Error('Ciphertext too short for v2 subtitle payload')
   }
 
@@ -1103,8 +1137,8 @@ const decryptV2Payload = async (encrypted: ArrayBuffer, contentKey: CryptoKey): 
     throw new Error('Unsupported encrypted subtitle protocol version')
   }
 
-  const header = data.subarray(0, 1 + keyIdSize)
-  const nonce = data.subarray(1 + keyIdSize, headerSize)
+  const header = data.subarray(0, 1 + ENCRYPTED_KEY_ID_SIZE)
+  const nonce = data.subarray(1 + ENCRYPTED_KEY_ID_SIZE, headerSize)
   const ciphertext = data.subarray(headerSize)
   const decrypted = await crypto.subtle.decrypt(
     {
@@ -1120,9 +1154,53 @@ const decryptV2Payload = async (encrypted: ArrayBuffer, contentKey: CryptoKey): 
   return new Uint8Array(decrypted)
 }
 
+const decryptChunkPayload = async (
+  encrypted: ArrayBuffer,
+  contentKey: CryptoKey,
+  index: number,
+  count: number,
+  keyId: { value: string | null }
+): Promise<Uint8Array> => {
+  const data = new Uint8Array(encrypted)
+  if (data.length < ENCRYPTED_CHUNK_HEADER_SIZE + ENCRYPTED_TAG_SIZE) {
+    throw new Error('Ciphertext too short for encrypted subtitle chunk')
+  }
+  if (data[0] !== ENCRYPTED_CHUNK_VERSION) {
+    throw new Error('Unsupported encrypted subtitle chunk version')
+  }
+
+  const view = new DataView(data.buffer, data.byteOffset, data.byteLength)
+  const chunkIndex = view.getUint32(1 + ENCRYPTED_KEY_ID_SIZE)
+  const chunkCount = view.getUint32(1 + ENCRYPTED_KEY_ID_SIZE + ENCRYPTED_CHUNK_INDEX_SIZE)
+  if (chunkIndex !== index || chunkCount !== count) {
+    throw new Error('Encrypted subtitle chunk is out of sequence')
+  }
+
+  const id = Array.from(data.subarray(1, 1 + ENCRYPTED_KEY_ID_SIZE), (byte) => byte.toString(16).padStart(2, '0')).join('')
+  if (keyId.value === null) keyId.value = id
+  else if (keyId.value !== id) throw new Error('Encrypted subtitle chunks use different keys')
+
+  const aad = data.slice(0, ENCRYPTED_CHUNK_AAD_SIZE)
+  const nonce = data.slice(ENCRYPTED_CHUNK_AAD_SIZE, ENCRYPTED_CHUNK_HEADER_SIZE)
+  const ciphertext = data.slice(ENCRYPTED_CHUNK_HEADER_SIZE)
+  const decrypted = await crypto.subtle.decrypt(
+    { name: 'AES-GCM', iv: nonce, additionalData: aad, tagLength: 128 },
+    contentKey,
+    ciphertext
+  )
+  return new Uint8Array(decrypted)
+}
+
 const decryptSubtitleContent = async (content: EncryptedSubtitleContent): Promise<Uint8Array> => {
+  assertEncryptedBudget(content)
+
   if (content.encrypted) {
-    return decryptV2Payload(content.encrypted, content.contentKey)
+    const plain = await decryptV2Payload(content.encrypted, content.contentKey)
+    if (plain.byteLength > MAX_SUBTITLE_BYTES) {
+      plain.fill(0)
+      throw new Error('Decrypted subtitle exceeds the size limit')
+    }
+    return plain
   }
 
   const chunks = content.encryptedChunks || []
@@ -1130,18 +1208,41 @@ const decryptSubtitleContent = async (content: EncryptedSubtitleContent): Promis
     throw new Error('Encrypted subtitle content is empty')
   }
 
-  const decryptedChunks = await Promise.all(chunks.map((chunk) => decryptV2Payload(chunk, content.contentKey)))
-  const totalLength = decryptedChunks.reduce((sum, chunk) => sum + chunk.length, 0)
-  const result = new Uint8Array(totalLength)
-  let offset = 0
+  const decryptedChunks: Uint8Array[] = new Array(chunks.length)
+  const keyId = { value: null as string | null }
+  let next = 0
+  let total = 0
+  let failure: unknown = null
 
-  for (const chunk of decryptedChunks) {
-    result.set(chunk, offset)
-    chunk.fill(0)
-    offset += chunk.length
+  const worker = async (): Promise<void> => {
+    while (failure === null) {
+      const index = next++
+      if (index >= chunks.length) return
+      try {
+        const plain = await decryptChunkPayload(chunks[index], content.contentKey, index, chunks.length, keyId)
+        decryptedChunks[index] = plain
+        total += plain.byteLength
+        if (total > MAX_SUBTITLE_BYTES) throw new Error('Decrypted subtitle exceeds the size limit')
+      } catch (error) {
+        failure ??= error
+      }
+    }
   }
 
-  return result
+  try {
+    await Promise.all(Array.from({ length: Math.min(DECRYPT_CONCURRENCY, chunks.length) }, worker))
+    if (failure !== null) throw failure
+
+    const result = new Uint8Array(total)
+    let offset = 0
+    for (const chunk of decryptedChunks) {
+      result.set(chunk, offset)
+      offset += chunk.length
+    }
+    return result
+  } finally {
+    for (const chunk of decryptedChunks) chunk?.fill(0)
+  }
 }
 
 const createTrackFromBytes = (content: Uint8Array): void => {
@@ -1283,19 +1384,42 @@ const loadFontSubset = (family: string, identity: string, src: string | Uint8Arr
 self.localFontResult = ({ font, success }: { font: string; success: boolean }): void => {
   markFontFamilySettled(font)
   if (success) fontMap_[font] = true
+  else missingLocalFonts.add(font)
+}
+
+/** Start a new font-acquisition generation: drop queued fetches and reset per-track budgets. */
+const resetFontAcquisition = (): void => {
+  fontGeneration++
+  requestedFontFamilies.clear()
+  requestedLocalFonts.clear()
+  for (const start of queuedFontFetches.splice(0)) start()
 }
 
 const findAvailableFonts = (font: string): void => {
   font = font.trim().toLowerCase()
   if (font.startsWith('@')) font = font.substring(1)
 
+  if (!requestedFontFamilies.has(font)) {
+    if (requestedFontFamilies.size >= MAX_FONT_FAMILIES_PER_TRACK) return
+    requestedFontFamilies.add(font)
+  }
+
   const source = availableFonts[font]
   if (!source) {
     if (fontMap_[font]) return
-    if (useLocalFonts && !pendingFontFamilies.has(font)) {
+    if (
+      useLocalFonts &&
+      !pendingFontFamilies.has(font) &&
+      !missingLocalFonts.has(font) &&
+      requestedLocalFonts.size < MAX_LOCAL_FONT_REQUESTS_PER_TRACK
+    ) {
+      requestedLocalFonts.add(font)
       pendingFontFamilies.add(font)
       postMessage({ target: 'getLocalFont', font })
-      setTimeout(() => markFontFamilySettled(font), LOCAL_FONT_WAIT_MS)
+      setTimeout(() => {
+        if (pendingFontFamilies.has(font)) missingLocalFonts.add(font)
+        markFontFamilySettled(font)
+      }, LOCAL_FONT_WAIT_MS)
     }
     return
   }
@@ -1327,15 +1451,35 @@ const asyncWrite = (
   settled?: (success: boolean) => void
 ): void => {
   if (typeof font === 'string') {
-    void readBoundedFontUrl(font)
-      .then((fontData) => {
-        const success = writeFontToFS(fontData, isFallback)
-        settled?.(success)
-      })
-      .catch((error) => {
-        console.error(error)
+    const generation = fontGeneration
+    const run = (): void => {
+      if (generation !== fontGeneration) {
         settled?.(false)
-      })
+        return
+      }
+      activeFontFetches++
+      void readBoundedFontUrl(font)
+        .then((fontData) => {
+          runtimeFontBytes += fontData.byteLength
+          if (runtimeFontBytes > MAX_RUNTIME_FONT_BYTES) {
+            runtimeFontBytes -= fontData.byteLength
+            throw new Error('Font budget exceeded')
+          }
+          const success = writeFontToFS(fontData, isFallback)
+          if (!success) runtimeFontBytes -= fontData.byteLength
+          settled?.(success)
+        })
+        .catch((error) => {
+          console.error(error)
+          settled?.(false)
+        })
+        .finally(() => {
+          activeFontFetches--
+          queuedFontFetches.shift()?.()
+        })
+    }
+    if (activeFontFetches < MAX_CONCURRENT_FONT_FETCHES) run()
+    else queuedFontFetches.push(run)
   } else {
     const success = writeFontToFS(font, isFallback)
     settled?.(success)
@@ -1517,12 +1661,9 @@ const scanAssFonts = (fragment: string): void => {
 }
 
 const rebuildCueTimes = (): void => {
-  if (!cueTracking) {
+  if (!cueTracking || !akariSubHandle) {
     cueTimes = EMPTY_CUE_TIMES
-    return
-  }
-  if (!akariSubHandle) {
-    cueTimes = EMPTY_CUE_TIMES
+    cueTimeCount = 0
     return
   }
 
@@ -1535,6 +1676,41 @@ const rebuildCueTimes = (): void => {
     next[i * 2 + 1] = api.eventGetInt(handle, i, EVENT_INT_FIELDS.Duration)
   }
   cueTimes = next
+  cueTimeCount = count
+}
+
+/**
+ * Index only events added since the last build. Falls back to a full rebuild
+ * when events shrank or the last indexed event no longer matches (pruning,
+ * removal, or reordering).
+ */
+const extendCueTimes = (): void => {
+  if (!cueTracking || !akariSubHandle) return rebuildCueTimes()
+  const api = requireApi()
+  const handle = requireHandle()
+  const count = api.getEventCount(handle)
+  const known = cueTimeCount
+  if (count < known) return rebuildCueTimes()
+  if (known > 0) {
+    const last = known - 1
+    if (
+      api.eventGetInt(handle, last, EVENT_INT_FIELDS.Start) !== cueTimes[last * 2] ||
+      api.eventGetInt(handle, last, EVENT_INT_FIELDS.Duration) !== cueTimes[last * 2 + 1]
+    ) {
+      return rebuildCueTimes()
+    }
+  }
+  if (count === known) return
+  if (count * 2 > cueTimes.length) {
+    const grown = new Int32Array(Math.max(count * 2, cueTimes.length * 2))
+    grown.set(cueTimes.subarray(0, known * 2))
+    cueTimes = grown
+  }
+  for (let i = known; i < count; i++) {
+    cueTimes[i * 2] = api.eventGetInt(handle, i, EVENT_INT_FIELDS.Start)
+    cueTimes[i * 2 + 1] = api.eventGetInt(handle, i, EVENT_INT_FIELDS.Duration)
+  }
+  cueTimeCount = count
 }
 
 const readCueEvent = (index: number): CueEvent => {
@@ -1564,7 +1740,7 @@ const emitCueChanges = (time: number): void => {
   if (!cueTracking) return
   const nowMs = toLibassTimestampMs(time)
   const next = new Map<number, CueEvent>()
-  for (let i = 0; i < cueTimes.length; i += 2) {
+  for (let i = 0; i < cueTimeCount * 2; i += 2) {
     if (!isCueActiveAt(cueTimes[i], cueTimes[i + 1], nowMs)) continue
     const index = i / 2
     next.set(index, lastActiveCues.get(index) ?? readCueEvent(index))
@@ -1580,6 +1756,7 @@ const resetCueState = (time: number): void => {
   if (!cueTracking) {
     lastActiveCues.clear()
     cueTimes = EMPTY_CUE_TIMES
+    cueTimeCount = 0
     return
   }
   if (lastActiveCues.size > 0) {
@@ -1592,6 +1769,7 @@ const resetCueState = (time: number): void => {
   }
   lastActiveCues = new Map()
   cueTimes = EMPTY_CUE_TIMES
+  cueTimeCount = 0
 }
 
 const loadSubtitleUrl = async (
@@ -1680,19 +1858,28 @@ const applyStreamingPrune = (parsed: StreamingTrackOptions): void => {
   const handle = requireHandle()
   if (parsed.checkReadOrder != null) api.setCheckReadOrder(handle, parsed.checkReadOrder ? 1 : 0)
   if (parsed.pruneDelay === null) api.configurePrune(handle, -1)
-  else if (parsed.pruneDelay != null) {
-    api.configurePrune(handle, parsed.pruneDelay < 0 ? -1 : parsed.pruneDelay * 1000)
+  else {
+    const delay = parsed.pruneDelay ?? DEFAULT_STREAM_PRUNE_SECONDS
+    api.configurePrune(handle, delay < 0 ? -1 : delay * 1000)
   }
 }
 
-const afterStreamingMutation = (): void => {
+const assertStreamingCapacity = (incoming = 1): void => {
+  if (requireApi().getEventCount(requireHandle()) + incoming > MAX_STREAM_EVENTS) {
+    throw new Error(`Streaming track exceeds ${MAX_STREAM_EVENTS} retained events; prune or flush events`)
+  }
+}
+
+const afterStreamingMutation = (incremental = false): void => {
   syncTotalEventsMetric()
-  rebuildCueTimes()
+  if (incremental) extendCueTimes()
+  else rebuildCueTimes()
   firstTrackEventStartTime = getFirstEventStartTime()
   markNextRenderForced()
 }
 
 self.initStreamingTrack = ({ options }: { options: StreamingTrackOptions }): void => {
+  resetFontAcquisition()
   stopWarmup()
   trackLifecycle.invalidate()
   protectedTrackContent = false
@@ -1705,6 +1892,7 @@ self.initStreamingTrack = ({ options }: { options: StreamingTrackOptions }): voi
   applyStreamingPrune(parsed)
 
   if (parsed.header != null) {
+    assertSubtitleBudget(parsed.header)
     ingestSubtitleText(contentToText(parsed.header))
     withProcessBytes(parsed.header, (ptr, size) => {
       if (parsed.format === 'matroska') api.processCodecPrivate(handle, ptr, size)
@@ -1717,11 +1905,13 @@ self.initStreamingTrack = ({ options }: { options: StreamingTrackOptions }): voi
 
 self.appendSubtitleData = ({ content }: { content: string | Uint8Array | ArrayBuffer }): void => {
   const api = requireStreamingApi()
+  assertStreamingPacket(content)
+  assertStreamingCapacity()
   ingestSubtitleText(contentToText(content))
   withProcessBytes(content, (ptr, size) => {
     api.processData(requireHandle(), ptr, size)
   })
-  afterStreamingMutation()
+  afterStreamingMutation(true)
 }
 
 self.appendSubtitleChunk = ({
@@ -1734,24 +1924,28 @@ self.appendSubtitleChunk = ({
   duration: number
 }): void => {
   const api = requireStreamingApi()
+  assertStreamingPacket(content)
+  assertStreamingCapacity()
   ingestSubtitleText(contentToText(content))
   const startMs = toLibassTimestampMs(start)
   const durationMs = toLibassTimestampMs(duration)
   withProcessBytes(content, (ptr, size) => {
     api.processChunk(requireHandle(), ptr, size, startMs, durationMs)
   })
-  afterStreamingMutation()
+  afterStreamingMutation(true)
 }
 
 self.appendEvents = ({ events }: { events: Partial<ASSEvent>[] }): void => {
   const api = requireApi()
   const handle = requireHandle()
+  assertStreamingEventBatch(events)
+  assertStreamingCapacity(events.length)
   for (const event of events) {
     if (event.Text) ingestSubtitleText(event.Text)
     const index = api.allocEvent(handle)
     if (index >= 0) applyEventFields(index, event)
   }
-  afterStreamingMutation()
+  afterStreamingMutation(true)
 }
 
 self.flushEvents = (): void => {
@@ -1779,6 +1973,7 @@ const scanTrackFonts = (content: string | Uint8Array): void => {
 const prepareStoredTrackContent = (
   content: string | Uint8Array | ArrayBuffer
 ): string | Uint8Array => {
+  assertSubtitleBudget(content)
   if (isBinaryContent(content)) return toUint8Array(content)
 
   let text = content
@@ -1803,6 +1998,7 @@ const trackLifecycle = new TrackLifecycle({
   waitFonts: waitForPendingFonts,
   flushFonts: flushFontReload,
   changed: generation => {
+    resetFontAcquisition()
     stopWarmup()
     fullTrackWarmupGeneration = generation
     fullTrackWarmupPromise = null
@@ -2938,6 +3134,7 @@ self.init = async (data: any): Promise<void> => {
       subContent = decryptedSubContent
     } else {
       protectedTrackContent = false
+      if (subContent) assertSubtitleBudget(subContent)
       if (!subContent && typeof data.subUrl === 'string' && data.subUrl) {
         const loaded = await trackLifecycle.initialUrl(data.subUrl)
         subContent = loaded.content
@@ -3484,6 +3681,8 @@ self.getStyleCount = (): void => {
   postMessage({ target: 'getStyleCount', count })
 }
 
+const STREAMING_APPEND_TARGETS = new Set(['appendSubtitleData', 'appendSubtitleChunk', 'appendEvents'])
+
 const RENDER_SAFE_TARGETS = new Set([
   'demand',
   'prepare',
@@ -3510,10 +3709,16 @@ onmessage = ({ data }: MessageEvent): void => {
     invalidateEmptyWindow()
   }
 
-  Promise.resolve(self[data.target](data)).catch((error) => {
-    postMessage({
-      target: 'error',
-      error: error instanceof Error ? error.message : String(error)
+  const acknowledge = STREAMING_APPEND_TARGETS.has(data.target)
+    ? () => postMessage({ target: 'streamingAck' })
+    : () => {}
+  Promise.resolve()
+    .then(() => self[data.target](data))
+    .finally(acknowledge)
+    .catch((error) => {
+      postMessage({
+        target: 'error',
+        error: error instanceof Error ? error.message : String(error)
+      })
     })
-  })
 }

@@ -80,6 +80,10 @@ const float INV_255 = 1.0f / 255.0f;
 static const size_t MAX_RENDER_IMAGES = 8192;
 static const size_t MAX_RENDER_PIXELS = 32 * 1024 * 1024;
 static const size_t MAX_RENDER_BUFFER_BYTES = 256 * 1024 * 1024;
+// A blend part needs RGBA float scratch (16 bytes/pixel) plus 4 bytes of output.
+static const size_t MAX_BLEND_PART_PIXELS =
+    MAX_RENDER_BUFFER_BYTES / (4 * sizeof(float));
+static const size_t MAX_RETAINED_BLEND_SCRATCH_BYTES = 64 * 1024 * 1024;
 
 // libass accepts integer milliseconds and treats event ranges as
 // Start <= now < Start + Duration. JavaScript seconds that came from an exact
@@ -552,6 +556,30 @@ public:
     *outSize = size;
     return true;
   }
+  // Shared admission check for every compositor path: bounded image count and
+  // total pixels, with overflow-safe arithmetic.
+  static bool validateImageList(ASS_Image *img) {
+    size_t pixels = 0;
+    size_t images = 0;
+    for (ASS_Image *tmp = img; tmp; tmp = tmp->next) {
+      if (tmp->w < 0 || tmp->h < 0)
+        return false;
+      if (tmp->w == 0 || tmp->h == 0)
+        continue;
+      if (++images > MAX_RENDER_IMAGES)
+        return false;
+      const size_t width = static_cast<size_t>(tmp->w);
+      const size_t height = static_cast<size_t>(tmp->h);
+      if (width > std::numeric_limits<size_t>::max() / height)
+        return false;
+      const size_t imagePixels = width * height;
+      if (imagePixels > MAX_RENDER_PIXELS ||
+          pixels > MAX_RENDER_PIXELS - imagePixels)
+        return false;
+      pixels += imagePixels;
+    }
+    return true;
+  }
   RenderResult *processImages(ASS_Image *img) {
     RenderResult *renderResult = NULL;
     size_t bufferSize = 0;
@@ -885,6 +913,10 @@ public:
     if (img == NULL || (changed == 0 && !force)) {
       return NULL;
     }
+    if (!validateImageList(img)) {
+      fprintf(stderr, "AkariSub: render output exceeds safety limit\n");
+      return NULL;
+    }
 
     if (debug)
       time = emscripten_get_now();
@@ -987,9 +1019,22 @@ public:
 
     int jobBoxes[MAX_BLEND_STORAGES];
     int jobCount = 0;
+    size_t blendPixels = 0;
     for (int box = 0; box < MAX_BLEND_STORAGES; box++) {
-      if (!boxes[box].empty())
-        jobBoxes[jobCount++] = box;
+      if (boxes[box].empty())
+        continue;
+      const int w = MIN(boxes[box].max_x, canvas_w - 1) - MAX(boxes[box].min_x, 0) + 1;
+      const int h = MIN(boxes[box].max_y, canvas_h - 1) - MAX(boxes[box].min_y, 0) + 1;
+      if (w > 0 && h > 0) {
+        const size_t partPixels = static_cast<size_t>(w) * static_cast<size_t>(h);
+        if (partPixels > MAX_BLEND_PART_PIXELS ||
+            blendPixels > MAX_RENDER_PIXELS - partPixels) {
+          fprintf(stderr, "AkariSub: blend output exceeds safety limit\n");
+          return NULL;
+        }
+        blendPixels += partPixels;
+      }
+      jobBoxes[jobCount++] = box;
     }
 
     RenderResult *parts[MAX_BLEND_STORAGES];
@@ -1047,6 +1092,12 @@ public:
       ++count;
     }
 
+    // Scratch is only needed while blending; do not retain oversized planes.
+    for (int i = 0; i < MAX_BLEND_STORAGES; i++) {
+      if (m_blendScratch[i].size > MAX_RETAINED_BLEND_SCRATCH_BYTES)
+        m_blendScratch[i].clear();
+    }
+
     return renderResult;
   }
 
@@ -1062,7 +1113,10 @@ public:
     if (width <= 0 || height <= 0)
       return NULL;
 
-    const size_t buffer_size = width * height * 4 * sizeof(float);
+    const size_t part_pixels = static_cast<size_t>(width) * static_cast<size_t>(height);
+    if (part_pixels > MAX_BLEND_PART_PIXELS)
+      return NULL;
+    const size_t buffer_size = part_pixels * 4 * sizeof(float);
     ReusableBuffer &scratch =
         storageIndex >= 0 && storageIndex < MAX_BLEND_STORAGES ? m_blendScratch[storageIndex]
                                                                : m_buffer;
@@ -1168,7 +1222,7 @@ public:
       }
     }
 
-    size_t needed = sizeof(unsigned int) * width * height;
+    size_t needed = sizeof(unsigned int) * part_pixels;
     RenderBlendStorage *storage =
         storageIndex >= 0 && storageIndex < MAX_BLEND_STORAGES
             ? &m_blendParts[storageIndex]
@@ -1185,7 +1239,7 @@ public:
     }
     storage->taken = true;
 
-    int total_pixels = width * height;
+    const size_t total_pixels = part_pixels;
     // Preserve every contribution that rounds to a visible 8-bit alpha.
     // A higher cutoff truncates the low-coverage edge of libass blur masks.
     const float MIN_ALPHA_THRESHOLD = 0.5f / 255.0f;
@@ -1195,8 +1249,8 @@ public:
     const v128_t v_255 = wasm_f32x4_splat(255.0f);
     const v128_t v_half = wasm_f32x4_splat(0.5f);
 
-    for (int i = 0; i < total_pixels; i++) {
-      int buf_coord = i << 2;
+    for (size_t i = 0; i < total_pixels; i++) {
+      size_t buf_coord = i << 2;
       float alpha = buf[buf_coord + 3];
 
       if (alpha >= MIN_ALPHA_THRESHOLD) {
@@ -1895,6 +1949,10 @@ EMSCRIPTEN_KEEPALIVE int akarisub_render_raw_collect(
     return 0;
 
   ASS_Image *img = instance->renderRawForCollect(tm, force);
+  if (img && !AkariSub::validateImageList(img)) {
+    fprintf(stderr, "AkariSub: raw render output exceeds safety limit\n");
+    img = NULL;
+  }
 
   out[0] = instance->changed;
   out[1] = 0;

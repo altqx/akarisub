@@ -213,7 +213,8 @@ export interface StreamingTrackOptions {
   format?: StreamingTrackFormat
   /**
    * Drop events that ended more than this many seconds before the last
-   * rendered timestamp. `null` or a negative value disables automatic pruning.
+   * rendered timestamp. Defaults to 600. `null` or a negative value disables
+   * automatic pruning (unbounded retention, capped only by the event budget).
    */
   pruneDelay?: number | null
   /** Deduplicate Matroska packets by ReadOrder. Default true. */

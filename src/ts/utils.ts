@@ -330,11 +330,15 @@ export function fixPlayRes(subContent: string): string {
     eventsSection = eventsSection.replace(rgx, (_m, s) => `\\${tag}${formatValue(parseFloat(s) * val, s)}`)
   })
 
-  eventsSection = eventsSection.replace(/(\\i?clip\s*\([^,)]+m[^)]+\)|\\p[1-9][^}]*?)(?=[\\}]|$)/g, (match) => {
-    return match.replace(/(-?[\d.]+)\s+(-?[\d.]+)/g, (_m, x, y) => {
-      return `${formatValue(parseFloat(x) * xnsize, x)} ${formatValue(parseFloat(y) * ynsize, y)}`
-    })
-  })
+  // Every quantifier is bounded so an unterminated clip or drawing cannot make the scan quadratic.
+  eventsSection = eventsSection.replace(
+    /(\\i?clip\s{0,16}\((?=[^,)]{0,16384}?m[^)])[^)]{1,16384}\)|\\p[1-9][^}]{0,16384}?)(?=[\\}]|$)/g,
+    (match) => {
+      return match.replace(/(-?[\d.]{1,32})\s{1,16}(-?[\d.]{1,32})/g, (_m, x, y) => {
+        return `${formatValue(parseFloat(x) * xnsize, x)} ${formatValue(parseFloat(y) * ynsize, y)}`
+      })
+    }
+  )
 
   return newContent.substring(0, eventsMatch.index!) + eventsSection
 }
