@@ -421,12 +421,20 @@ export interface AkariSubOptions {
 
 /** AES-GCM subtitle payload decrypted inside the worker. */
 export interface EncryptedSubtitleContent {
-  /** Non-extractable AES-GCM content key from akari-crypto's v2 transport flow */
+  /** Non-extractable AES-GCM key from the host's v3 key exchange. Every chunk must be sealed with this one key. */
   contentKey: CryptoKey
-  /** Single encrypted subtitle payload */
+  /** One v3 payload (header index 0, count 1) */
   encrypted?: ArrayBuffer
-  /** Chunked encrypted subtitle payloads, in display file order */
+  /** v3 chunks in file order. A contiguous prefix [0, n) when `chunkCount` exceeds the array length. */
   encryptedChunks?: ArrayBuffer[]
+  /**
+   * 32-byte resource digest the host computes from its own request. The AAD is
+   * `payload[0..17] || resourceDigest`. Treated as opaque; never derived from
+   * the payload and never transferred to the worker.
+   */
+  resourceDigest: Uint8Array
+  /** Total chunks in the track (the header count). Defaults to `encryptedChunks.length`. Only valid with `encryptedChunks`. */
+  chunkCount?: number
 }
 
 /** @deprecated Use Promise-based getEvents() instead */

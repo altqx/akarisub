@@ -2,14 +2,15 @@ import { MAX_SUBTITLE_BYTES } from './asset-loader'
 import type { EncryptedSubtitleContent } from './types'
 
 /** Version byte of chunked payloads whose AAD binds key ID, chunk index and chunk count. */
-export const ENCRYPTED_CHUNK_VERSION = 3
+export const ENCRYPTED_VERSION = 3
+export const ENCRYPTED_CHUNK_VERSION = ENCRYPTED_VERSION
 export const ENCRYPTED_KEY_ID_SIZE = 8
 export const ENCRYPTED_NONCE_SIZE = 12
 export const ENCRYPTED_TAG_SIZE = 16
 export const ENCRYPTED_CHUNK_INDEX_SIZE = 4
 export const ENCRYPTED_CHUNK_AAD_SIZE = 1 + ENCRYPTED_KEY_ID_SIZE + 2 * ENCRYPTED_CHUNK_INDEX_SIZE
 export const ENCRYPTED_CHUNK_HEADER_SIZE = ENCRYPTED_CHUNK_AAD_SIZE + ENCRYPTED_NONCE_SIZE
-export const ENCRYPTED_V2_HEADER_SIZE = 1 + ENCRYPTED_KEY_ID_SIZE + ENCRYPTED_NONCE_SIZE
+export const ENCRYPTED_RESOURCE_DIGEST_SIZE = 32
 export const MAX_ENCRYPTED_CHUNKS = 1024
 export const maxEncryptedChunkBytes = (limit: number): number =>
   limit + ENCRYPTED_CHUNK_HEADER_SIZE + ENCRYPTED_TAG_SIZE
@@ -51,8 +52,22 @@ export const assertSubtitleBudget = (
 export const assertEncryptedBudget = (content: EncryptedSubtitleContent, limit: number = MAX_SUBTITLE_BYTES): void => {
   const chunkLimit = maxEncryptedChunkBytes(limit)
   const totalLimit = maxEncryptedTotalBytes(limit)
-  const { encrypted, encryptedChunks } = content
+  const { encrypted, encryptedChunks, resourceDigest, chunkCount } = content
   if (encrypted && encryptedChunks) throw new Error('Provide either encrypted or encryptedChunks, not both')
+  // isView rather than instanceof so arrays from another realm pass; DataView is not a byte array.
+  if (
+    !ArrayBuffer.isView(resourceDigest) ||
+    resourceDigest instanceof DataView ||
+    resourceDigest.byteLength !== ENCRYPTED_RESOURCE_DIGEST_SIZE
+  ) {
+    throw new Error('Encrypted subtitle resource digest must be 32 bytes')
+  }
+  if (chunkCount !== undefined) {
+    if (!encryptedChunks) throw new Error('chunkCount requires encryptedChunks')
+    if (!Number.isInteger(chunkCount) || chunkCount < encryptedChunks.length || chunkCount > MAX_ENCRYPTED_CHUNKS) {
+      throw new Error('Invalid encrypted subtitle chunkCount')
+    }
+  }
   if (encrypted) {
     if (encrypted.byteLength > chunkLimit) throw tooLarge(limit)
     return

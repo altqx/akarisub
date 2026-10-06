@@ -15,6 +15,7 @@ import {
 import { fixPlayRes } from '../src/ts/utils'
 
 const key = {} as CryptoKey
+const digest = new Uint8Array(32)
 
 describe('subtitle admission budget', () => {
   test('accepts content at the limit and rejects one byte over', () => {
@@ -43,20 +44,35 @@ describe('subtitle admission budget', () => {
 describe('encrypted container budget', () => {
   test('rejects too many chunks before any crypto work', () => {
     const chunks = Array.from({ length: MAX_ENCRYPTED_CHUNKS + 1 }, () => new ArrayBuffer(1))
-    expect(() => assertEncryptedBudget({ contentKey: key, encryptedChunks: chunks })).toThrow()
+    expect(() => assertEncryptedBudget({ contentKey: key, resourceDigest: digest, encryptedChunks: chunks })).toThrow()
   })
 
   test('rejects oversized chunks and aggregates', () => {
     expect(() =>
-      assertEncryptedBudget({ contentKey: key, encrypted: new ArrayBuffer(MAX_SUBTITLE_BYTES + 1024) })
+      assertEncryptedBudget({
+        contentKey: key,
+        resourceDigest: digest,
+        encrypted: new ArrayBuffer(MAX_SUBTITLE_BYTES + 1024)
+      })
     ).toThrow()
     const big = new ArrayBuffer(MAX_SUBTITLE_BYTES)
-    expect(() => assertEncryptedBudget({ contentKey: key, encryptedChunks: [big, big, new ArrayBuffer(64)] })).toThrow()
+    expect(() =>
+      assertEncryptedBudget({
+        contentKey: key,
+        resourceDigest: digest,
+        encryptedChunks: [big, big, new ArrayBuffer(64)]
+      })
+    ).toThrow()
   })
 
   test('rejects ambiguous containers', () => {
     expect(() =>
-      assertEncryptedBudget({ contentKey: key, encrypted: new ArrayBuffer(1), encryptedChunks: [] })
+      assertEncryptedBudget({
+        contentKey: key,
+        resourceDigest: digest,
+        encrypted: new ArrayBuffer(1),
+        encryptedChunks: []
+      })
     ).toThrow()
   })
 })

@@ -1,19 +1,11 @@
 /// <reference lib="webworker" />
 
 import { TrackLifecycle } from './track-lifecycle'
+import { decryptEncryptedContent } from './encrypted-payload'
 import { textureArrayLayerCap } from './gpu-budget'
 import {
-  DECRYPT_CONCURRENCY,
-  ENCRYPTED_CHUNK_AAD_SIZE,
-  ENCRYPTED_CHUNK_HEADER_SIZE,
-  ENCRYPTED_CHUNK_INDEX_SIZE,
-  ENCRYPTED_CHUNK_VERSION,
-  ENCRYPTED_KEY_ID_SIZE,
-  ENCRYPTED_TAG_SIZE,
-  ENCRYPTED_V2_HEADER_SIZE,
   DEFAULT_STREAM_PRUNE_SECONDS,
   MAX_STREAM_EVENTS,
-  assertEncryptedBudget,
   assertStreamingEventBatch,
   assertStreamingPacket,
   assertSubtitleBudget
@@ -1126,125 +1118,8 @@ const withProcessBytes = (
   })
 }
 
-const decryptV2Payload = async (encrypted: ArrayBuffer, contentKey: CryptoKey): Promise<Uint8Array> => {
-  const data = new Uint8Array(encrypted)
-  const headerSize = ENCRYPTED_V2_HEADER_SIZE
-
-  if (data.length < headerSize + ENCRYPTED_TAG_SIZE) {
-    throw new Error('Ciphertext too short for v2 subtitle payload')
-  }
-
-  if (data[0] !== 2) {
-    throw new Error('Unsupported encrypted subtitle protocol version')
-  }
-
-  const header = data.subarray(0, 1 + ENCRYPTED_KEY_ID_SIZE)
-  const nonce = data.subarray(1 + ENCRYPTED_KEY_ID_SIZE, headerSize)
-  const ciphertext = data.subarray(headerSize)
-  const decrypted = await crypto.subtle.decrypt(
-    {
-      name: 'AES-GCM',
-      iv: nonce.buffer.slice(nonce.byteOffset, nonce.byteOffset + nonce.byteLength),
-      additionalData: header.buffer.slice(header.byteOffset, header.byteOffset + header.byteLength),
-      tagLength: 128
-    },
-    contentKey,
-    ciphertext.buffer.slice(ciphertext.byteOffset, ciphertext.byteOffset + ciphertext.byteLength)
-  )
-
-  return new Uint8Array(decrypted)
-}
-
-const decryptChunkPayload = async (
-  encrypted: ArrayBuffer,
-  contentKey: CryptoKey,
-  index: number,
-  count: number,
-  keyId: { value: string | null }
-): Promise<Uint8Array> => {
-  const data = new Uint8Array(encrypted)
-  if (data.length < ENCRYPTED_CHUNK_HEADER_SIZE + ENCRYPTED_TAG_SIZE) {
-    throw new Error('Ciphertext too short for encrypted subtitle chunk')
-  }
-  if (data[0] !== ENCRYPTED_CHUNK_VERSION) {
-    throw new Error('Unsupported encrypted subtitle chunk version')
-  }
-
-  const view = new DataView(data.buffer, data.byteOffset, data.byteLength)
-  const chunkIndex = view.getUint32(1 + ENCRYPTED_KEY_ID_SIZE)
-  const chunkCount = view.getUint32(1 + ENCRYPTED_KEY_ID_SIZE + ENCRYPTED_CHUNK_INDEX_SIZE)
-  if (chunkIndex !== index || chunkCount !== count) {
-    throw new Error('Encrypted subtitle chunk is out of sequence')
-  }
-
-  const id = Array.from(data.subarray(1, 1 + ENCRYPTED_KEY_ID_SIZE), (byte) => byte.toString(16).padStart(2, '0')).join('')
-  if (keyId.value === null) keyId.value = id
-  else if (keyId.value !== id) throw new Error('Encrypted subtitle chunks use different keys')
-
-  const aad = data.slice(0, ENCRYPTED_CHUNK_AAD_SIZE)
-  const nonce = data.slice(ENCRYPTED_CHUNK_AAD_SIZE, ENCRYPTED_CHUNK_HEADER_SIZE)
-  const ciphertext = data.slice(ENCRYPTED_CHUNK_HEADER_SIZE)
-  const decrypted = await crypto.subtle.decrypt(
-    { name: 'AES-GCM', iv: nonce, additionalData: aad, tagLength: 128 },
-    contentKey,
-    ciphertext
-  )
-  return new Uint8Array(decrypted)
-}
-
-const decryptSubtitleContent = async (content: EncryptedSubtitleContent): Promise<Uint8Array> => {
-  assertEncryptedBudget(content, maxSubtitleBytes)
-
-  if (content.encrypted) {
-    const plain = await decryptV2Payload(content.encrypted, content.contentKey)
-    if (plain.byteLength > maxSubtitleBytes) {
-      plain.fill(0)
-      throw new Error('Decrypted subtitle exceeds the size limit')
-    }
-    return plain
-  }
-
-  const chunks = content.encryptedChunks || []
-  if (chunks.length === 0) {
-    throw new Error('Encrypted subtitle content is empty')
-  }
-
-  const decryptedChunks: Uint8Array[] = new Array(chunks.length)
-  const keyId = { value: null as string | null }
-  let next = 0
-  let total = 0
-  let failure: unknown = null
-
-  const worker = async (): Promise<void> => {
-    while (failure === null) {
-      const index = next++
-      if (index >= chunks.length) return
-      try {
-        const plain = await decryptChunkPayload(chunks[index], content.contentKey, index, chunks.length, keyId)
-        decryptedChunks[index] = plain
-        total += plain.byteLength
-        if (total > maxSubtitleBytes) throw new Error('Decrypted subtitle exceeds the size limit')
-      } catch (error) {
-        failure ??= error
-      }
-    }
-  }
-
-  try {
-    await Promise.all(Array.from({ length: Math.min(DECRYPT_CONCURRENCY, chunks.length) }, worker))
-    if (failure !== null) throw failure
-
-    const result = new Uint8Array(total)
-    let offset = 0
-    for (const chunk of decryptedChunks) {
-      result.set(chunk, offset)
-      offset += chunk.length
-    }
-    return result
-  } finally {
-    for (const chunk of decryptedChunks) chunk?.fill(0)
-  }
-}
+const decryptSubtitleContent = (content: EncryptedSubtitleContent): Promise<Uint8Array> =>
+  decryptEncryptedContent(content, maxSubtitleBytes)
 
 const createTrackFromBytes = (content: Uint8Array): void => {
   const api = requireApi()
