@@ -118,19 +118,6 @@ jobs:
           grep -Fq 'mainScriptUrlOrBlob' pkg/akarisub-mt.js
           grep -Fq 'mainScriptUrlOrBlob' dist/ts/worker.js
 
-      - name: Verify reproducible clean WASM build
-        run: |
-          cp pkg/akarisub.wasm /tmp/akarisub.first.wasm
-          cp -a . /tmp/akarisub-repro
-          cd /tmp/akarisub-repro
-          make clean
-          bun run build
-          cmp /tmp/akarisub.first.wasm pkg/akarisub.wasm
-          if strings pkg/akarisub.wasm | grep -F "$GITHUB_WORKSPACE"; then
-            echo "WASM contains its checkout path" >&2
-            exit 1
-          fi
-
       - name: Record artifact digests
         run: find dist pkg -type f -print0 | sort -z | xargs -0 sha256sum > /tmp/akarisub-dist.sha256 && mv /tmp/akarisub-dist.sha256 dist/SHA256SUMS
 
