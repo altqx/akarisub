@@ -1573,9 +1573,17 @@ EMSCRIPTEN_KEEPALIVE void akarisub_event_set_int(AkariSub *instance, int index, 
   switch (field) {
   case EVENT_START:
     evt->Start = value;
+#ifdef LIBASS_HAS_TRACK_EVENTS_MODIFIED
+    // The fork skips events through a per-track timing summary, which has to
+    // be told about in-place timing edits made after rendering started.
+    ass_track_events_modified(instance->track, index);
+#endif
     break;
   case EVENT_DURATION:
     evt->Duration = value;
+#ifdef LIBASS_HAS_TRACK_EVENTS_MODIFIED
+    ass_track_events_modified(instance->track, index);
+#endif
     break;
   case EVENT_READ_ORDER:
     evt->ReadOrder = value;
