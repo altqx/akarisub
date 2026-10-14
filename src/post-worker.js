@@ -100,6 +100,8 @@ const __akarisub_expose = () => {
   Module['_akarisub_render_blend_collect'] = _akarisub_render_blend_collect
   Module['_akarisub_render_image_collect'] = _akarisub_render_image_collect
   Module['_akarisub_render_raw_collect'] = _akarisub_render_raw_collect
+  Module['_akarisub_render_atlas_collect'] = _akarisub_render_atlas_collect
+  Module['_akarisub_atlas_reset'] = _akarisub_atlas_reset
   if (typeof FS !== 'undefined') {
     Module['FS_createPath'] = FS.createPath
     Module['FS_createDataFile'] = FS.createDataFile

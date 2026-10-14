@@ -684,17 +684,34 @@ public:
     return imgs;
   }
 
-  ASS_Image *renderRawForCollect(double tm, int force) {
+  // Renders the frame for the raw GPU paths and always returns the current
+  // image list, also when libass reports it unchanged.
+  ASS_Image *renderRawFrame(double tm) {
     time = 0;
     count = 0;
 
     ASS_Image *imgs = renderFrame(tm, &changed);
     if (debug)
       time = emscripten_get_now();
+    return imgs;
+  }
+
+  ASS_Image *renderRawForCollect(double tm, int force) {
+    ASS_Image *imgs = renderRawFrame(tm);
     if (imgs == NULL || (changed == 0 && !force))
       return NULL;
     return imgs;
   }
+
+#ifdef LIBASS_HAS_FRAME_ATLAS
+  // padding 0: the WebGL2 shader reads masks with texelFetch, so no texel
+  // ever samples a neighbouring image.
+  const ASS_Atlas *packAtlas(ASS_Image *imgs, int max_size, int max_pages) {
+    return ass_frame_pack_atlas(ass_renderer, imgs, max_size, 0, max_pages);
+  }
+
+  void resetAtlas() { ass_frame_atlas_reset(ass_renderer); }
+#endif
 
   void quitLibrary() {
     removeTrack();
@@ -1948,31 +1965,10 @@ EMSCRIPTEN_KEEPALIVE int akarisub_render_image_collect(
   return written;
 }
 
-// Raw libass ASS_Image collect path for browser GPU composition.
-// Header: out[0] = changed, out[1] = image count, out[2] = render_time.
-// Image rows: dst_x, dst_y, w, h, bitmap_ptr, color (RRGGBBAA), stride, type.
-EMSCRIPTEN_KEEPALIVE int akarisub_render_raw_collect(
-    AkariSub *instance, double tm, int force, int *out, int max_items) {
-  if (!instance || !out || max_items < 3)
-    return 0;
-
-  ASS_Image *img = instance->renderRawForCollect(tm, force);
-  if (img && !AkariSub::validateImageList(img)) {
-    fprintf(stderr, "AkariSub: raw render output exceeds safety limit\n");
-    img = NULL;
-  }
-
-  out[0] = instance->changed;
-  out[1] = 0;
-  out[2] = instance->time;
-
-  if (!img || (instance->changed == 0 && !force))
-    return 0;
-
-  int *img_out = out + 3;
+// Writes raw ASS_Image rows for the browser GPU compositor, 8 ints per image:
+// dst_x, dst_y, w, h, bitmap_ptr, color (RRGGBBAA), stride, type.
+static int write_raw_image_rows(ASS_Image *img, int *img_out, int img_max) {
   int written = 0;
-  int img_max = (max_items - 3) / 8;
-
   for (ASS_Image *cur = img; cur != NULL && written < img_max; cur = cur->next) {
     if ((255 - (cur->color & 0xFF)) == 0)
       continue;
@@ -1994,10 +1990,110 @@ EMSCRIPTEN_KEEPALIVE int akarisub_render_raw_collect(
     img_out[base + 7] = cur->type;
     written++;
   }
+  return written;
+}
 
+// Raw libass ASS_Image collect path for browser GPU composition.
+// Header: out[0] = changed, out[1] = image count, out[2] = render_time.
+// Image rows follow at out[3], see write_raw_image_rows.
+EMSCRIPTEN_KEEPALIVE int akarisub_render_raw_collect(
+    AkariSub *instance, double tm, int force, int *out, int max_items) {
+  if (!instance || !out || max_items < 3)
+    return 0;
+
+  ASS_Image *img = instance->renderRawForCollect(tm, force);
+  if (img && !AkariSub::validateImageList(img)) {
+    fprintf(stderr, "AkariSub: raw render output exceeds safety limit\n");
+    img = NULL;
+  }
+
+  out[0] = instance->changed;
+  out[1] = 0;
+  out[2] = instance->time;
+
+  if (!img || (instance->changed == 0 && !force))
+    return 0;
+
+  int written = write_raw_image_rows(img, out + 3, (max_items - 3) / 8);
   instance->count = written;
   out[1] = written;
   return written;
+}
+
+// Frame atlas collect path for browser GPU composition: renders the frame and
+// packs its masks with ass_frame_pack_atlas, so the compositor uploads one R8
+// array texture volume and one instance buffer and draws once.
+// out uses the raw collect header (changed, count, render_time); count is the
+// instance count when the frame was packed.
+// atlas_out (9 ints):
+//   [0] status: 1 = packed; 0 = this libass has no frame atlas; -1 = the pack
+//       failed (e.g. more than max_pages pages). For 0 and -1 the raw image
+//       rows were written to out[3] as by akarisub_render_raw_collect.
+//   [1] n_instances, [2] instances ptr (32-byte ASS_AtlasInstance records),
+//   [3] page buffer ptr, [4] page width, [5] page height, [6] n_pages,
+//   [7] pixels_changed, [8] instances_changed
+// The atlas stays valid until the next atlas collect or akarisub_atlas_reset.
+// Returns the number of instances, or of raw rows on fallback.
+EMSCRIPTEN_KEEPALIVE int akarisub_render_atlas_collect(
+    AkariSub *instance, double tm, int force, int *out, int max_items,
+    int *atlas_out, int max_size, int max_pages) {
+  if (!instance || !out || max_items < 3 || !atlas_out)
+    return 0;
+
+  for (int i = 0; i < 9; i++)
+    atlas_out[i] = 0;
+
+  // Unlike akarisub_render_raw_collect, keep the image list of unchanged
+  // frames: they are packed too, which is a cheap pointer compare reporting
+  // no changes, and the atlas stays the frame's current result.
+  ASS_Image *img = instance->renderRawFrame(tm);
+  if (img && !AkariSub::validateImageList(img)) {
+    fprintf(stderr, "AkariSub: raw render output exceeds safety limit\n");
+    img = NULL;
+  }
+
+  out[0] = instance->changed;
+  out[1] = 0;
+  out[2] = instance->time;
+
+#ifdef LIBASS_HAS_FRAME_ATLAS
+  const ASS_Atlas *atlas = instance->packAtlas(img, max_size, max_pages);
+  if (atlas) {
+    atlas_out[0] = 1;
+    atlas_out[1] = atlas->n_instances;
+    atlas_out[2] = (int)(uintptr_t)atlas->instances;
+    atlas_out[3] = (int)(uintptr_t)atlas->buffer;
+    atlas_out[4] = atlas->width;
+    atlas_out[5] = atlas->height;
+    atlas_out[6] = atlas->n_pages;
+    atlas_out[7] = atlas->pixels_changed;
+    atlas_out[8] = atlas->instances_changed;
+    instance->count = atlas->n_instances;
+    out[1] = atlas->n_instances;
+    return atlas->n_instances;
+  }
+  atlas_out[0] = -1;
+#endif
+
+  if (!img || (instance->changed == 0 && !force))
+    return 0;
+
+  int written = write_raw_image_rows(img, out + 3, (max_items - 3) / 8);
+  instance->count = written;
+  out[1] = written;
+  return written;
+}
+
+// Drops the frame atlas and its memory; the next atlas collect packs from
+// scratch and reports every page and instance as changed. Call it when the
+// GPU copy of the atlas was lost.
+EMSCRIPTEN_KEEPALIVE void akarisub_atlas_reset(AkariSub *instance) {
+#ifdef LIBASS_HAS_FRAME_ATLAS
+  if (instance)
+    instance->resetAtlas();
+#else
+  (void)instance;
+#endif
 }
 
 }
