@@ -312,6 +312,13 @@ export interface AkariSubOptions {
   /** Use worker-side raw ASS_Image WebGL2 composition (default: false) */
   rawAssImageGpu?: boolean
   /**
+   * With `rawAssImageGpu`, pack each frame's masks into one libass texture
+   * atlas: one upload of the changed pages and one draw call per frame
+   * instead of one upload per image (default: true). Set false to use the
+   * per-image upload path.
+   */
+  rawAssImageAtlas?: boolean
+  /**
    * Use requestVideoFrameCallback or {@linkcode AkariSub.presentVideoFrame} for
    * precise sync (default: true when RVFC exists, or when `onDemandRender` is
    * set true for a canvas-only WebCodecs clock)
@@ -555,6 +562,7 @@ export interface WorkerInitMessage {
   fullTrackWarmupStep: number
   adaptiveBlendLayouts: boolean
   rawAssImageGpu: boolean
+  rawAssImageAtlas: boolean
   onDemandRender: boolean
   initialTime: number
   initialIsPaused: boolean
@@ -758,6 +766,18 @@ export interface AkariSubModule extends EmscriptenModule {
     outPtr: number,
     maxItems: number
   ) => number
+  /** Missing in builds that predate the libass frame atlas glue. */
+  _akarisub_render_atlas_collect?: (
+    handle: number,
+    time: number,
+    force: number,
+    outPtr: number,
+    maxItems: number,
+    atlasOutPtr: number,
+    maxSize: number,
+    maxPages: number
+  ) => number
+  _akarisub_atlas_reset?: (handle: number) => void
   FS_createPath: (parent: string, path: string, canRead: boolean, canWrite: boolean) => void
   FS_createDataFile: (
     parent: string,

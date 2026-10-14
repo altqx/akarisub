@@ -493,6 +493,7 @@ export default class AkariSub extends EventTarget {
         adaptiveBlendLayouts: options.adaptiveBlendLayouts ?? false,
         cueTracking: resolveCueTracking(options.cueTracking),
         rawAssImageGpu,
+        rawAssImageAtlas: options.rawAssImageAtlas ?? true,
         onDemandRender: this._onDemandRender,
         initialTime,
         initialIsPaused: this._isVideoPausedForWorker(),

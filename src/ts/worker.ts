@@ -2,7 +2,7 @@
 
 import { TrackLifecycle } from './track-lifecycle'
 import { decryptEncryptedContent } from './encrypted-payload'
-import { textureArrayLayerCap } from './gpu-budget'
+import { roundTextureDim, textureArrayLayerCap } from './gpu-budget'
 import {
   DEFAULT_STREAM_PRUNE_SECONDS,
   MAX_STREAM_EVENTS,
@@ -89,6 +89,10 @@ let adaptiveTiming = true
 let configuredRenderAheadSeconds = 0
 let fallbackTimingCompensationSeconds = 0
 let rawAssImageGpuEnabled = false
+// Frame atlas upload for the raw ASS_Image WebGL2 path (rawAssImageAtlas).
+let rawAssAtlasEnabled = true
+// Test-only page edge override that forces tiling and several atlas pages.
+let rawAssAtlasMaxSizeOverride = 0
 let useLocalFonts = false
 let maxSubtitleBytes = MAX_SUBTITLE_BYTES
 let useFontconfigProvider = true
@@ -286,6 +290,17 @@ interface AkariSubApi {
   renderBlendCollect: (handle: number, time: number, force: number, outPtr: number, maxItems: number) => number
   renderImageCollect: (handle: number, time: number, force: number, outPtr: number, maxItems: number) => number
   renderRawCollect: (handle: number, time: number, force: number, outPtr: number, maxItems: number) => number
+  renderAtlasCollect?: (
+    handle: number,
+    time: number,
+    force: number,
+    outPtr: number,
+    maxItems: number,
+    atlasOutPtr: number,
+    maxSize: number,
+    maxPages: number
+  ) => number
+  atlasReset?: (handle: number) => void
   setBlendThreads?: (handle: number, threads: number) => void
   getBlendThreads?: (handle: number) => number
 }
@@ -411,6 +426,122 @@ void main() {
 }
 `
 
+// Frame atlas path: libass packs every mask of a frame into R8 pages
+// (ass_frame_pack_atlas) and describes each quad with a 32-byte
+// ASS_AtlasInstance that is uploaded unchanged:
+//   offset 0: dst_x, dst_y, w, h (int32); 16: atlas_x, atlas_y, page (int32);
+//   28: color (uint32 RRGGBBAA, low byte = ASS transparency).
+// Ints written by akarisub_render_atlas_collect into its atlas header.
+const RAW_ASS_ATLAS_HEADER_INTS = 9
+const RAW_ASS_ATLAS_INSTANCE_BYTES = 32
+// Largest page edge requested from libass. 8192 x 8192 R8 pages keep four
+// layers inside the GPU texture budget; libass sizes pages to the frame, so
+// typical frames use one much smaller page.
+const RAW_ASS_ATLAS_MAX_SIZE = 8192
+// Hard layer limit for the atlas array; the byte budget usually binds first.
+const RAW_ASS_ATLAS_MAX_PAGES = 256
+
+// Same position, bounds and blend math as RAW_ASS_*_SHADER. Color channels
+// come from u_byteUnit, which holds Math.fround(i / 255) exactly as the
+// per-image path stores them in its Float32Array, so both paths feed the
+// fragment stage bit-identical values (a GPU-side division by 255 may round
+// differently).
+const RAW_ASS_ATLAS_VERTEX_SHADER = `#version 300 es
+precision highp float;
+precision highp int;
+
+layout(location = 0) in ivec4 a_dest;
+layout(location = 1) in ivec3 a_atlas;
+layout(location = 2) in uint a_color;
+
+uniform vec2 u_resolution;
+uniform vec4 u_byteUnit[64];
+
+out vec2 v_destXY;
+flat out ivec3 v_atlas;
+flat out ivec2 v_texSize;
+flat out vec4 v_color;
+
+vec2 quadPos(int id) {
+  if (id == 0) return vec2(0.0, 0.0);
+  if (id == 1) return vec2(1.0, 0.0);
+  if (id == 2) return vec2(0.0, 1.0);
+  if (id == 3) return vec2(1.0, 0.0);
+  if (id == 4) return vec2(1.0, 1.0);
+  return vec2(0.0, 1.0);
+}
+
+float byteUnit(uint b) {
+  return u_byteUnit[b >> 2u][b & 3u];
+}
+
+void main() {
+  vec4 destRect = vec4(a_dest);
+  vec2 qp = quadPos(gl_VertexID);
+  vec2 pixelPos = destRect.xy + qp * destRect.zw;
+  vec2 clip = (pixelPos / u_resolution) * 2.0 - 1.0;
+  clip.y = -clip.y;
+  gl_Position = vec4(clip, 0.0, 1.0);
+  v_destXY = destRect.xy;
+  v_atlas = a_atlas;
+  v_texSize = a_dest.zw;
+  v_color = vec4(
+    byteUnit((a_color >> 24u) & 255u),
+    byteUnit((a_color >> 16u) & 255u),
+    byteUnit((a_color >> 8u) & 255u),
+    byteUnit(255u - (a_color & 255u))
+  );
+}
+`
+
+const RAW_ASS_ATLAS_FRAGMENT_SHADER = `#version 300 es
+precision highp float;
+precision highp int;
+precision highp sampler2DArray;
+
+uniform sampler2DArray u_atlas;
+uniform vec2 u_resolution;
+
+in vec2 v_destXY;
+flat in ivec3 v_atlas;
+flat in ivec2 v_texSize;
+flat in vec4 v_color;
+
+out vec4 fragColor;
+
+void main() {
+  vec2 fragPos = vec2(gl_FragCoord.x, u_resolution.y - gl_FragCoord.y);
+  ivec2 texCoord = ivec2(floor(fragPos - v_destXY));
+  if (texCoord.x < 0 || texCoord.y < 0 || texCoord.x >= v_texSize.x || texCoord.y >= v_texSize.y) {
+    discard;
+  }
+  float coverage = texelFetch(u_atlas, ivec3(texCoord + v_atlas.xy, v_atlas.z), 0).r;
+  float alpha = coverage * v_color.a;
+  fragColor = vec4(v_color.rgb * alpha, alpha);
+}
+`
+
+/** One packed frame as reported by akarisub_render_atlas_collect. */
+interface RawASSAtlasFrame {
+  instanceCount: number
+  instancesPtr: number
+  bufferPtr: number
+  pageWidth: number
+  pageHeight: number
+  pages: number
+  pixelsChanged: boolean
+  instancesChanged: boolean
+}
+
+/** Upload counters of the atlas path, for tests and debug output. */
+interface RawASSAtlasStats {
+  pixelUploads: number
+  instanceUploads: number
+  textureAllocations: number
+  contextLosses: number
+  contextRestores: number
+}
+
 function compileRawAssShader(gl: WebGL2RenderingContext, type: number, source: string): WebGLShader {
   const shader = gl.createShader(type)
   if (!shader) throw new Error('Failed to create WebGL2 shader')
@@ -422,6 +553,24 @@ function compileRawAssShader(gl: WebGL2RenderingContext, type: number, source: s
     throw new Error(`Raw ASS WebGL2 shader compilation failed: ${info}`)
   }
   return shader
+}
+
+function linkRawAssProgram(gl: WebGL2RenderingContext, vertexSource: string, fragmentSource: string): WebGLProgram {
+  const vert = compileRawAssShader(gl, gl.VERTEX_SHADER, vertexSource)
+  const frag = compileRawAssShader(gl, gl.FRAGMENT_SHADER, fragmentSource)
+  const program = gl.createProgram()
+  if (!program) throw new Error('Failed to create WebGL2 program')
+  gl.attachShader(program, vert)
+  gl.attachShader(program, frag)
+  gl.linkProgram(program)
+  gl.deleteShader(vert)
+  gl.deleteShader(frag)
+  if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+    const info = gl.getProgramInfoLog(program)
+    gl.deleteProgram(program)
+    throw new Error(`Raw ASS WebGL2 program link failed: ${info}`)
+  }
+  return program
 }
 
 class RawASSImageWebGL2Renderer {
@@ -440,6 +589,38 @@ class RawASSImageWebGL2Renderer {
   private readonly _instanceData = new Float32Array(RAW_ASS_MAX_TEXTURE_ARRAY_LAYERS * RAW_ASS_INSTANCE_FLOATS)
   private _maskScratch = new Uint8Array(0)
 
+  // Frame atlas path; a separate program, VAO and texture so the per-image
+  // path above stays intact as the fallback.
+  private _atlasProgram: WebGLProgram | null = null
+  private _atlasVao: WebGLVertexArrayObject | null = null
+  private _atlasInstanceBuffer: WebGLBuffer | null = null
+  private _atlasTexture: WebGLTexture | null = null
+  private _atlasResolutionLoc: WebGLUniformLocation | null = null
+  private _atlasTexWidth = 0
+  private _atlasTexHeight = 0
+  private _atlasTexLayers = 0
+  private _atlasInstanceCapacity = 0
+  // The GPU copy no longer matches the last pack libass reported (texture
+  // reallocated, context restored, or a pack result that was not uploaded).
+  private _atlasPixelsDirty = true
+  private _atlasInstancesDirty = true
+  private _maxTextureSize = 0
+  private _maxArrayLayers = 0
+  private _contextLost = false
+  private _onContextLost: ((event: Event) => void) | null = null
+  private _onContextRestored: (() => void) | null = null
+  readonly atlasStats: RawASSAtlasStats = {
+    pixelUploads: 0,
+    instanceUploads: 0,
+    textureAllocations: 0,
+    contextLosses: 0,
+    contextRestores: 0
+  }
+  /** Called after the WebGL context was lost; the GPU atlas copy is gone. */
+  onContextLost: (() => void) | null = null
+  /** Called once GPU state was rebuilt after a context restore. */
+  onContextRestored: (() => void) | null = null
+
   init(canvas: OffscreenCanvas, width: number, height: number): boolean {
     this._canvas = canvas
     const gl = canvas.getContext('webgl2', {
@@ -453,20 +634,38 @@ class RawASSImageWebGL2Renderer {
     }) as WebGL2RenderingContext | null
     if (!gl) return false
     this._gl = gl
+    this._setupGL(width, height)
+
+    this._onContextLost = (event: Event) => {
+      // Allow the browser to restore the context.
+      event.preventDefault()
+      this._contextLost = true
+      this.atlasStats.contextLosses++
+      this._markAtlasDirty()
+      this.onContextLost?.()
+    }
+    this._onContextRestored = () => {
+      this._contextLost = false
+      try {
+        this._setupGL(this._lastWidth, this._lastHeight)
+      } catch (error) {
+        console.error('[AkariSub] Raw ASS WebGL2 context restore failed:', error)
+        return
+      }
+      this.atlasStats.contextRestores++
+      this.onContextRestored?.()
+    }
+    canvas.addEventListener('webglcontextlost', this._onContextLost)
+    canvas.addEventListener('webglcontextrestored', this._onContextRestored)
+    return true
+  }
+
+  /** (Re)creates every GPU object; used at init and after a context restore. */
+  private _setupGL(width: number, height: number): void {
+    const gl = this._gl!
     applyWebGL2ColorSpace(gl, canvasColorSpace)
 
-    const vert = compileRawAssShader(gl, gl.VERTEX_SHADER, RAW_ASS_VERTEX_SHADER)
-    const frag = compileRawAssShader(gl, gl.FRAGMENT_SHADER, RAW_ASS_FRAGMENT_SHADER)
-    const program = gl.createProgram()
-    if (!program) throw new Error('Failed to create WebGL2 program')
-    gl.attachShader(program, vert)
-    gl.attachShader(program, frag)
-    gl.linkProgram(program)
-    gl.deleteShader(vert)
-    gl.deleteShader(frag)
-    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
-      throw new Error(`Raw ASS WebGL2 program link failed: ${gl.getProgramInfoLog(program)}`)
-    }
+    const program = linkRawAssProgram(gl, RAW_ASS_VERTEX_SHADER, RAW_ASS_FRAGMENT_SHADER)
     this._program = program
     this._resolutionLoc = gl.getUniformLocation(program, 'u_resolution')
 
@@ -494,13 +693,234 @@ class RawASSImageWebGL2Renderer {
     gl.vertexAttribDivisor(aColor, 1)
     gl.bindVertexArray(null)
 
+    this._maxTextureSize = gl.getParameter(gl.MAX_TEXTURE_SIZE) as number
+    this._maxArrayLayers = gl.getParameter(gl.MAX_ARRAY_TEXTURE_LAYERS) as number
+    this._setupAtlasGL()
+
     gl.enable(gl.BLEND)
     gl.blendEquation(gl.FUNC_ADD)
     gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA)
     gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1)
+    this._maskArray = null
     this._allocateTextureArray(256, 256, 8)
+    this._lastWidth = 0
+    this._lastHeight = 0
     this.updateSize(width, height)
-    return true
+  }
+
+  /** Atlas program and VAO; the atlas path stays off if they fail to build. */
+  private _setupAtlasGL(): void {
+    const gl = this._gl!
+    this._atlasProgram = null
+    this._atlasVao = null
+    this._atlasInstanceBuffer = null
+    this._atlasTexture = null
+    this._atlasTexWidth = 0
+    this._atlasTexHeight = 0
+    this._atlasTexLayers = 0
+    this._atlasInstanceCapacity = 0
+    this._markAtlasDirty()
+    try {
+      const program = linkRawAssProgram(gl, RAW_ASS_ATLAS_VERTEX_SHADER, RAW_ASS_ATLAS_FRAGMENT_SHADER)
+      const vao = gl.createVertexArray()
+      const buffer = gl.createBuffer()
+      if (!vao || !buffer) throw new Error('Failed to create WebGL2 atlas buffers')
+      gl.useProgram(program)
+      const byteUnit = new Float32Array(256)
+      for (let i = 0; i < 256; i++) byteUnit[i] = i / 255
+      gl.uniform4fv(gl.getUniformLocation(program, 'u_byteUnit'), byteUnit)
+      gl.uniform1i(gl.getUniformLocation(program, 'u_atlas'), 0)
+      gl.useProgram(null)
+
+      gl.bindVertexArray(vao)
+      gl.bindBuffer(gl.ARRAY_BUFFER, buffer)
+      const stride = RAW_ASS_ATLAS_INSTANCE_BYTES
+      gl.enableVertexAttribArray(0)
+      gl.vertexAttribIPointer(0, 4, gl.INT, stride, 0)
+      gl.vertexAttribDivisor(0, 1)
+      gl.enableVertexAttribArray(1)
+      gl.vertexAttribIPointer(1, 3, gl.INT, stride, 16)
+      gl.vertexAttribDivisor(1, 1)
+      gl.enableVertexAttribArray(2)
+      gl.vertexAttribIPointer(2, 1, gl.UNSIGNED_INT, stride, 28)
+      gl.vertexAttribDivisor(2, 1)
+      gl.bindVertexArray(null)
+
+      this._atlasProgram = program
+      this._atlasVao = vao
+      this._atlasInstanceBuffer = buffer
+      this._atlasResolutionLoc = gl.getUniformLocation(program, 'u_resolution')
+    } catch (error) {
+      console.warn('[AkariSub] Raw ASS WebGL2 atlas path unavailable:', error)
+    }
+  }
+
+  private _markAtlasDirty(): void {
+    this._atlasPixelsDirty = true
+    this._atlasInstancesDirty = true
+  }
+
+  get contextLost(): boolean {
+    return this._contextLost
+  }
+
+  get atlasAvailable(): boolean {
+    return !!this._atlasProgram && !this._contextLost
+  }
+
+  /**
+   * Page edge and page count to request from ass_frame_pack_atlas: bounded by
+   * the GPU limits and by the texture budget for max-size pages, so any
+   * successful pack can be uploaded. `maxSizeOverride` (tests) lowers the
+   * page edge to force tiling and several pages.
+   */
+  atlasLimits(maxSizeOverride: number = 0): { maxSize: number; maxPages: number } {
+    let maxSize = Math.min(this._maxTextureSize || 2048, RAW_ASS_ATLAS_MAX_SIZE)
+    if (maxSizeOverride > 0) maxSize = Math.max(16, Math.min(maxSize, maxSizeOverride))
+    const layerLimit = Math.min(this._maxArrayLayers || 256, RAW_ASS_ATLAS_MAX_PAGES)
+    const maxPages = textureArrayLayerCap(maxSize, maxSize, 1, layerLimit)
+    return { maxSize, maxPages }
+  }
+
+  /**
+   * Records a pack result that is not drawn (unchanged frame): its changes
+   * must still reach the GPU before the next draw reuses it.
+   */
+  noteUndrawnAtlas(frame: RawASSAtlasFrame): void {
+    if (frame.pixelsChanged) this._atlasPixelsDirty = true
+    if (frame.instancesChanged) this._atlasInstancesDirty = true
+  }
+
+  /** Marks the GPU atlas copy stale, e.g. after a frame took the fallback path. */
+  invalidateAtlas(): void {
+    this._markAtlasDirty()
+  }
+
+  /** Grow-only R8 array texture holding at least width x height x layers. */
+  private _ensureAtlasTexture(width: number, height: number, layers: number): void {
+    const gl = this._gl!
+    if (this._atlasTexture && width <= this._atlasTexWidth && height <= this._atlasTexHeight && layers <= this._atlasTexLayers) {
+      return
+    }
+    const layerLimit = Math.min(this._maxArrayLayers || 256, RAW_ASS_ATLAS_MAX_PAGES)
+    let w = roundTextureDim(Math.max(width, this._atlasTexWidth))
+    let h = roundTextureDim(Math.max(height, this._atlasTexHeight))
+    let l = Math.max(layers, this._atlasTexLayers)
+    if (textureArrayLayerCap(w, h, 1, layerLimit) < l) {
+      // Growing every dimension would exceed the budget: fit this frame only.
+      w = roundTextureDim(width)
+      h = roundTextureDim(height)
+      l = layers
+      if (textureArrayLayerCap(w, h, 1, layerLimit) < l) throw new Error('Raw ASS atlas exceeds the GPU texture budget')
+    }
+    if (this._atlasTexture) gl.deleteTexture(this._atlasTexture)
+    this._atlasTexture = gl.createTexture()
+    if (!this._atlasTexture) throw new Error('Failed to create WebGL2 atlas texture')
+    gl.bindTexture(gl.TEXTURE_2D_ARRAY, this._atlasTexture)
+    gl.texStorage3D(gl.TEXTURE_2D_ARRAY, 1, gl.R8, w, h, l)
+    gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MIN_FILTER, gl.NEAREST)
+    gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_MAG_FILTER, gl.NEAREST)
+    gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
+    gl.texParameteri(gl.TEXTURE_2D_ARRAY, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
+    this._atlasTexWidth = w
+    this._atlasTexHeight = h
+    this._atlasTexLayers = l
+    this._atlasPixelsDirty = true
+    this.atlasStats.textureAllocations++
+  }
+
+  /**
+   * Draws a packed frame with one instanced call. Pages and instances are
+   * uploaded only when libass reports them changed or the GPU copy is stale.
+   * `heap` must be a view taken after the WASM call that packed the frame.
+   * Returns the number of mask pixels drawn.
+   */
+  renderAtlas(frame: RawASSAtlasFrame, heap: Uint8Array, width: number, height: number): number {
+    const gl = this._gl
+    if (!gl || !this._atlasProgram || !this._atlasVao || !this._atlasInstanceBuffer) {
+      throw new Error('Raw ASS atlas renderer is not initialized')
+    }
+    if (this._contextLost) throw new Error('WebGL2 context lost')
+    // WebGL2 turns an out-of-range source offset into a GL error instead of
+    // an exception, which would mark a stale GPU copy as current.
+    const pixelsEnd = frame.bufferPtr + frame.pageWidth * frame.pageHeight * frame.pages
+    const instancesEnd = frame.instancesPtr + frame.instanceCount * RAW_ASS_ATLAS_INSTANCE_BYTES
+    if (frame.instanceCount > 0 && (pixelsEnd > heap.length || instancesEnd > heap.length)) {
+      throw new RangeError(`Raw ASS atlas ends at byte ${Math.max(pixelsEnd, instancesEnd)}, past the ${heap.length}-byte heap view`)
+    }
+    this.updateSize(width, height)
+
+    const count = frame.instanceCount
+    if (count > 0) {
+      this._ensureAtlasTexture(frame.pageWidth, frame.pageHeight, frame.pages)
+      gl.activeTexture(gl.TEXTURE0)
+      gl.bindTexture(gl.TEXTURE_2D_ARRAY, this._atlasTexture)
+      if (frame.pixelsChanged || this._atlasPixelsDirty) {
+        // Pages are one tightly packed width x height x n_pages R8 volume.
+        gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1)
+        gl.pixelStorei(gl.UNPACK_ROW_LENGTH, 0)
+        gl.pixelStorei(gl.UNPACK_IMAGE_HEIGHT, 0)
+        gl.texSubImage3D(
+          gl.TEXTURE_2D_ARRAY,
+          0,
+          0,
+          0,
+          0,
+          frame.pageWidth,
+          frame.pageHeight,
+          frame.pages,
+          gl.RED,
+          gl.UNSIGNED_BYTE,
+          heap,
+          frame.bufferPtr
+        )
+        this._atlasPixelsDirty = false
+        this.atlasStats.pixelUploads++
+      }
+      if (frame.instancesChanged || this._atlasInstancesDirty) {
+        const bytes = count * RAW_ASS_ATLAS_INSTANCE_BYTES
+        gl.bindBuffer(gl.ARRAY_BUFFER, this._atlasInstanceBuffer)
+        if (bytes > this._atlasInstanceCapacity) {
+          const capacity = Math.max(bytes, this._atlasInstanceCapacity * 2, 64 * RAW_ASS_ATLAS_INSTANCE_BYTES)
+          gl.bufferData(gl.ARRAY_BUFFER, capacity, gl.DYNAMIC_DRAW)
+          this._atlasInstanceCapacity = capacity
+        }
+        gl.bufferSubData(gl.ARRAY_BUFFER, 0, heap, frame.instancesPtr, bytes)
+        this._atlasInstancesDirty = false
+        this.atlasStats.instanceUploads++
+      }
+    }
+
+    gl.clearColor(0, 0, 0, 0)
+    gl.clear(gl.COLOR_BUFFER_BIT)
+    if (count === 0) return 0
+
+    gl.useProgram(this._atlasProgram)
+    gl.uniform2f(this._atlasResolutionLoc, width, height)
+    gl.bindVertexArray(this._atlasVao)
+    gl.drawArraysInstanced(gl.TRIANGLES, 0, 6, count)
+    gl.bindVertexArray(null)
+
+    let pixels = 0
+    const instances = new Int32Array(heap.buffer, frame.instancesPtr, count * (RAW_ASS_ATLAS_INSTANCE_BYTES / 4))
+    for (let i = 0; i < instances.length; i += RAW_ASS_ATLAS_INSTANCE_BYTES / 4) {
+      pixels += instances[i + 2] * instances[i + 3]
+    }
+    return pixels
+  }
+
+  /** Reads the drawing buffer back as RGBA rows, bottom row first (tests). */
+  readPixels(): Uint8Array | null {
+    const gl = this._gl
+    if (!gl || this._contextLost) return null
+    const pixels = new Uint8Array(this._lastWidth * this._lastHeight * 4)
+    gl.readPixels(0, 0, this._lastWidth, this._lastHeight, gl.RGBA, gl.UNSIGNED_BYTE, pixels)
+    return pixels
+  }
+
+  /** WEBGL_lose_context, kept across the loss so tests can restore (tests). */
+  loseContextExtension(): WEBGL_lose_context | null {
+    return this._gl?.getExtension('WEBGL_lose_context') ?? null
   }
 
   private _roundDim(n: number): number {
@@ -711,13 +1131,29 @@ class RawASSImageWebGL2Renderer {
       gl.deleteVertexArray(this._vao)
       gl.deleteBuffer(this._instanceBuffer)
       gl.deleteTexture(this._maskArray)
+      gl.deleteProgram(this._atlasProgram)
+      gl.deleteVertexArray(this._atlasVao)
+      gl.deleteBuffer(this._atlasInstanceBuffer)
+      gl.deleteTexture(this._atlasTexture)
     }
+    if (this._canvas && this._onContextLost && this._onContextRestored) {
+      this._canvas.removeEventListener('webglcontextlost', this._onContextLost)
+      this._canvas.removeEventListener('webglcontextrestored', this._onContextRestored)
+    }
+    this._onContextLost = null
+    this._onContextRestored = null
+    this.onContextLost = null
+    this.onContextRestored = null
     this._canvas = null
     this._gl = null
     this._program = null
     this._vao = null
     this._instanceBuffer = null
     this._maskArray = null
+    this._atlasProgram = null
+    this._atlasVao = null
+    this._atlasInstanceBuffer = null
+    this._atlasTexture = null
   }
 }
 
@@ -780,6 +1216,53 @@ const refreshRrcViews = (): void => {
   rrcViewsBuffer = buffer
   rrcViewsPtr = rrcBufPtr
   rrcViewsCapacity = rrcBufCapacity
+}
+
+// akarisub_render_atlas_collect writes its atlas header here; allocated once,
+// before any render, so the allocation cannot detach views mid-frame.
+let atlasHeaderPtr = 0
+// Last atlas header seen by render(), for the rawAssDebug test hook.
+let rawAssLastAtlas: { status: number; frame: RawASSAtlasFrame } | null = null
+// Path that painted the last raw ASS_Image frame, for the rawAssDebug hook.
+let rawAssLastPaint: 'atlas' | 'images' | null = null
+
+const ensureAtlasHeaderBuffer = (): number => {
+  if (!atlasHeaderPtr && _Module) {
+    atlasHeaderPtr = _Module._malloc(RAW_ASS_ATLAS_HEADER_INTS * Int32Array.BYTES_PER_ELEMENT)
+  }
+  return atlasHeaderPtr
+}
+
+/** Decodes the atlas header; the view is taken after the WASM call returned. */
+const readAtlasHeader = (): { status: number; frame: RawASSAtlasFrame } => {
+  const header = new Int32Array(self.wasmMemory.buffer, atlasHeaderPtr, RAW_ASS_ATLAS_HEADER_INTS)
+  return {
+    status: header[0],
+    frame: {
+      instanceCount: header[1],
+      instancesPtr: header[2],
+      bufferPtr: header[3],
+      pageWidth: header[4],
+      pageHeight: header[5],
+      pages: header[6],
+      pixelsChanged: header[7] !== 0,
+      instancesChanged: header[8] !== 0
+    }
+  }
+}
+
+let rawAssHeapView: Uint8Array | null = null
+/**
+ * A byte view of the whole WASM heap as it is now, for the raw GPU uploads.
+ * self.HEAPU8 is only re-synced when memory grows on this thread; in the -mt
+ * build a blend pthread can grow it too, and only wasmMemory.buffer is
+ * current then.
+ */
+const currentHeapU8 = (): Uint8Array => {
+  const buffer = self.wasmMemory.buffer
+  let view = rawAssHeapView
+  if (!view || view.buffer !== buffer) view = rawAssHeapView = new Uint8Array(buffer)
+  return view
 }
 
 const prewarmRenderer = (time: number, generation: number = trackLifecycle.generation): void => {
@@ -2162,21 +2645,49 @@ const render = (
   const useRawAssImagePath = prepareId == null && !!rawAssWebGL2Renderer && offscreenRender === true
   const imageStride = useRawAssImagePath ? RAW_RRC_IMG_STRIDE : RRC_IMG_STRIDE
   ensureRenderCollectBuffer(RENDER_COLLECT_MAX_IMAGES, imageStride)
+  // The atlas is the default raw path; the per-image upload stays as the
+  // fallback for builds without the export and for frames that do not pack.
+  const atlasOutPtr =
+    useRawAssImagePath && rawAssAtlasEnabled && api.renderAtlasCollect && rawAssWebGL2Renderer!.atlasAvailable
+      ? ensureAtlasHeaderBuffer()
+      : 0
 
-  const written = useRawAssImagePath
-    ? api.renderRawCollect(handle, time, forceInt, rrcBufPtr, rrcBufCapacity)
-    : blendMode === 'wasm'
-      ? api.renderBlendCollect(handle, time, forceInt, rrcBufPtr, rrcBufCapacity)
-      : api.renderImageCollect(handle, time, forceInt, rrcBufPtr, rrcBufCapacity)
+  let written: number
+  if (atlasOutPtr) {
+    // Packed every frame, unchanged ones too: re-packing the same image list
+    // is a pointer compare that reports nothing changed.
+    const { maxSize, maxPages } = rawAssWebGL2Renderer!.atlasLimits(rawAssAtlasMaxSizeOverride)
+    written = api.renderAtlasCollect!(handle, time, forceInt, rrcBufPtr, rrcBufCapacity, atlasOutPtr, maxSize, maxPages)
+  } else {
+    written = useRawAssImagePath
+      ? api.renderRawCollect(handle, time, forceInt, rrcBufPtr, rrcBufCapacity)
+      : blendMode === 'wasm'
+        ? api.renderBlendCollect(handle, time, forceInt, rrcBufPtr, rrcBufCapacity)
+        : api.renderImageCollect(handle, time, forceInt, rrcBufPtr, rrcBufCapacity)
+  }
 
   // Refresh after the WASM call: rendering may have grown the memory
   refreshRrcViews()
+  const atlas = atlasOutPtr ? readAtlasHeader() : null
+  rawAssLastAtlas = atlas
   const headerView = rrcHeaderView!
   const changed = headerView[0]
 
   // Frame produced no images: ask how long renders can be skipped.
   if (headerView[1] === 0 && (emptyWindowFrom < 0 || time < emptyWindowFrom || time >= emptyWindowUntil)) {
     computeEmptyWindow(time)
+    // computeEmptyWindow allocates, which can grow (and detach) the memory.
+    refreshRrcViews()
+  }
+
+  if (atlas && atlas.status !== 1) {
+    // The frame took the per-image fallback; libass reports the next pack as
+    // fully changed anyway, keep the GPU state in step.
+    rawAssWebGL2Renderer!.invalidateAtlas()
+    if (atlas.status === 0) {
+      rawAssAtlasEnabled = false
+      if (debug) console.warn('[AkariSub] libass has no frame atlas; using per-image raw uploads')
+    }
   }
 
   const renderEndTime = performance.now()
@@ -2214,6 +2725,12 @@ const render = (
     const meta = rrcMetaView!
     metrics.lastImageCount = written
     metrics.lastImagePixels = 0
+
+    if (atlas?.status === 1) {
+      // No image rows were written; paintRawAssAtlas counts the pixels.
+      return paintRawAssAtlas({ frame: atlas.frame, times, requestId, renderEpoch, presentationId })
+    }
+
     const stride = useRawAssImagePath ? RAW_RRC_IMG_STRIDE : RRC_IMG_STRIDE
     for (let i = 0; i < written; ++i) {
       const metaOffset = i * stride
@@ -2335,6 +2852,8 @@ const render = (
       paintImages({ images, buffers, times, requestId, renderEpoch, prepareId, time, presentationId })
     }
   } else {
+    // Not drawn, but the pack result is current: upload it with the next draw.
+    if (atlas?.status === 1) rawAssWebGL2Renderer!.noteUndrawnAtlas(atlas.frame)
     metrics.pendingRenders--
     if (prepareId == null) {
       postMessage({ target: 'unbusy', requestId, renderEpoch })
@@ -2413,7 +2932,8 @@ const paintRawAssImages = ({
   const renderStart = performance.now()
   let painted = true
   try {
-    const pixels = rawAssWebGL2Renderer!.renderRawAssMetadata(meta, count, self.HEAPU8, width, height)
+    const pixels = rawAssWebGL2Renderer!.renderRawAssMetadata(meta, count, currentHeapU8(), width, height)
+    rawAssLastPaint = 'images'
     if (debug) {
       times.JSRenderTime = performance.now() - renderStart
       times.bitmaps = count
@@ -2427,6 +2947,59 @@ const paintRawAssImages = ({
   } catch (error) {
     painted = false
     console.error('[AkariSub] Raw ASS_Image WebGL2 render failed:', error)
+  }
+  postMessage({ target: 'unbusy', requestId, renderEpoch, presentationId, painted })
+  completeRenderCycle(painted)
+}
+
+const paintRawAssAtlas = ({
+  times,
+  frame,
+  requestId,
+  renderEpoch,
+  presentationId
+}: {
+  times: RenderTimes
+  frame: RawASSAtlasFrame
+  requestId?: number
+  renderEpoch?: number
+  presentationId?: number
+}): void => {
+  metrics.pendingRenders--
+  const renderer = rawAssWebGL2Renderer!
+  if (isStalePresentation(presentationId, latestPresentationId)) {
+    renderer.noteUndrawnAtlas(frame)
+    postMessage({ target: 'unbusy', requestId, renderEpoch, presentationId, painted: false })
+    completeRenderCycle()
+    return
+  }
+  const width = self.width
+  const height = self.height
+  const renderStart = performance.now()
+  let painted = true
+  try {
+    const pixels = renderer.renderAtlas(frame, currentHeapU8(), width, height)
+    metrics.lastImagePixels = pixels
+    rawAssLastPaint = 'atlas'
+    if (debug) {
+      times.JSRenderTime = performance.now() - renderStart
+      times.bitmaps = frame.instanceCount
+      ;(times as RenderTimes & { rawPixels?: number }).rawPixels = pixels
+      let total = 0
+      for (const key in times) {
+        if (key !== 'bitmaps' && key !== 'rawPixels') total += (times as any)[key] || 0
+      }
+      console.log(
+        `[WEBGL2-RAW-ASS-ATLAS] Instances: ${frame.instanceCount} Pages: ${frame.pages} ` +
+          `(${frame.pageWidth}x${frame.pageHeight}) Uploads: pixels=${frame.pixelsChanged} ` +
+          `instances=${frame.instancesChanged} Pixels: ${pixels} Total: ${total | 0}ms`,
+        times
+      )
+    }
+  } catch (error) {
+    painted = false
+    renderer.noteUndrawnAtlas(frame)
+    console.error('[AkariSub] Raw ASS_Image WebGL2 atlas render failed:', error)
   }
   postMessage({ target: 'unbusy', requestId, renderEpoch, presentationId, painted })
   completeRenderCycle(painted)
@@ -2809,6 +3382,8 @@ self.init = async (data: any): Promise<void> => {
       renderBlendCollect: Module._akarisub_render_blend_collect,
       renderImageCollect: Module._akarisub_render_image_collect,
       renderRawCollect: Module._akarisub_render_raw_collect,
+      renderAtlasCollect: Module._akarisub_render_atlas_collect,
+      atlasReset: Module._akarisub_atlas_reset,
       setBlendThreads: Module._akarisub_set_blend_threads,
       getBlendThreads: Module._akarisub_get_blend_threads
     }
@@ -2885,6 +3460,7 @@ self.init = async (data: any): Promise<void> => {
     self.height = data.height
     onDemandRenderMode = !!data.onDemandRender
     rawAssImageGpuEnabled = !!data.rawAssImageGpu
+    rawAssAtlasEnabled = data.rawAssImageAtlas !== false
     blendMode = data.blendMode
     asyncRender = data.asyncRender
 
@@ -3161,6 +3737,15 @@ self.init = async (data: any): Promise<void> => {
     })
 }
 
+const releaseRawAssWebGL2Renderer = (): void => {
+  if (!rawAssWebGL2Renderer) return
+  rawAssWebGL2Renderer.destroy()
+  rawAssWebGL2Renderer = null
+  // Free libass' last pack (its pages and the frame it pins); a later
+  // renderer starts from a full upload anyway.
+  if (akariSubHandle) akariSubApi?.atlasReset?.(akariSubHandle)
+}
+
 self.offscreenCanvas = ({
   transferable,
   rawAssImageGpu,
@@ -3173,14 +3758,23 @@ self.offscreenCanvas = ({
   hdr?: boolean
 }): void => {
   applyCanvasColorSpace(nextColorSpace, hdr)
+  releaseRawAssWebGL2Renderer()
   offCanvas = transferable[0]
-  rawAssWebGL2Renderer = null
 
   const useRawAssImageGpu = rawAssImageGpu ?? rawAssImageGpuEnabled
   if (useRawAssImageGpu) {
     try {
       const renderer = new RawASSImageWebGL2Renderer()
       if (renderer.init(offCanvas, self.width, self.height)) {
+        renderer.onContextLost = () => {
+          // The GPU atlas copy is gone: drop libass' atlas too, so the next
+          // pack reports every page changed and its memory is released.
+          if (akariSubHandle) akariSubApi?.atlasReset?.(akariSubHandle)
+        }
+        renderer.onContextRestored = () => {
+          if (rawAssWebGL2Renderer !== renderer || !akariSubHandle) return
+          render(getRenderClockTime(), true)
+        }
         rawAssWebGL2Renderer = renderer
         offCanvasCtx = null
         bufferCanvas = null
@@ -3205,8 +3799,7 @@ self.offscreenCanvas = ({
 }
 
 self.detachOffscreen = (): void => {
-  rawAssWebGL2Renderer?.destroy()
-  rawAssWebGL2Renderer = null
+  releaseRawAssWebGL2Renderer()
   offCanvas = new OffscreenCanvas(self.width, self.height)
   offCanvasCtx = offCanvas.getContext('2d', workerCanvas2dSettings())
   offscreenRender = 'hybrid'
@@ -3291,14 +3884,118 @@ self.video = ({
   if (newRate != null) setPlaybackRate(newRate)
 }
 
+let rawAssLoseContext: WEBGL_lose_context | null = null
+
+/**
+ * @internal Test hook for the raw ASS_Image WebGL2 path, driven by
+ * tests/browser-libass-atlas.html; not part of the public API. Replies with a
+ * `rawAssDebug` message carrying the same requestId.
+ * - configure: { atlas?: boolean, atlasMaxSize?: number } toggles the atlas
+ *   path and overrides the page edge (0 = default) to force several pages.
+ * - capture: { time } renders synchronously with force and reads the canvas
+ *   back (RGBA, bottom row first) in the same task.
+ * - render: { time, force?, stalePresentation? } renders synchronously
+ *   without reading back; stalePresentation tags the frame with a
+ *   presentation id older than the latest one, so it is packed but not drawn.
+ * - loseContext / restoreContext: WEBGL_lose_context on the worker context.
+ * - stats: atlas upload counters and context state.
+ */
+self.rawAssDebug = ({
+  action,
+  requestId,
+  atlas,
+  atlasMaxSize,
+  time,
+  force,
+  stalePresentation
+}: {
+  action: 'configure' | 'capture' | 'render' | 'loseContext' | 'restoreContext' | 'stats'
+  requestId?: number
+  atlas?: boolean
+  atlasMaxSize?: number
+  time?: number
+  force?: boolean
+  stalePresentation?: boolean
+}): void => {
+  const reply = (data: Record<string, unknown>, transfer: Transferable[] = []): void =>
+    postMessage({ target: 'rawAssDebug', requestId, ...data }, transfer)
+  const renderer = rawAssWebGL2Renderer
+  if (!renderer) {
+    reply({ error: 'raw ASS_Image WebGL2 renderer is not active' })
+    return
+  }
+  const state = () => ({
+    stats: { ...renderer.atlasStats },
+    contextLost: renderer.contextLost,
+    atlasAvailable: renderer.atlasAvailable,
+    atlasEnabled: rawAssAtlasEnabled,
+    // Header of the last atlas collect by any render, e.g. the forced
+    // re-render after a context restore.
+    lastAtlas: rawAssLastAtlas
+  })
+  switch (action) {
+    case 'configure':
+      if (atlas != null) {
+        rawAssAtlasEnabled = !!atlas
+        if (!rawAssAtlasEnabled && akariSubHandle) akariSubApi?.atlasReset?.(akariSubHandle)
+      }
+      if (atlasMaxSize != null) rawAssAtlasMaxSizeOverride = Math.max(0, Math.floor(atlasMaxSize))
+      markNextRenderForced()
+      reply({ ok: true, ...state() })
+      return
+    case 'capture': {
+      rawAssLastPaint = null
+      rawAssLastAtlas = null
+      render(typeof time === 'number' ? time : getRenderClockTime(), true)
+      const path = rawAssLastPaint
+      const pixels = renderer.readPixels()
+      reply(
+        {
+          path,
+          atlas: rawAssLastAtlas,
+          width: self.width,
+          height: self.height,
+          pixels: pixels?.buffer ?? null,
+          ...state()
+        },
+        pixels ? [pixels.buffer] : []
+      )
+      return
+    }
+    case 'render': {
+      rawAssLastPaint = null
+      rawAssLastAtlas = null
+      let presentationId: number | undefined
+      if (stalePresentation) {
+        latestPresentationId = Math.max(latestPresentationId, 1)
+        presentationId = latestPresentationId - 1
+      }
+      render(typeof time === 'number' ? time : getRenderClockTime(), force ? 1 : 0, undefined, undefined, undefined, presentationId)
+      reply({ path: rawAssLastPaint, atlas: rawAssLastAtlas, ...state() })
+      return
+    }
+    case 'loseContext':
+      rawAssLoseContext = renderer.loseContextExtension()
+      rawAssLoseContext?.loseContext()
+      reply({ ok: !!rawAssLoseContext, ...state() })
+      return
+    case 'restoreContext':
+      rawAssLoseContext?.restoreContext()
+      reply({ ok: !!rawAssLoseContext, ...state() })
+      return
+    case 'stats':
+      reply({ ok: true, ...state() })
+      return
+  }
+}
+
 self.destroy = (): void => {
   stopWarmup()
   trackLifecycle.destroy()
   resetCueState(lastCurrentTime)
   firstTrackEventStartTime = null
 
-  rawAssWebGL2Renderer?.destroy()
-  rawAssWebGL2Renderer = null
+  releaseRawAssWebGL2Renderer()
   preparedCanvas = null
   preparedCtx = null
   preparedBufferCanvas = null
@@ -3314,6 +4011,10 @@ self.destroy = (): void => {
       rrcViewsBuffer = null
       rrcViewsPtr = 0
       rrcViewsCapacity = 0
+    }
+    if (atlasHeaderPtr) {
+      _Module._free(atlasHeaderPtr)
+      atlasHeaderPtr = 0
     }
   }
   if (akariSubHandle) {

@@ -1,0 +1,301 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>AkariSub libass atlas compositing test</title>
+<canvas id="subtitles" width="640" height="360"></canvas>
+<pre id="result">RUNNING</pre>
+<script type="module">
+  import AkariSub from '/dist/index.js'
+
+  // Every case is drawn by the worker's raw ASS_Image WebGL2 compositor twice,
+  // once through the libass frame atlas (one upload, one instanced draw) and
+  // once through the per-image upload path, and the read-back canvas pixels
+  // must be byte-identical.
+  const drawing = 'm 0 0 l 420 0 420 300 0 300'
+  const manyLines = []
+  for (let i = 0; i < 48; i++) {
+    const x = 20 + (i % 8) * 76
+    const y = 30 + Math.floor(i / 8) * 54
+    const alpha = ((i * 37) % 200).toString(16).padStart(2, '0').toUpperCase()
+    const color = ((i * 0x2f4b17) & 0xffffff).toString(16).padStart(6, '0').toUpperCase()
+    manyLines.push(
+      `Dialogue: ${i % 3},0:00:08.00,0:00:10.00,Default,,0,0,0,,{\\an7\\pos(${x},${y})\\fs22\\1c&H${color}&\\1a&H${alpha}&\\bord${i % 4}\\shad${i % 2}}L${i}`
+    )
+  }
+
+  const subtitle = String.raw`[Script Info]
+ScriptType: v4.00+
+PlayResX: 640
+PlayResY: 360
+ScaledBorderAndShadow: yes
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Default,Liberation Sans,48,&H00FFFFFF,&H000000FF,&H00101010,&H80000000,0,0,0,0,100,100,0,0,1,3,2,5,10,10,10,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+Dialogue: 0,0:00:00.00,0:00:02.00,Default,,0,0,0,,{\pos(320,180)}STATIC LINE
+Dialogue: 0,0:00:02.00,0:00:04.00,Default,,0,0,0,,{\an7\move(20,40,420,200,0,2000)\blur2}MOVE
+Dialogue: 0,0:00:04.00,0:00:06.00,Default,,0,0,0,,{\pos(320,180)\t(0,2000,\fscx200\frz30\1c&H00FF00&\3c&HFF0000&)\bord3}TRANSFORM
+Dialogue: 0,0:00:06.00,0:00:08.00,Default,,0,0,0,,{\pos(320,120)\fs96\blur8\bord6}BLUR
+Dialogue: 1,0:00:06.00,0:00:08.00,Default,,0,0,0,,{\pos(320,260)\fs64\be4\1a&H60&\3c&H0000FF&}SOFT EDGE
+${manyLines.join('\n')}
+Dialogue: 0,0:00:10.00,0:00:12.00,Default,,0,0,0,,{\an7\pos(10,10)\1c&H3060C0&\1a&H40&\bord0\shad0\blur3\p1}${drawing}{\p0}
+Dialogue: 1,0:00:10.00,0:00:12.00,Default,,0,0,0,,{\pos(320,250)\fs150\blur10\bord10\3c&H00FFFF&}LARGE
+`
+
+  const canvas = document.querySelector('#subtitles')
+  const result = document.querySelector('#result')
+  const renderer = new AkariSub({
+    canvas,
+    subContent: subtitle,
+    offscreenRender: true,
+    rawAssImageGpu: true,
+    onDemandRender: false,
+    adaptiveTiming: false,
+    asyncRender: false,
+    useLocalFonts: false
+  })
+
+  const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+  let nextRequestId = 1
+  const debug = (action, data = {}) =>
+    new Promise((resolve, reject) => {
+      const requestId = nextRequestId++
+      const timer = setTimeout(() => reject(new Error(`rawAssDebug ${action} timed out`)), 10000)
+      const onMessage = (event) => {
+        if (event.data?.target !== 'rawAssDebug' || event.data.requestId !== requestId) return
+        renderer._worker.removeEventListener('message', onMessage)
+        clearTimeout(timer)
+        if (event.data.error) reject(new Error(event.data.error))
+        else resolve(event.data)
+      }
+      renderer._worker.addEventListener('message', onMessage)
+      renderer.sendMessage('rawAssDebug', { action, requestId, ...data })
+    })
+
+  const capture = async (time, atlas, atlasMaxSize = 0) => {
+    await debug('configure', { atlas, atlasMaxSize })
+    const frame = await debug('capture', { time })
+    frame.pixels = frame.pixels ? new Uint8Array(frame.pixels) : null
+    return frame
+  }
+
+  const compare = (a, b) => {
+    if (!a || !b || a.length !== b.length) return { differingBytes: -1 }
+    let differingBytes = 0
+    let maxDifference = 0
+    for (let i = 0; i < a.length; i++) {
+      const difference = Math.abs(a[i] - b[i])
+      if (difference) differingBytes++
+      if (difference > maxDifference) maxDifference = difference
+    }
+    return { differingBytes, maxDifference }
+  }
+  const coveredPixels = (pixels) => {
+    let covered = 0
+    for (let i = 3; i < pixels.length; i += 4) if (pixels[i]) covered++
+    return covered
+  }
+  const summary = (frame) => ({
+    path: frame.path,
+    status: frame.atlas?.status ?? null,
+    instances: frame.atlas?.frame.instanceCount ?? null,
+    pages: frame.atlas?.frame.pages ?? null,
+    page: frame.atlas ? `${frame.atlas.frame.pageWidth}x${frame.atlas.frame.pageHeight}` : null,
+    pixelsChanged: frame.atlas?.frame.pixelsChanged ?? null,
+    instancesChanged: frame.atlas?.frame.instancesChanged ?? null,
+    uploads: { pixels: frame.stats.pixelUploads, instances: frame.stats.instanceUploads }
+  })
+
+  const failures = []
+  const report = {}
+  const check = (name, condition, detail) => {
+    if (!condition) failures.push({ name, detail })
+  }
+
+  try {
+    await new Promise((resolve, reject) => {
+      renderer.addEventListener('ready', resolve, { once: true })
+      renderer.addEventListener('error', (event) => reject(event.error || new Error('renderer error')), { once: true })
+    })
+    renderer.setCurrentTime(true, 0.5, 1)
+    await wait(200)
+    const initial = await debug('stats')
+    check('atlas-available', initial.atlasAvailable && initial.atlasEnabled, initial)
+    const stats = await renderer.getStats()
+    report.build = { wasmThreads: stats.wasmThreads, wasmSimd: stats.wasmSimd, workerRenderer: stats.workerRenderer }
+
+    // 1. Atlas and per-image paths are pixel-identical. maxSize forces small
+    //    pages, so large images are tiled and spread over several pages.
+    const cases = [
+      { name: 'static', time: 0.5 },
+      { name: 'move-a', time: 2.5 },
+      { name: 'move-b', time: 3.0 },
+      { name: 'move-subpixel', time: 3.317 },
+      { name: 'transform', time: 4.9 },
+      { name: 'blur', time: 7.0 },
+      { name: 'many-lines', time: 9.0 },
+      { name: 'large', time: 11.0 },
+      { name: 'large-tiled-pages', time: 11.0, atlasMaxSize: 256, minPages: 2 },
+      { name: 'many-lines-small-pages', time: 9.0, atlasMaxSize: 96, minPages: 2 }
+    ]
+    const references = {}
+    for (const { name, time, atlasMaxSize = 0, minPages = 1 } of cases) {
+      const atlasFrame = await capture(time, true, atlasMaxSize)
+      const imageFrame = await capture(time, false)
+      references[time] = imageFrame.pixels
+      const diff = compare(atlasFrame.pixels, imageFrame.pixels)
+      const covered = imageFrame.pixels ? coveredPixels(imageFrame.pixels) : 0
+      report[name] = { ...summary(atlasFrame), covered, ...diff }
+      check(`${name}-atlas-path`, atlasFrame.path === 'atlas' && atlasFrame.atlas?.status === 1, report[name])
+      check(`${name}-image-path`, imageFrame.path === 'images', imageFrame.path)
+      check(`${name}-identical`, diff.differingBytes === 0, diff)
+      check(`${name}-not-blank`, covered > 500, covered)
+      check(`${name}-pages`, (atlasFrame.atlas?.frame.pages ?? 0) >= minPages, report[name])
+    }
+
+    // 2. A frame that does not fit max_pages falls back to per-image uploads.
+    const overflow = await capture(11.0, true, 16)
+    report['page-overflow-fallback'] = { ...summary(overflow), ...compare(overflow.pixels, references[11.0]) }
+    check('overflow-status', overflow.atlas?.status === -1, report['page-overflow-fallback'])
+    check('overflow-path', overflow.path === 'images', overflow.path)
+    check('overflow-identical', compare(overflow.pixels, references[11.0]).differingBytes === 0, null)
+
+    // 3. Unchanged frames reuse the uploaded atlas: no page or instance upload.
+    const static1 = await capture(0.5, true)
+    const static2 = await capture(1.5, true)
+    report['static-reuse'] = { first: summary(static1), second: summary(static2) }
+    check('static-reuse-flags', static2.atlas?.frame.pixelsChanged === false && static2.atlas?.frame.instancesChanged === false, report['static-reuse'])
+    check(
+      'static-reuse-no-upload',
+      static2.stats.pixelUploads === static1.stats.pixelUploads && static2.stats.instanceUploads === static1.stats.instanceUploads,
+      report['static-reuse']
+    )
+    check('static-reuse-identical', compare(static2.pixels, references[0.5]).differingBytes === 0, null)
+
+    // Integer \move steps keep the bitmaps: libass reports only instances changed.
+    const move1 = await capture(2.5, true)
+    const move2 = await capture(3.0, true)
+    report['move-reuse'] = { first: summary(move1), second: summary(move2) }
+    check('move-reuse-identical', compare(move2.pixels, references[3.0]).differingBytes === 0, null)
+    check(
+      'move-reuse-instances-only',
+      move2.atlas?.frame.pixelsChanged === false &&
+        move2.atlas?.frame.instancesChanged === true &&
+        move2.stats.pixelUploads === move1.stats.pixelUploads &&
+        move2.stats.instanceUploads === move1.stats.instanceUploads + 1,
+      report['move-reuse']
+    )
+
+    // A pack that is not drawn must still reach the GPU with the next draw.
+    // Both cases first draw the 48-line atlas, so a skipped upload would show
+    // those lines instead of the static one.
+    // (a) libass last rendered the static line through the per-image path, so
+    //     a non-forced render of the same line reports no change and is not
+    //     drawn, while its atlas pack is new.
+    await capture(9.0, true)
+    await capture(0.5, false)
+    await debug('configure', { atlas: true })
+    const unchangedBefore = await debug('stats')
+    const unchanged = await debug('render', { time: 1.5 })
+    const unchangedAfter = await capture(1.5, true)
+    const unchangedDiff = compare(unchangedAfter.pixels, references[0.5])
+    report['undrawn-unchanged'] = {
+      undrawn: { path: unchanged.path, atlas: unchanged.atlas?.frame ?? null },
+      after: summary(unchangedAfter),
+      uploadsBefore: unchangedBefore.stats,
+      ...unchangedDiff
+    }
+    check(
+      'undrawn-unchanged-not-drawn',
+      unchanged.path === null && unchanged.atlas?.status === 1 && unchanged.atlas.frame.pixelsChanged === true,
+      report['undrawn-unchanged']
+    )
+    check(
+      'undrawn-unchanged-uploaded-later',
+      unchangedAfter.path === 'atlas' &&
+        unchangedAfter.atlas?.frame.pixelsChanged === false &&
+        unchangedAfter.stats.pixelUploads === unchangedBefore.stats.pixelUploads + 1,
+      report['undrawn-unchanged']
+    )
+    check('undrawn-unchanged-identical', unchangedDiff.differingBytes === 0, unchangedDiff)
+
+    // (b) A frame whose presentation is already stale is packed but not drawn.
+    await capture(9.0, true)
+    const staleBefore = await debug('stats')
+    const stale = await debug('render', { time: 0.5, stalePresentation: true })
+    const staleAfter = await capture(1.5, true)
+    const staleDiff = compare(staleAfter.pixels, references[0.5])
+    report['undrawn-stale'] = {
+      undrawn: { path: stale.path, atlas: stale.atlas?.frame ?? null },
+      after: summary(staleAfter),
+      uploadsBefore: staleBefore.stats,
+      ...staleDiff
+    }
+    check(
+      'undrawn-stale-not-drawn',
+      stale.path === null &&
+        stale.atlas?.status === 1 &&
+        stale.atlas.frame.pixelsChanged === true &&
+        stale.atlas.frame.instancesChanged === true,
+      report['undrawn-stale']
+    )
+    check(
+      'undrawn-stale-uploaded-later',
+      staleAfter.path === 'atlas' &&
+        staleAfter.atlas?.frame.pixelsChanged === false &&
+        staleAfter.atlas?.frame.instancesChanged === false &&
+        staleAfter.stats.pixelUploads === staleBefore.stats.pixelUploads + 1 &&
+        staleAfter.stats.instanceUploads === staleBefore.stats.instanceUploads + 1,
+      report['undrawn-stale']
+    )
+    check('undrawn-stale-identical', staleDiff.differingBytes === 0, staleDiff)
+
+    // 4. Context loss: libass' atlas is reset and fully re-uploaded by the
+    //    forced re-render after restore. Park the clock on the captured frame,
+    //    so without the reset libass would report that frame as unchanged.
+    renderer.setCurrentTime(true, 11.0, 1)
+    await wait(200)
+    const beforeLoss = await capture(11.0, true)
+    const lost = await debug('loseContext')
+    check('lose-context-extension', lost.ok, lost)
+    let state = lost
+    for (let i = 0; i < 50 && !state.contextLost; i++) {
+      await wait(50)
+      state = await debug('stats')
+    }
+    check('context-lost', state.contextLost, state)
+    await debug('restoreContext')
+    for (let i = 0; i < 100 && (state.contextLost || state.stats.contextRestores < 1); i++) {
+      await wait(50)
+      state = await debug('stats')
+    }
+    check('context-restored', !state.contextLost && state.stats.contextRestores === 1, state)
+    const afterRestore = await capture(11.0, true)
+    report['context-loss'] = {
+      before: summary(beforeLoss),
+      restoreRender: state.lastAtlas,
+      after: summary(afterRestore),
+      stats: afterRestore.stats,
+      ...compare(afterRestore.pixels, references[11.0])
+    }
+    check('context-before-unchanged', beforeLoss.atlas?.frame.pixelsChanged === false, report['context-loss'])
+    check(
+      'context-restore-reset',
+      state.lastAtlas?.status === 1 && state.lastAtlas.frame.pixelsChanged && state.lastAtlas.frame.instancesChanged,
+      report['context-loss']
+    )
+    check('context-restore-path', afterRestore.path === 'atlas', report['context-loss'])
+    check('context-restore-reuploaded', afterRestore.stats.pixelUploads > beforeLoss.stats.pixelUploads, report['context-loss'])
+    check('context-restore-identical', compare(afterRestore.pixels, references[11.0]).differingBytes === 0, report['context-loss'])
+
+    result.textContent = failures.length
+      ? `FAIL ${JSON.stringify({ failures, report })}`
+      : `PASS ${JSON.stringify(report)}`
+  } catch (error) {
+    result.textContent = `ERROR ${error?.stack || error} ${JSON.stringify({ failures, report })}`
+  } finally {
+    renderer.destroy()
+  }
+</script>
