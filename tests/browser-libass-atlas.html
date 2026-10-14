@@ -2,6 +2,7 @@
 <meta charset="utf-8" />
 <title>AkariSub libass atlas compositing test</title>
 <canvas id="subtitles" width="640" height="360"></canvas>
+<canvas id="subtitles-webgpu" width="640" height="360"></canvas>
 <pre id="result">RUNNING</pre>
 <script type="module">
   import AkariSub from '/dist/index.js'
@@ -9,7 +10,13 @@
   // Every case is drawn by the worker's raw ASS_Image WebGL2 compositor twice,
   // once through the libass frame atlas (one upload, one instanced draw) and
   // once through the per-image upload path, and the read-back canvas pixels
-  // must be byte-identical.
+  // must be byte-identical. A second instance then draws every case with the
+  // worker WebGPU compositor (rawAssImageWebGPU), through the atlas and its
+  // per-image fallback, and must match the WebGL2 per-image pixels byte for
+  // byte. ?webgpu=optional reports WebGPU as unavailable instead of failing
+  // when the browser has no worker WebGPU; ?webgpu=off skips it.
+  const params = new URLSearchParams(location.search)
+  const webgpuMode = params.get('webgpu') || 'require'
   const drawing = 'm 0 0 l 420 0 420 300 0 300'
   const manyLines = []
   for (let i = 0; i < 48; i++) {
@@ -59,27 +66,34 @@ Dialogue: 1,0:00:10.00,0:00:12.00,Default,,0,0,0,,{\pos(320,250)\fs150\blur10\bo
 
   const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
   let nextRequestId = 1
-  const debug = (action, data = {}) =>
+  const debugOn = (target, action, data = {}) =>
     new Promise((resolve, reject) => {
       const requestId = nextRequestId++
       const timer = setTimeout(() => reject(new Error(`rawAssDebug ${action} timed out`)), 10000)
       const onMessage = (event) => {
         if (event.data?.target !== 'rawAssDebug' || event.data.requestId !== requestId) return
-        renderer._worker.removeEventListener('message', onMessage)
+        target._worker.removeEventListener('message', onMessage)
         clearTimeout(timer)
         if (event.data.error) reject(new Error(event.data.error))
         else resolve(event.data)
       }
-      renderer._worker.addEventListener('message', onMessage)
-      renderer.sendMessage('rawAssDebug', { action, requestId, ...data })
+      target._worker.addEventListener('message', onMessage)
+      target.sendMessage('rawAssDebug', { action, requestId, ...data })
     })
+  const debug = (action, data) => debugOn(renderer, action, data)
 
-  const capture = async (time, atlas, atlasMaxSize = 0) => {
-    await debug('configure', { atlas, atlasMaxSize })
-    const frame = await debug('capture', { time })
+  const captureOn = async (target, time, atlas, atlasMaxSize = 0, extra = {}) => {
+    await debugOn(target, 'configure', { atlas, atlasMaxSize, ...extra })
+    const frame = await debugOn(target, 'capture', { time })
     frame.pixels = frame.pixels ? new Uint8Array(frame.pixels) : null
     return frame
   }
+  const capture = (time, atlas, atlasMaxSize = 0) => captureOn(renderer, time, atlas, atlasMaxSize)
+  const waitReady = (target) =>
+    new Promise((resolve, reject) => {
+      target.addEventListener('ready', resolve, { once: true })
+      target.addEventListener('error', (event) => reject(event.error || new Error('renderer error')), { once: true })
+    })
 
   const compare = (a, b) => {
     if (!a || !b || a.length !== b.length) return { differingBytes: -1 }
@@ -108,17 +122,97 @@ Dialogue: 1,0:00:10.00,0:00:12.00,Default,,0,0,0,,{\pos(320,250)\fs150\blur10\bo
     uploads: { pixels: frame.stats.pixelUploads, instances: frame.stats.instanceUploads }
   })
 
+  // Covered pixels of a transferred canvas' placeholder, as the page sees it.
+  const presentedPixels = async (target) => {
+    let presented = 0
+    for (let i = 0; i < 20 && presented <= 500; i++) {
+      await new Promise((resolve) => requestAnimationFrame(resolve))
+      const probe = document.createElement('canvas')
+      probe.width = target.width
+      probe.height = target.height
+      const ctx = probe.getContext('2d')
+      ctx.drawImage(target, 0, 0)
+      presented = coveredPixels(ctx.getImageData(0, 0, probe.width, probe.height).data)
+    }
+    return presented
+  }
+
+  // A pack that is not drawn must still reach the GPU with the next draw.
+  // Both cases first draw the 48-line atlas, so a skipped upload would show
+  // those lines instead of the static one.
+  const checkUndrawnPacks = async (target, prefix, staticReference) => {
+    const run = (action, data = {}) => debugOn(target, action, data)
+    // (a) libass last rendered the static line through the per-image path, so
+    //     a non-forced render of the same line reports no change and is not
+    //     drawn, while its atlas pack is new.
+    await captureOn(target, 9.0, true)
+    await captureOn(target, 0.5, false)
+    await run('configure', { atlas: true })
+    const unchangedBefore = await run('stats')
+    const unchanged = await run('render', { time: 1.5 })
+    const unchangedAfter = await captureOn(target, 1.5, true)
+    const unchangedDiff = compare(unchangedAfter.pixels, staticReference)
+    report[`${prefix}undrawn-unchanged`] = {
+      undrawn: { path: unchanged.path, atlas: unchanged.atlas?.frame ?? null },
+      after: summary(unchangedAfter),
+      uploadsBefore: unchangedBefore.stats,
+      ...unchangedDiff
+    }
+    check(
+      `${prefix}undrawn-unchanged-not-drawn`,
+      unchanged.path === null && unchanged.atlas?.status === 1 && unchanged.atlas.frame.pixelsChanged === true,
+      report[`${prefix}undrawn-unchanged`]
+    )
+    check(
+      `${prefix}undrawn-unchanged-uploaded-later`,
+      unchangedAfter.path === 'atlas' &&
+        unchangedAfter.atlas?.frame.pixelsChanged === false &&
+        unchangedAfter.stats.pixelUploads === unchangedBefore.stats.pixelUploads + 1,
+      report[`${prefix}undrawn-unchanged`]
+    )
+    check(`${prefix}undrawn-unchanged-identical`, unchangedDiff.differingBytes === 0, unchangedDiff)
+
+    // (b) A frame whose presentation is already stale is packed but not drawn.
+    await captureOn(target, 9.0, true)
+    const staleBefore = await run('stats')
+    const stale = await run('render', { time: 0.5, stalePresentation: true })
+    const staleAfter = await captureOn(target, 1.5, true)
+    const staleDiff = compare(staleAfter.pixels, staticReference)
+    report[`${prefix}undrawn-stale`] = {
+      undrawn: { path: stale.path, atlas: stale.atlas?.frame ?? null },
+      after: summary(staleAfter),
+      uploadsBefore: staleBefore.stats,
+      ...staleDiff
+    }
+    check(
+      `${prefix}undrawn-stale-not-drawn`,
+      stale.path === null &&
+        stale.atlas?.status === 1 &&
+        stale.atlas.frame.pixelsChanged === true &&
+        stale.atlas.frame.instancesChanged === true,
+      report[`${prefix}undrawn-stale`]
+    )
+    check(
+      `${prefix}undrawn-stale-uploaded-later`,
+      staleAfter.path === 'atlas' &&
+        staleAfter.atlas?.frame.pixelsChanged === false &&
+        staleAfter.atlas?.frame.instancesChanged === false &&
+        staleAfter.stats.pixelUploads === staleBefore.stats.pixelUploads + 1 &&
+        staleAfter.stats.instanceUploads === staleBefore.stats.instanceUploads + 1,
+      report[`${prefix}undrawn-stale`]
+    )
+    check(`${prefix}undrawn-stale-identical`, staleDiff.differingBytes === 0, staleDiff)
+  }
+
   const failures = []
+  let gpuRenderer = null
   const report = {}
   const check = (name, condition, detail) => {
     if (!condition) failures.push({ name, detail })
   }
 
   try {
-    await new Promise((resolve, reject) => {
-      renderer.addEventListener('ready', resolve, { once: true })
-      renderer.addEventListener('error', (event) => reject(event.error || new Error('renderer error')), { once: true })
-    })
+    await waitReady(renderer)
     renderer.setCurrentTime(true, 0.5, 1)
     await wait(200)
     const initial = await debug('stats')
@@ -188,69 +282,7 @@ Dialogue: 1,0:00:10.00,0:00:12.00,Default,,0,0,0,,{\pos(320,250)\fs150\blur10\bo
       report['move-reuse']
     )
 
-    // A pack that is not drawn must still reach the GPU with the next draw.
-    // Both cases first draw the 48-line atlas, so a skipped upload would show
-    // those lines instead of the static one.
-    // (a) libass last rendered the static line through the per-image path, so
-    //     a non-forced render of the same line reports no change and is not
-    //     drawn, while its atlas pack is new.
-    await capture(9.0, true)
-    await capture(0.5, false)
-    await debug('configure', { atlas: true })
-    const unchangedBefore = await debug('stats')
-    const unchanged = await debug('render', { time: 1.5 })
-    const unchangedAfter = await capture(1.5, true)
-    const unchangedDiff = compare(unchangedAfter.pixels, references[0.5])
-    report['undrawn-unchanged'] = {
-      undrawn: { path: unchanged.path, atlas: unchanged.atlas?.frame ?? null },
-      after: summary(unchangedAfter),
-      uploadsBefore: unchangedBefore.stats,
-      ...unchangedDiff
-    }
-    check(
-      'undrawn-unchanged-not-drawn',
-      unchanged.path === null && unchanged.atlas?.status === 1 && unchanged.atlas.frame.pixelsChanged === true,
-      report['undrawn-unchanged']
-    )
-    check(
-      'undrawn-unchanged-uploaded-later',
-      unchangedAfter.path === 'atlas' &&
-        unchangedAfter.atlas?.frame.pixelsChanged === false &&
-        unchangedAfter.stats.pixelUploads === unchangedBefore.stats.pixelUploads + 1,
-      report['undrawn-unchanged']
-    )
-    check('undrawn-unchanged-identical', unchangedDiff.differingBytes === 0, unchangedDiff)
-
-    // (b) A frame whose presentation is already stale is packed but not drawn.
-    await capture(9.0, true)
-    const staleBefore = await debug('stats')
-    const stale = await debug('render', { time: 0.5, stalePresentation: true })
-    const staleAfter = await capture(1.5, true)
-    const staleDiff = compare(staleAfter.pixels, references[0.5])
-    report['undrawn-stale'] = {
-      undrawn: { path: stale.path, atlas: stale.atlas?.frame ?? null },
-      after: summary(staleAfter),
-      uploadsBefore: staleBefore.stats,
-      ...staleDiff
-    }
-    check(
-      'undrawn-stale-not-drawn',
-      stale.path === null &&
-        stale.atlas?.status === 1 &&
-        stale.atlas.frame.pixelsChanged === true &&
-        stale.atlas.frame.instancesChanged === true,
-      report['undrawn-stale']
-    )
-    check(
-      'undrawn-stale-uploaded-later',
-      staleAfter.path === 'atlas' &&
-        staleAfter.atlas?.frame.pixelsChanged === false &&
-        staleAfter.atlas?.frame.instancesChanged === false &&
-        staleAfter.stats.pixelUploads === staleBefore.stats.pixelUploads + 1 &&
-        staleAfter.stats.instanceUploads === staleBefore.stats.instanceUploads + 1,
-      report['undrawn-stale']
-    )
-    check('undrawn-stale-identical', staleDiff.differingBytes === 0, staleDiff)
+    await checkUndrawnPacks(renderer, '', references[0.5])
 
     // 4. Context loss: libass' atlas is reset and fully re-uploaded by the
     //    forced re-render after restore. Park the clock on the captured frame,
@@ -290,6 +322,185 @@ Dialogue: 1,0:00:10.00,0:00:12.00,Default,,0,0,0,,{\pos(320,250)\fs150\blur10\bo
     check('context-restore-reuploaded', afterRestore.stats.pixelUploads > beforeLoss.stats.pixelUploads, report['context-loss'])
     check('context-restore-identical', compare(afterRestore.pixels, references[11.0]).differingBytes === 0, report['context-loss'])
 
+    // Same placeholder probe for the WebGL2 canvas, for comparison.
+    await capture(9.0, true)
+    report['webgl2-presented'] = await presentedPixels(canvas)
+
+    // 5. Worker WebGPU: the same cases through a second instance, compared
+    //    with the WebGL2 per-image pixels above.
+    if (webgpuMode !== 'off') {
+      renderer.destroy()
+      const gpuCanvas = document.querySelector('#subtitles-webgpu')
+      gpuRenderer = new AkariSub({
+        canvas: gpuCanvas,
+        subContent: subtitle,
+        offscreenRender: true,
+        rawAssImageGpu: true,
+        rawAssImageWebGPU: true,
+        onDemandRender: false,
+        adaptiveTiming: false,
+        asyncRender: false,
+        useLocalFonts: false
+      })
+      await waitReady(gpuRenderer)
+      gpuRenderer.setCurrentTime(true, 0.5, 1)
+      await wait(200)
+      const gpuStats = await gpuRenderer.getStats()
+      report.webgpu = { workerRenderer: gpuStats.workerRenderer, navigatorGpu: 'gpu' in navigator }
+      const gpuDebug = (action, data) => debugOn(gpuRenderer, action, data)
+      const gpuCapture = (time, atlas, atlasMaxSize = 0, extra = {}) => captureOn(gpuRenderer, time, atlas, atlasMaxSize, extra)
+      let gpuInitial = null
+      if (gpuStats.workerRenderer === 'webgpu-raw-ass') {
+        // Browsers that cannot present a WebGPU canvas lose the device right
+        // after configure; the renderer gives up after a few early losses.
+        await wait(500)
+        gpuInitial = await gpuDebug('stats')
+        report.webgpu.failed = gpuInitial.failed
+        report.webgpu.contextLosses = gpuInitial.stats.contextLosses
+      }
+      if (!gpuInitial || gpuInitial.failed) {
+        report.webgpu.available = false
+        check('webgpu-active', webgpuMode === 'optional', report.webgpu)
+      } else {
+        report.webgpu.available = true
+        report.webgpu.uploads = gpuInitial.uploads
+        check('webgpu-atlas-available', gpuInitial.renderer === 'webgpu' && gpuInitial.atlasAvailable, gpuInitial)
+
+        for (const { name, time, atlasMaxSize = 0, minPages = 1 } of cases) {
+          const atlasFrame = await gpuCapture(time, true, atlasMaxSize)
+          const imageFrame = await gpuCapture(time, false)
+          const atlasDiff = compare(atlasFrame.pixels, references[time])
+          const imageDiff = compare(imageFrame.pixels, references[time])
+          report[`webgpu-${name}`] = { ...summary(atlasFrame), atlas: atlasDiff, images: imageDiff }
+          check(`webgpu-${name}-atlas-path`, atlasFrame.path === 'atlas' && atlasFrame.atlas?.status === 1, report[`webgpu-${name}`])
+          check(`webgpu-${name}-image-path`, imageFrame.path === 'images', imageFrame.path)
+          check(`webgpu-${name}-atlas-identical`, atlasDiff.differingBytes === 0, atlasDiff)
+          check(`webgpu-${name}-images-identical`, imageDiff.differingBytes === 0, imageDiff)
+          check(`webgpu-${name}-pages`, (atlasFrame.atlas?.frame.pages ?? 0) >= minPages, report[`webgpu-${name}`])
+        }
+
+        const gpuOverflow = await gpuCapture(11.0, true, 16)
+        report['webgpu-page-overflow-fallback'] = { ...summary(gpuOverflow), ...compare(gpuOverflow.pixels, references[11.0]) }
+        check('webgpu-overflow-status', gpuOverflow.atlas?.status === -1, report['webgpu-page-overflow-fallback'])
+        check('webgpu-overflow-path', gpuOverflow.path === 'images', gpuOverflow.path)
+        check('webgpu-overflow-identical', compare(gpuOverflow.pixels, references[11.0]).differingBytes === 0, null)
+
+        const gpuStatic1 = await gpuCapture(0.5, true)
+        const gpuStatic2 = await gpuCapture(1.5, true)
+        report['webgpu-static-reuse'] = { first: summary(gpuStatic1), second: summary(gpuStatic2) }
+        check(
+          'webgpu-static-reuse-no-upload',
+          gpuStatic2.atlas?.frame.pixelsChanged === false &&
+            gpuStatic2.atlas?.frame.instancesChanged === false &&
+            gpuStatic2.stats.pixelUploads === gpuStatic1.stats.pixelUploads &&
+            gpuStatic2.stats.instanceUploads === gpuStatic1.stats.instanceUploads,
+          report['webgpu-static-reuse']
+        )
+        check('webgpu-static-reuse-identical', compare(gpuStatic2.pixels, references[0.5]).differingBytes === 0, null)
+
+        const gpuMove1 = await gpuCapture(2.5, true)
+        const gpuMove2 = await gpuCapture(3.0, true)
+        report['webgpu-move-reuse'] = { first: summary(gpuMove1), second: summary(gpuMove2) }
+        check('webgpu-move-reuse-identical', compare(gpuMove2.pixels, references[3.0]).differingBytes === 0, null)
+        check(
+          'webgpu-move-reuse-instances-only',
+          gpuMove2.atlas?.frame.pixelsChanged === false &&
+            gpuMove2.atlas?.frame.instancesChanged === true &&
+            gpuMove2.stats.pixelUploads === gpuMove1.stats.pixelUploads &&
+            gpuMove2.stats.instanceUploads === gpuMove1.stats.instanceUploads + 1,
+          report['webgpu-move-reuse']
+        )
+
+        await checkUndrawnPacks(gpuRenderer, 'webgpu-', references[0.5])
+
+        // Shared WASM memory goes through the staging copy when forced; with
+        // the pthread build this is the path for browsers that reject it.
+        const staged = await gpuCapture(9.0, true, 0, { forceStaging: true })
+        await gpuDebug('configure', { forceStaging: false })
+        report['webgpu-staging'] = { uploads: staged.uploads, ...compare(staged.pixels, references[9.0]) }
+        check('webgpu-staging-identical', compare(staged.pixels, references[9.0]).differingBytes === 0, report['webgpu-staging'])
+        check(
+          'webgpu-staging-used',
+          !staged.uploads.sharedMemory || staged.uploads.staged > 0,
+          report['webgpu-staging']
+        )
+
+        // The canvas placeholder on the page shows what the worker drew.
+        await gpuCapture(9.0, true)
+        const presented = await presentedPixels(gpuCanvas)
+        report['webgpu-presented'] = presented
+        // Some windowed sessions never show the WebGL2 placeholder either
+        // (no frames for an unfocused window); only require it where they do.
+        check('webgpu-presented', presented > 500 || report['webgl2-presented'] <= 500, { webgpu: presented, webgl2: report['webgl2-presented'] })
+
+        // Device loss: libass' atlas is reset, a new device is acquired and
+        // the forced re-render uploads everything again.
+        gpuRenderer.setCurrentTime(true, 11.0, 1)
+        await wait(200)
+        const gpuBefore = await gpuCapture(11.0, true)
+        const gpuLost = await gpuDebug('loseContext')
+        check('webgpu-lose-device', gpuLost.ok, gpuLost)
+        let gpuState = gpuLost
+        for (let i = 0; i < 200 && gpuState.stats.contextRestores < 1; i++) {
+          await wait(50)
+          gpuState = await gpuDebug('stats')
+        }
+        check('webgpu-device-restored', !gpuState.contextLost && gpuState.stats.contextLosses === 1 && gpuState.stats.contextRestores === 1, gpuState)
+        const gpuAfter = await gpuCapture(11.0, true)
+        report['webgpu-device-loss'] = {
+          before: summary(gpuBefore),
+          restoreRender: gpuState.lastAtlas,
+          after: summary(gpuAfter),
+          stats: gpuAfter.stats,
+          ...compare(gpuAfter.pixels, references[11.0])
+        }
+        check(
+          'webgpu-restore-reset',
+          gpuState.lastAtlas?.status === 1 && gpuState.lastAtlas.frame.pixelsChanged && gpuState.lastAtlas.frame.instancesChanged,
+          report['webgpu-device-loss']
+        )
+        check('webgpu-restore-path', gpuAfter.path === 'atlas', report['webgpu-device-loss'])
+        check('webgpu-restore-reuploaded', gpuAfter.stats.pixelUploads > gpuBefore.stats.pixelUploads, report['webgpu-device-loss'])
+        check('webgpu-restore-identical', compare(gpuAfter.pixels, references[11.0]).differingBytes === 0, report['webgpu-device-loss'])
+
+        // Devices lost right after creation make recovery give up. This
+        // caller-owned canvas cannot be replaced: the page is told, frames
+        // are skipped instead of failing, and getStats reports it.
+        const warnings = []
+        gpuRenderer.addEventListener('performanceWarning', (event) => warnings.push(event.detail))
+        let giveUp = await gpuDebug('stats')
+        for (let i = 0; i < 6 && !giveUp.failed; i++) {
+          const losses = giveUp.stats.contextLosses
+          await gpuDebug('loseContext')
+          for (let j = 0; j < 200; j++) {
+            giveUp = await gpuDebug('stats')
+            if (giveUp.failed || (giveUp.stats.contextLosses > losses && !giveUp.contextLost)) break
+            await wait(20)
+          }
+        }
+        await wait(100)
+        const deadRender = await gpuDebug('render', { time: 9.0, force: true })
+        const deadStats = await gpuRenderer.getStats()
+        report['webgpu-give-up'] = {
+          failed: giveUp.failed,
+          contextLost: giveUp.contextLost,
+          losses: giveUp.stats.contextLosses,
+          warnings,
+          deadRenderPath: deadRender.path,
+          workerRenderer: deadStats.workerRenderer,
+          workerRendererLost: deadStats.workerRendererLost
+        }
+        check('webgpu-give-up-failed', giveUp.failed && giveUp.contextLost, report['webgpu-give-up'])
+        check(
+          'webgpu-give-up-reported',
+          warnings.some((w) => w.kind === 'renderer-recovery' && w.reason === 'device-lost'),
+          report['webgpu-give-up']
+        )
+        check('webgpu-give-up-skips-frames', deadRender.path === null && deadRender.atlas === null, report['webgpu-give-up'])
+        check('webgpu-give-up-stats', deadStats.workerRendererLost === true, report['webgpu-give-up'])
+      }
+    }
+
     result.textContent = failures.length
       ? `FAIL ${JSON.stringify({ failures, report })}`
       : `PASS ${JSON.stringify(report)}`
@@ -297,5 +508,6 @@ Dialogue: 1,0:00:10.00,0:00:12.00,Default,,0,0,0,,{\pos(320,250)\fs150\blur10\bo
     result.textContent = `ERROR ${error?.stack || error} ${JSON.stringify({ failures, report })}`
   } finally {
     renderer.destroy()
+    gpuRenderer?.destroy()
   }
 </script>

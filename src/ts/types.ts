@@ -106,10 +106,15 @@ export interface PerformanceStats {
   renderFps: number
   /** Always true for this renderer; kept for compatibility. */
   usingWorker: boolean
-  /** Whether worker-side raw ASS_Image WebGL2 composition is active */
+  /** Whether worker-side raw ASS_Image GPU (WebGL2 or WebGPU) composition is active */
   rawAssImageGpu?: boolean
   /** Backend that composed the last frame. */
-  workerRenderer?: 'webgl2-raw-ass' | 'canvas2d' | 'hybrid' | 'main-thread'
+  workerRenderer?: 'webgpu-raw-ass' | 'webgl2-raw-ass' | 'canvas2d' | 'hybrid' | 'main-thread'
+  /**
+   * True while the worker GPU compositor has no usable context or device
+   * (lost and recovering, or worker WebGPU gave up); no frames are drawn.
+   */
+  workerRendererLost?: boolean
   /** Whether the worker owns an OffscreenCanvas. */
   offscreenRender: boolean
   /** Whether `requestVideoFrameCallback` drives presentation. */
@@ -319,6 +324,12 @@ export interface AkariSubOptions {
    */
   rawAssImageAtlas?: boolean
   /**
+   * With `rawAssImageGpu`, compose in the worker with WebGPU instead of
+   * WebGL2 (default: false). Falls back to the WebGL2 raw path, then to the
+   * 2D canvas path, when the worker has no WebGPU adapter.
+   */
+  rawAssImageWebGPU?: boolean
+  /**
    * Use requestVideoFrameCallback or {@linkcode AkariSub.presentVideoFrame} for
    * precise sync (default: true when RVFC exists, or when `onDemandRender` is
    * set true for a canvas-only WebCodecs clock)
@@ -518,6 +529,7 @@ export type WorkerOutboundMessage =
   | { target: 'ready' }
   | { target: 'trackReady'; requestId?: number }
   | { target: 'unbusy'; requestId?: number; renderEpoch?: number; presentationId?: number; painted?: boolean }
+  | { target: 'rawAssGpuFailed' }
   | { target: 'console'; command: string; content: string }
   | { target: 'getLocalFont'; font: string }
   | {
@@ -563,6 +575,7 @@ export interface WorkerInitMessage {
   adaptiveBlendLayouts: boolean
   rawAssImageGpu: boolean
   rawAssImageAtlas: boolean
+  rawAssImageWebGPU: boolean
   onDemandRender: boolean
   initialTime: number
   initialIsPaused: boolean
@@ -600,6 +613,7 @@ export type WorkerInboundMessage =
   | {
       target: 'offscreenCanvas'
       rawAssImageGpu?: boolean
+      rawAssImageWebGPU?: boolean
       canvasColorSpace?: 'srgb' | 'display-p3' | 'rec2020'
       hdr?: boolean
       transferable: [OffscreenCanvas]

@@ -95,7 +95,7 @@ const renderer = new AkariSub({
 renderer.setCurrentTime(true, 15)
 ```
 
-Custom canvases stay on the main thread by default. Set both `offscreenRender: true` and `rawAssImageGpu: true` to opt into worker WebGL2 raw-mask composition when dense overlays benefit from it.
+Custom canvases stay on the main thread by default. Set both `offscreenRender: true` and `rawAssImageGpu: true` to opt into worker WebGL2 raw-mask composition when dense overlays benefit from it. Add `rawAssImageWebGPU: true` to compose with worker WebGPU instead; it falls back to WebGL2 when the worker has no WebGPU. A lost worker WebGPU device is replaced automatically. If that keeps failing, an overlay canvas that AkariSub created is swapped for a new one drawn with WebGL2, but a caller-owned canvas cannot take another context and stays blank: listen for the `renderer-recovery` performance warning, or check `getStats().workerRendererLost`.
 
 ### Timing semantics
 
@@ -348,6 +348,7 @@ The default options are best, and automatically fallback to the next fastest opt
 | `offscreenRender`      | boolean                                               | automatic                           | Render fully on the worker; enabled for video-managed canvases and disabled for custom canvases                                                            |
 | `rawAssImageGpu`       | boolean                                               | `false`                             | Compose raw libass masks with worker WebGL2 when offscreen rendering is active                                                                             |
 | `rawAssImageAtlas`     | boolean                                               | `true`                              | With `rawAssImageGpu`, upload each frame as one libass texture atlas and draw it with one call; `false` uploads every mask separately                      |
+| `rawAssImageWebGPU`    | boolean                                               | `false`                             | With `rawAssImageGpu`, compose the raw masks with worker WebGPU instead of WebGL2; falls back to WebGL2 when the worker has no WebGPU adapter              |
 | `onDemandRender`       | boolean                                               | `true`                              | Render subtitles as the video player or `presentVideoFrame` presents frames                                                                                |
 | `adaptiveTiming`       | boolean                                               | `true`                              | Compensate measured queue, worker, bitmap, IPC, and paint latency while video is playing; pause and seek renders remain frame-exact                        |
 | `frameTimeline`        | FrameTimeline                                         | -                                   | Encoded browser-frame timestamps plus optional media/subtitle clock offsets; enables frame-locked libass sampling                                          |

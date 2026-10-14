@@ -494,6 +494,7 @@ export default class AkariSub extends EventTarget {
         cueTracking: resolveCueTracking(options.cueTracking),
         rawAssImageGpu,
         rawAssImageAtlas: options.rawAssImageAtlas ?? true,
+        rawAssImageWebGPU: options.rawAssImageWebGPU ?? false,
         onDemandRender: this._onDemandRender,
         initialTime,
         initialIsPaused: this._isVideoPausedForWorker(),
@@ -539,6 +540,7 @@ export default class AkariSub extends EventTarget {
           {
             target: 'offscreenCanvas',
             rawAssImageGpu,
+            rawAssImageWebGPU: options.rawAssImageWebGPU ?? false,
             canvasColorSpace: this._videoColorProfile.canvasColorSpace,
             hdr: this._shouldUseHdr(),
             transferable: [offscreenCanvas]
@@ -1680,6 +1682,7 @@ export default class AkariSub extends EventTarget {
       usingWorker: stats.usingWorker ?? true,
       rawAssImageGpu: stats.rawAssImageGpu,
       workerRenderer: stats.workerRenderer,
+      workerRendererLost: stats.workerRendererLost,
       offscreenRender: stats.offscreenRender ?? this._offscreenRender,
       onDemandRender: stats.onDemandRender ?? this._onDemandRender,
       wasmSimd: stats.wasmSimd ?? this._wasmSimd,
@@ -2732,6 +2735,22 @@ export default class AkariSub extends EventTarget {
     this.busy = false
     this._pendingDemandTimes.length = 0
     this.resize(0, 0, 0, 0, true)
+  }
+
+  /**
+   * @internal Worker WebGPU gave up on its device. The transferred canvas can
+   * hold no other context, so an owned overlay canvas is replaced and the
+   * worker binds the new one to WebGL2 (or 2D); a caller-owned canvas cannot
+   * be replaced and stays blank.
+   */
+  private _rawAssGpuFailed(): void {
+    if (this._destroyed) return
+    this._emitPerformanceWarning({ kind: 'renderer-recovery', reason: 'device-lost', rendererType: this._rendererType })
+    if (this._offscreenRender && !this._ctx && this._canvasParent) {
+      this._replaceOwnedOverlayCanvas('offscreen')
+      return
+    }
+    console.warn('[AkariSub] Worker WebGPU failed; the caller-owned canvas cannot be replaced, so subtitles are not drawn')
   }
 
   /** @internal */
