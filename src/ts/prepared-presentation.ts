@@ -35,7 +35,15 @@ export class PreparedPresentation {
   private _committedStage: HTMLCanvasElement | null = null
   private _scheduledPreparedFrame: PreparedFrame | null = null
   private _destroyed = false
-  constructor(private readonly host: PresentationHost) {}
+  /**
+   * @param compositorSwaps Show each prepared stage from a compositor-timed
+   * opacity animation at its predicted display time. When false, a stage only
+   * becomes visible when its matching video frame callback presents it.
+   */
+  constructor(
+    private readonly host: PresentationHost,
+    private readonly compositorSwaps: boolean = true
+  ) {}
 
   private get _canvas(): HTMLCanvasElement {
     return this.host.canvas()!
@@ -173,7 +181,7 @@ export class PreparedPresentation {
   }
 
   scheduleNext(): void {
-    if (this._scheduledPreparedFrame || this._destroyed) return
+    if (!this.compositorSwaps || this._scheduledPreparedFrame || this._destroyed) return
 
     let next: PreparedFrame | undefined
     let nextTime = Number.POSITIVE_INFINITY

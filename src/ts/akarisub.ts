@@ -111,6 +111,25 @@ interface DeferredReadyEvent {
 
 const DEFAULT_RENDER_AHEAD = 0
 
+/**
+ * Main-thread record of a canvas whose storage now belongs to the worker. A
+ * transferred OffscreenCanvas is detached: resizing it throws and its size
+ * reads as zero, so the worker resizes the real canvas from `canvas` messages.
+ */
+interface CanvasSize {
+  width: number
+  height: number
+}
+
+const transferredCanvasSize = (canvas: OffscreenCanvas): CanvasSize => ({ width: canvas.width, height: canvas.height })
+
+// Firefox can composite a scheduled opacity swap with the old stage already
+// hidden and the new one not yet shown, blanking subtitles for a refresh or
+// two. Only Gecko UAs carry `rv:<version>) Gecko/`; Blink and WebKit say
+// "like Gecko".
+const isLikelyGecko = (): boolean =>
+  typeof navigator !== 'undefined' && /\brv:[\d.]+\) Gecko\/\d/.test(navigator.userAgent || '')
+
 const isLikelyWebKit = (): boolean => {
   if (typeof navigator === 'undefined') return false
 
@@ -176,7 +195,7 @@ export default class AkariSub extends EventTarget {
   private _canvasParent?: HTMLDivElement
   private _bufferCanvas: HTMLCanvasElement
   private _bufferCtx: CanvasRenderingContext2D
-  private _canvasctrl!: HTMLCanvasElement | OffscreenCanvas
+  private _canvasctrl!: HTMLCanvasElement | OffscreenCanvas | CanvasSize
   private _ctx: CanvasRenderingContext2D | false | null = null
   private _lastRenderTime: number = 0
   private _playstate: boolean = true
@@ -191,14 +210,17 @@ export default class AkariSub extends EventTarget {
   private _frameTimeline: (Float64Array & { mediaTimeOrigin?: number; subtitleTimeOffset?: number }) | null
   private _presentationOwner?: PreparedPresentation
   private get _presentation(): PreparedPresentation {
-    return this._presentationOwner ??= new PreparedPresentation({
-      canvas: () => this._canvas,
-      release: stage => this._releaseGPUStage(stage),
-      committed: frame => this._gpuRecovery.commit(this._snapshotRenderedCanvas(frame.stage!, frame.gpuStage === true)),
-      refreshInterval: () => estimateRefreshIntervalMs(this._refreshSamples ?? []),
-      now: () => performance.now(),
-      documentTime: () => Number(document.timeline?.currentTime)
-    })
+    return this._presentationOwner ??= new PreparedPresentation(
+      {
+        canvas: () => this._canvas,
+        release: stage => this._releaseGPUStage(stage),
+        committed: frame => this._gpuRecovery.commit(this._snapshotRenderedCanvas(frame.stage!, frame.gpuStage === true)),
+        refreshInterval: () => estimateRefreshIntervalMs(this._refreshSamples ?? []),
+        now: () => performance.now(),
+        documentTime: () => Number(document.timeline?.currentTime)
+      },
+      !isLikelyGecko()
+    )
   }
   private _predictedDisplayTimes = new Map<number, number>()
   private _displayClockOffsets: number[] = []
@@ -533,6 +555,7 @@ export default class AkariSub extends EventTarget {
 
       if (this._offscreenRender) {
         const offscreenCanvas = this._canvasctrl as OffscreenCanvas
+        const size = transferredCanvasSize(offscreenCanvas)
         // Post this immediately after init, before the worker can emit ready and
         // trigger an on-demand render. sendMessage() waits for ready and races
         // the first render, leaving offscreenRender=true with no canvas bound.
@@ -547,6 +570,7 @@ export default class AkariSub extends EventTarget {
           },
           [offscreenCanvas]
         )
+        this._canvasctrl = size
       }
     })
   }
@@ -1080,9 +1104,10 @@ export default class AkariSub extends EventTarget {
     this._canvas.style.height = cssHeight
 
     if (mode === 'offscreen') {
-      this._canvasctrl = (
+      const offscreenCanvas = (
         this._canvas as HTMLCanvasElement & { transferControlToOffscreen(): OffscreenCanvas }
       ).transferControlToOffscreen()
+      this._canvasctrl = transferredCanvasSize(offscreenCanvas)
       this._ctx = false
       this.sendMessage(
         'offscreenCanvas',
@@ -1090,7 +1115,7 @@ export default class AkariSub extends EventTarget {
           canvasColorSpace: this._videoColorProfile.canvasColorSpace,
           hdr: this._shouldUseHdr()
         },
-        [this._canvasctrl as OffscreenCanvas]
+        [offscreenCanvas]
       )
     } else {
       this._canvasctrl = this._canvas
@@ -2525,13 +2550,14 @@ export default class AkariSub extends EventTarget {
     // RVFC and presentVideoFrame render ahead while frames are advancing. When
     // playback pauses, stalls, or seeks, the last ahead render can be visibly
     // in the future. Force an exact render at the displayed media time.
+    // `stalled` only reports a quiet network fetch while playback continues
+    // from the buffer; a real stall also fires `waiting`.
     const shouldRenderExactFrame =
       isPaused ||
       event?.type === 'pause' ||
       event?.type === 'seeking' ||
       event?.type === 'seeked' ||
       event?.type === 'waiting' ||
-      event?.type === 'stalled' ||
       event?.type === 'ended'
 
     if (shouldRenderExactFrame) {
@@ -2730,7 +2756,7 @@ export default class AkariSub extends EventTarget {
     this._canvas.remove()
     this._createCanvas()
     this._canvasctrl = this._canvas
-    this._ctx = this._canvasctrl.getContext('2d', this._canvas2dSettings())
+    this._ctx = this._canvas.getContext('2d', this._canvas2dSettings())
     this.sendMessage('detachOffscreen')
     this.busy = false
     this._pendingDemandTimes.length = 0
@@ -2759,7 +2785,8 @@ export default class AkariSub extends EventTarget {
 
     this._canvas.remove()
     this._createCanvas()
-    this._canvasctrl = (this._canvas as any).transferControlToOffscreen()
+    const offscreenCanvas: OffscreenCanvas = (this._canvas as any).transferControlToOffscreen()
+    this._canvasctrl = transferredCanvasSize(offscreenCanvas)
     this._ctx = false
     this.sendMessage(
       'offscreenCanvas',
@@ -2767,7 +2794,7 @@ export default class AkariSub extends EventTarget {
         canvasColorSpace: this._videoColorProfile.canvasColorSpace,
         hdr: this._shouldUseHdr()
       },
-      [this._canvasctrl as OffscreenCanvas]
+      [offscreenCanvas]
     )
     this.resize(0, 0, 0, 0, true)
   }

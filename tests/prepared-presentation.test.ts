@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { PreparedPresentation, type PreparedFrame } from '../src/ts/prepared-presentation'
 
-function harness() {
+function harness(compositorSwaps = true) {
   let now = 100
   const removed: string[] = [],
     released: string[] = [],
@@ -42,7 +42,7 @@ function harness() {
     refreshInterval: () => 1000 / 60,
     now: () => now,
     documentTime: () => 500
-  })
+  }, compositorSwaps)
   const frame = (index: number, targetDisplayTime?: number) => {
     const stage = canvas(String(index))
     const frame: PreparedFrame = { width: 1920, height: 1080, stage, index, ready: true, targetDisplayTime }
@@ -110,6 +110,21 @@ describe('prepared presentation lifetime', () => {
     expect(first.committed).toBe(true)
     expect(second.scheduled).toBe(true)
     expect(h.committed).toEqual([first])
+  })
+
+  test('without compositor swaps a stage stays hidden until its frame callback presents it', () => {
+    const h = harness(false),
+      first = h.frame(1, 200),
+      second = h.frame(2, 300)
+    expect(h.animations).toHaveLength(0)
+    expect(first.scheduled).toBeUndefined()
+    expect(first.stage!.style.opacity).toBe('0')
+    h.owner.present(first, 200)
+    expect(h.committed).toEqual([first])
+    expect(first.stage!.style.opacity).toBe('1')
+    expect(h.base.style.opacity).toBe('0')
+    expect(second.scheduled).toBeUndefined()
+    expect(h.animations).toHaveLength(0)
   })
 
   test('RVFC commits immediately and repeated validation does not rerasterize', () => {
